@@ -1,0 +1,16 @@
+[package]
+name = "sc-mp3"
+version = "0.1.0"
+description = "MP3 codec module scaffold for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[dependencies]
+sc-core.workspace = true

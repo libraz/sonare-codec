@@ -1,0 +1,34 @@
+[package]
+name = "sonare-codec"
+version = "0.1.0"
+description = "Unified audio decode and encode API"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[features]
+default = ["decode", "wav", "flac", "mp3"]
+decode = ["dep:sc-decode"]
+wav = ["dep:sc-wav"]
+flac = ["dep:sc-flac"]
+mp3 = ["dep:sc-mp3"]
+vorbis = ["dep:sc-vorbis"]
+opus = ["dep:sc-opus"]
+aac = ["dep:sc-aac"]
+all = ["decode", "wav", "flac", "mp3", "vorbis", "opus", "aac"]
+
+[dependencies]
+sc-aac = { workspace = true, optional = true }
+sc-core.workspace = true
+sc-decode = { workspace = true, optional = true }
+sc-flac = { workspace = true, optional = true }
+sc-mp3 = { workspace = true, optional = true }
+sc-opus = { workspace = true, optional = true }
+sc-vorbis = { workspace = true, optional = true }
+sc-wav = { workspace = true, optional = true }

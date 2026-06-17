@@ -1,0 +1,17 @@
+[package]
+name = "sonare-codec-wasm"
+version = "0.1.0"
+description = "WebAssembly bindings for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sonare-codec = { workspace = true, features = ["aac", "opus"] }
+wasm-bindgen.workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "sonare-codec-python"
+version = "0.1.0"
+description = "Python extension module for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lib]
+name = "sonare_codec"
+crate-type = ["cdylib"]
+test = false
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[dependencies]
+pyo3.workspace = true
+sonare-codec-rs = { package = "sonare-codec", path = "../../crates/sonare-codec", features = ["aac", "opus", "vorbis"] }

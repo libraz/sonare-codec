@@ -1,0 +1,20 @@
+[package]
+name = "sc-opus"
+version = "0.1.0"
+description = "Opus codec module scaffold for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[dependencies]
+sc-core.workspace = true
+opus-decoder.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+opus.workspace = true

@@ -1,0 +1,10 @@
+sonare-codec
+
+Copyright 2026 Libraz
+
+This product is licensed under the Apache License, Version 2.0.
+
+This product uses opus-decoder for pure Rust Opus decoding.
+
+Native Opus encoding uses the opus Rust bindings and libopus. libopus is a
+Xiph.Org codec library licensed under BSD-3-Clause terms.

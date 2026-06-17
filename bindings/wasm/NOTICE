@@ -1,0 +1,7 @@
+sonare-codec
+
+Copyright 2026 Libraz
+
+This product is licensed under the Apache License, Version 2.0.
+
+This product depends on Symphonia, licensed under MPL-2.0, for audio decoding.

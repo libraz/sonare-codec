@@ -1,0 +1,103 @@
+{
+  "schema": 1,
+  "generated_by": "cargo run -p xtask -- gen-refs",
+  "oracle": "ffmpeg",
+  "artifacts": [
+    {
+      "name": "wav-non-silent.wav",
+      "format": "wav",
+      "bytes": 4140,
+      "fnv1a64": "ae927d5daf3773fa",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2048
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "flac-non-silent.flac",
+      "format": "flac",
+      "bytes": 581,
+      "fnv1a64": "c00bbb58509f22e9",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2048
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "mp3-silent.mp3",
+      "format": "mp3",
+      "bytes": 834,
+      "fnv1a64": "748fb13e884f2e07",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2304
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "aac-silent.aac",
+      "format": "aac",
+      "bytes": 11,
+      "fnv1a64": "c01800b6f2197b06",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 1024
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "aac-silent.m4a",
+      "format": "aac",
+      "bytes": 592,
+      "fnv1a64": "676eaafb7d7504dc",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 1024
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "mp3-non-silent-scaffold.mp3",
+      "format": "mp3",
+      "bytes": 834,
+      "fnv1a64": "6cc67c2d987f6297",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2304
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "mp3-non-silent-standard-scaffold.mp3",
+      "format": "mp3",
+      "bytes": 834,
+      "fnv1a64": "6cc67c2d987f6297",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2304
+      },
+      "ffmpeg_accepts": true
+    },
+    {
+      "name": "aac-non-silent-scaffold.aac",
+      "format": "aac",
+      "bytes": 26,
+      "fnv1a64": "1c43db76342093bb",
+      "decode": {
+        "sample_rate": 44100,
+        "channels": 1,
+        "samples": 2048
+      },
+      "ffmpeg_accepts": true
+    }
+  ]
+}

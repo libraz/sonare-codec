@@ -1,0 +1,34 @@
+# Local-only planning / design docs (never referenced from source, commits, or PRs)
+backup/
+
+# Rust
+/target
+**/target/
+**/*.rs.bk
+
+# wasm binding output
+bindings/wasm/pkg/
+node_modules/
+
+# Python binding build artifacts
+bindings/python/target/
+bindings/python/dist/
+*.pyc
+__pycache__/
+.venv/
+
+# Fuzzing output
+fuzz/artifacts/
+fuzz/coverage/
+fuzz/target/
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Agent tooling / instructions (local-only)
+.claude/
+AGENT.md
+CLAUDE.md

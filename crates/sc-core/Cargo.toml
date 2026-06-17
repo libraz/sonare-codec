@@ -1,0 +1,16 @@
+[package]
+name = "sc-core"
+version = "0.1.0"
+description = "Core audio buffer, error, trait, and detection types for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[dependencies]
+thiserror.workspace = true

@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+version = "0.1.0"
+description = "Development task runner for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+sonare-codec = { workspace = true, features = ["aac"] }

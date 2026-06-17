@@ -1,0 +1,20 @@
+[package]
+name = "sonare-codec-decode"
+version = "0.1.0"
+description = "Symphonia-backed decode adapter for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[lib]
+name = "sc_decode"
+
+[dependencies]
+sc-core.workspace = true
+symphonia.workspace = true

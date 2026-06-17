@@ -1,0 +1,32 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "sonare-codec"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "Unified audio decode and encode API backed by Rust"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Libraz" }]
+keywords = ["audio", "codec", "wav", "flac", "mp3", "aac"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+[project.urls]
+Homepage = "https://github.com/libraz/sonare-codec"
+Repository = "https://github.com/libraz/sonare-codec"
+Issues = "https://github.com/libraz/sonare-codec/issues"
+
+[tool.maturin]
+manifest-path = "Cargo.toml"
+module-name = "sonare_codec"
+features = ["extension-module"]

@@ -1,0 +1,20 @@
+[package]
+name = "sc-flac"
+version = "0.1.0"
+description = "FLAC codec implementation for sonare-codec"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+
+[package.metadata.cargo-machete]
+ignored = ["md-5"]
+
+[dependencies]
+md-5.workspace = true
+sc-core.workspace = true

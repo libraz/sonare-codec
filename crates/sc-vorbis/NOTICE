@@ -1,0 +1,10 @@
+sonare-codec
+
+Copyright 2026 Libraz
+
+This product is licensed under the Apache License, Version 2.0.
+
+This product depends on Symphonia, licensed under MPL-2.0, for audio decoding.
+
+Native Vorbis encoding uses vorbis_rs and libvorbis. libvorbis is a Xiph.Org
+codec library licensed under BSD-3-Clause terms.

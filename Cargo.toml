@@ -1,0 +1,46 @@
+[workspace]
+members = [
+    "bindings/python",
+    "bindings/wasm",
+    "crates/sc-aac",
+    "crates/sc-core",
+    "crates/sc-decode",
+    "crates/sc-flac",
+    "crates/sc-mp3",
+    "crates/sc-mp4",
+    "crates/sc-opus",
+    "crates/sc-vorbis",
+    "crates/sc-wav",
+    "crates/sonare-codec",
+    "xtask",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/libraz/sonare-codec"
+rust-version = "1.86"
+homepage = "https://github.com/libraz/sonare-codec"
+keywords = ["audio", "codec", "wav", "flac", "mp3"]
+categories = ["encoding", "multimedia::audio"]
+
+[workspace.dependencies]
+sc-core = { version = "0.1.0", path = "crates/sc-core" }
+sc-aac = { version = "0.1.0", path = "crates/sc-aac" }
+sc-decode = { package = "sonare-codec-decode", version = "0.1.0", path = "crates/sc-decode" }
+sc-flac = { version = "0.1.0", path = "crates/sc-flac" }
+sc-mp3 = { version = "0.1.0", path = "crates/sc-mp3" }
+sc-mp4 = { version = "0.1.0", path = "crates/sc-mp4" }
+sc-opus = { version = "0.1.0", path = "crates/sc-opus" }
+sc-vorbis = { version = "0.1.0", path = "crates/sc-vorbis" }
+sc-wav = { version = "0.1.0", path = "crates/sc-wav" }
+sonare-codec = { version = "0.1.0", path = "crates/sonare-codec" }
+thiserror = "2.0.12"
+md-5 = "0.10.6"
+wasm-bindgen = "0.2.100"
+pyo3 = "0.29.0"
+symphonia = { version = "0.6.0", default-features = false, features = ["aac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
+opus-decoder = "0.1.1"
+opus = "0.3.1"
+vorbis_rs = "0.5.5"

@@ -1,0 +1,47 @@
+{
+  "name": "@libraz/sonare-codec",
+  "version": "0.1.0",
+  "description": "Unified audio decode and encode API backed by Rust and WebAssembly",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/libraz/sonare-codec.git",
+    "directory": "bindings/wasm"
+  },
+  "homepage": "https://github.com/libraz/sonare-codec#readme",
+  "bugs": {
+    "url": "https://github.com/libraz/sonare-codec/issues"
+  },
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "main": "./index.js",
+  "module": "./index.js",
+  "types": "index.d.ts",
+  "files": [
+    "pkg",
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "keywords": [
+    "audio",
+    "codec",
+    "wasm",
+    "wav",
+    "flac",
+    "mp3",
+    "aac"
+  ],
+  "scripts": {
+    "build": "wasm-pack build --target bundler",
+    "build:node": "wasm-pack build --target nodejs --out-dir pkg-node",
+    "prepack": "npm run build"
+  }
+}
