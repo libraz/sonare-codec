@@ -105,6 +105,76 @@ pub fn make_words(lengths: &[u8]) -> Option<Vec<u32>> {
     Some(out)
 }
 
+/// Canonical Huffman codeword lengths for a list of symbol `freqs`.
+///
+/// Symbols with a non-zero frequency get a leaf depth; zero-frequency symbols
+/// get length 0 (unused). The result is a complete prefix-code length list
+/// ([`make_words`] accepts it) — a single used symbol yields the length-1
+/// retcon, and equal frequencies yield a balanced tree. Ties break by symbol
+/// index, so the output is deterministic.
+#[must_use]
+pub fn huffman_lengths(freqs: &[u64]) -> Vec<u8> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let n = freqs.len();
+    let mut lengths = vec![0u8; n];
+    let used: Vec<usize> = (0..n).filter(|&i| freqs[i] > 0).collect();
+    if used.is_empty() {
+        return lengths;
+    }
+    if used.len() == 1 {
+        lengths[used[0]] = 1; // single-entry retcon: one codeword '0'
+        return lengths;
+    }
+
+    // Node arena: leaves first, then the internal nodes the merges create.
+    // `symbol[node] == usize::MAX` marks an internal node.
+    let mut weight: Vec<u64> = Vec::new();
+    let mut left: Vec<usize> = Vec::new();
+    let mut right: Vec<usize> = Vec::new();
+    let mut symbol: Vec<usize> = Vec::new();
+    // Min-heap keyed by (weight, node id) so ties break deterministically.
+    let mut heap: BinaryHeap<Reverse<(u64, usize)>> = BinaryHeap::new();
+    for &s in &used {
+        let id = weight.len();
+        weight.push(freqs[s]);
+        left.push(usize::MAX);
+        right.push(usize::MAX);
+        symbol.push(s);
+        heap.push(Reverse((freqs[s], id)));
+    }
+
+    // Repeatedly merge the two lightest nodes.
+    while heap.len() > 1 {
+        let (Some(Reverse((w1, a))), Some(Reverse((w2, b)))) = (heap.pop(), heap.pop()) else {
+            break;
+        };
+        let id = weight.len();
+        weight.push(w1.saturating_add(w2));
+        left.push(a);
+        right.push(b);
+        symbol.push(usize::MAX);
+        heap.push(Reverse((w1.saturating_add(w2), id)));
+    }
+
+    let Some(Reverse((_, root))) = heap.pop() else {
+        return lengths; // unreachable: used.len() >= 2 leaves one root
+    };
+
+    // Walk the tree, recording each leaf's depth as its codeword length.
+    let mut stack = vec![(root, 0u32)];
+    while let Some((node, depth)) = stack.pop() {
+        if symbol[node] != usize::MAX {
+            lengths[symbol[node]] = depth.clamp(1, 255) as u8;
+        } else {
+            stack.push((left[node], depth + 1));
+            stack.push((right[node], depth + 1));
+        }
+    }
+    lengths
+}
+
 /// A Vorbis Huffman codebook: per-entry codeword lengths and the LSb-first
 /// codewords derived from them.
 pub struct Codebook {
@@ -387,6 +457,51 @@ mod tests {
         let bytes = w.into_bytes();
         let mut rd = BitReader::new(&bytes);
         assert_eq!(book.decode(&mut rd), Some(0));
+    }
+
+    #[test]
+    fn huffman_lengths_form_a_valid_tree() {
+        // A skewed distribution: make_words must accept the lengths, and the
+        // most frequent symbol must get the shortest codeword.
+        let freqs = [1000u64, 500, 200, 90, 40, 20, 9, 1];
+        let lengths = huffman_lengths(&freqs);
+        assert!(make_words(&lengths).is_some(), "lengths form a valid tree");
+        let min_len = *lengths.iter().min().expect("non-empty");
+        assert_eq!(lengths[0], min_len, "the most frequent symbol is shortest");
+        assert!(
+            lengths[7] >= lengths[0],
+            "the rarest symbol is no shorter than the commonest"
+        );
+    }
+
+    #[test]
+    fn huffman_lengths_handle_degenerate_inputs() {
+        // No used symbols -> all length 0.
+        assert_eq!(huffman_lengths(&[0, 0, 0]), vec![0, 0, 0]);
+        // One used symbol -> the length-1 retcon, accepted by make_words.
+        let one = huffman_lengths(&[0, 5, 0]);
+        assert_eq!(one, vec![0, 1, 0]);
+        assert!(make_words(&one).is_some());
+        // Equal frequencies over a power-of-two count -> a balanced tree.
+        let balanced = huffman_lengths(&[1, 1, 1, 1]);
+        assert_eq!(balanced, vec![2, 2, 2, 2]);
+    }
+
+    #[test]
+    fn huffman_lengths_round_trip_through_the_codebook() {
+        let freqs = [800u64, 300, 120, 60, 25, 12, 6, 3, 1, 1];
+        let lengths = huffman_lengths(&freqs);
+        let book = Codebook::new(lengths).expect("valid Huffman book");
+        let seq = [0usize, 0, 1, 0, 2, 0, 9, 1, 3, 0, 0, 5];
+        let mut w = BitWriter::new();
+        for &e in &seq {
+            book.encode(e, &mut w);
+        }
+        let bytes = w.into_bytes();
+        let mut rd = BitReader::new(&bytes);
+        for &e in &seq {
+            assert_eq!(book.decode(&mut rd), Some(e));
+        }
     }
 
     #[test]

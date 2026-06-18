@@ -1,17 +1,30 @@
 #![deny(unsafe_code)]
 #![warn(clippy::all)]
 
-use std::num::{NonZeroU32, NonZeroU8};
-
 use sc_core::{detect, AudioBuffer, Decoder, Encoder, Error, Format};
-use vorbis_rs::{VorbisEncoderBuilder, VorbisError};
 
+mod analysis;
+mod block;
+mod block_codec;
 mod codebook;
+mod encoder;
 mod floor1;
+mod floor_render;
+mod header;
 mod lpc;
+mod masking;
 mod mdct;
+mod noise;
+mod octave;
+mod ogg_mux;
 mod oggpack;
+mod psy;
 mod residue;
+mod seed;
+mod setup;
+mod stream;
+mod tonecurve;
+mod tonemask;
 mod window;
 
 #[derive(Default)]
@@ -57,58 +70,14 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     sc_decode::decode(input)
 }
 
-/// Number of frames fed to libvorbis per analysis block. libvorbis accepts
-/// arbitrary sizes; a bounded block keeps peak memory independent of input
-/// length and matches the library's "smaller blocks when in doubt" guidance.
-const ANALYSIS_BLOCK_FRAMES: usize = 4096;
-
-/// Encodes interleaved PCM into an Ogg Vorbis stream using libvorbis (aoTuV)
-/// in quality-based VBR mode.
+/// Encodes interleaved PCM into an Ogg Vorbis stream using the pure-Rust
+/// encoder ([`crate::encoder`]) — no C dependency, so it builds for wasm.
 ///
 /// Vorbis is lossy: the decoded signal approximates the input within a
 /// perceptual tolerance and must never be compared bit-exactly against the
 /// source.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    let sample_rate = NonZeroU32::new(pcm.sample_rate)
-        .ok_or(Error::InvalidPcm("sample rate must be non-zero"))?;
-    let channels = u8::try_from(pcm.channels)
-        .ok()
-        .and_then(NonZeroU8::new)
-        .ok_or(Error::InvalidPcm("unsupported Vorbis channel count"))?;
-
-    let channel_count = usize::from(pcm.channels);
-    let frames = pcm.frames();
-
-    // De-interleave into one planar buffer per channel, as libvorbis expects.
-    let mut planar = vec![Vec::with_capacity(frames); channel_count];
-    for frame in pcm.samples.chunks_exact(channel_count) {
-        for (channel, &sample) in frame.iter().enumerate() {
-            planar[channel].push(sample);
-        }
-    }
-
-    let mut sink = Vec::new();
-    let mut builder =
-        VorbisEncoderBuilder::new(sample_rate, channels, &mut sink).map_err(map_vorbis_error)?;
-    let mut encoder = builder.build().map_err(map_vorbis_error)?;
-
-    let mut start = 0;
-    while start < frames {
-        let end = (start + ANALYSIS_BLOCK_FRAMES).min(frames);
-        let block: Vec<&[f32]> = planar.iter().map(|channel| &channel[start..end]).collect();
-        encoder
-            .encode_audio_block(&block)
-            .map_err(map_vorbis_error)?;
-        start = end;
-    }
-
-    // Flush trailing blocks and the end-of-stream marker, releasing the sink.
-    encoder.finish().map_err(map_vorbis_error)?;
-    Ok(sink)
-}
-
-fn map_vorbis_error(_err: VorbisError) -> Error {
-    Error::InvalidInput("Vorbis encode failed")
+    encoder::encode(pcm)
 }
 
 #[cfg(test)]

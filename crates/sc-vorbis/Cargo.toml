@@ -15,4 +15,3 @@ include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
 [dependencies]
 sc-core.workspace = true
 sc-decode.workspace = true
-vorbis_rs.workspace = true
