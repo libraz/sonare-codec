@@ -9,6 +9,7 @@ use sc_core::{
 };
 
 mod filterbank;
+pub mod psychoacoustic;
 
 pub const MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT: usize = 21;
 
