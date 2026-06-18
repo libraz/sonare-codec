@@ -43,4 +43,3 @@ pyo3 = "0.29.0"
 symphonia = { version = "0.6.0", default-features = false, features = ["aac", "flac", "isomp4", "mp3", "ogg", "pcm", "vorbis", "wav"] }
 opus-decoder = "0.1.1"
 opus = "0.3.1"
-vorbis_rs = "0.5.5"

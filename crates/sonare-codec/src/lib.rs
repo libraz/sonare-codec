@@ -9,15 +9,26 @@ pub use sc_core::{
 #[cfg(feature = "mp3")]
 pub use sc_mp3::{
     apply_big_value_region_tables_to_granule, assemble_layer3_frame_from_payloads,
+    assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factors_and_table_provider,
     assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors,
     assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_auto_step_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_max_payload_bits_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_auto_step_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_cbr_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_max_payload_bits_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
@@ -36,10 +47,17 @@ pub use sc_mp3::{
     select_big_value_table_by_bit_cost, select_count1_table_by_bit_cost,
     select_mpeg1_layer3_long_scale_factor_compress,
     select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
+    select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_provider,
+    select_mpeg1_layer3_pcm_frame_perceptual_active_step_with_table_provider,
+    select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_max_payload_bits_and_table_provider,
+    select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_table_provider,
+    select_mpeg1_layer3_pcm_frame_perceptual_step_with_max_payload_bits_and_table_provider,
+    select_mpeg1_layer3_pcm_frame_perceptual_step_with_table_provider,
     select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
     select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
     select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
-    select_mpeg1_layer3_pcm_frame_step_with_table_provider, ChannelMode, FrameHeader, Layer,
+    select_mpeg1_layer3_pcm_frame_step_with_table_provider,
+    select_mpeg1_layer3_psychoacoustic_long_scale_factors, ChannelMode, FrameHeader, Layer,
     Layer3BigValueMagnitude, Layer3BigValuePair, Layer3BigValueRegionTableSelection,
     Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad, Layer3Count1Quad,
     Layer3Count1TableSelection, Layer3EntropyTableProvider, Layer3EntropyTables,
@@ -51,10 +69,10 @@ pub use sc_mp3::{
 #[cfg(feature = "aac")]
 pub use sc_aac::{
     aac_escape_table, aac_lc_adts_max_frame_len_for_bitrate, aac_lc_default_production_bitrate_bps,
-    aac_lc_long_window_scale_factor_band_offsets, aac_scale_factor_delta_table,
-    aac_scale_factor_delta_zero_table, aac_unsigned_pairs10_table, aac_unsigned_pairs7_table,
-    aac_unsigned_pairs7_unit_magnitude_spectral_tables, aac_unsigned_pairs7_unit_magnitude_table,
-    aac_unsigned_pairs8_table, aac_unsigned_pairs9_table,
+    aac_lc_long_window_scale_factor_band_offsets, aac_lc_standard_spectral_tables,
+    aac_scale_factor_delta_table, aac_scale_factor_delta_zero_table, aac_unsigned_pairs10_table,
+    aac_unsigned_pairs7_table, aac_unsigned_pairs7_unit_magnitude_spectral_tables,
+    aac_unsigned_pairs7_unit_magnitude_table, aac_unsigned_pairs8_table, aac_unsigned_pairs9_table,
     encode_pcm_mono_long_block_adts_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_auto_step_by_bit_cost,
@@ -103,9 +121,13 @@ pub use sc_aac::{
     encode_quantized_stereo_adts_with_selected_scale_factors,
     encode_quantized_stereo_adts_with_selected_scale_factors_by_bit_cost,
     experimental_aac_scale_factor_delta_table, experimental_unit_magnitude_spectral_tables,
+    pack_quad_section_data_with_len,
     pack_sectioned_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost,
-    pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost, plan_sections_by_bit_cost,
-    select_aac_lc_mono_pcm_frame_step_by_bit_cost,
+    pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost,
+    pack_sectioned_spectral_quad_payload_with_sign_bits,
+    pack_spectral_quad_sections_with_sign_bits, pack_spectral_quads_with_sign_bits,
+    pack_spectral_quads_with_table, plan_sections_by_bit_cost, plan_sections_by_offsets,
+    quantize_pcm_long_block, select_aac_lc_mono_pcm_frame_step_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost,
@@ -130,9 +152,10 @@ pub use sc_aac::{
     select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost, select_codebook_by_bit_cost,
     select_scale_factors_for_quantized_bands, AacCodebook, AacLongBlockConfig,
     AacPcmFrameStepSelection, AacPcmLongBlockConfig, AacPcmStepSearchConfig, AacProfile,
-    AacQuantizedChannel, AacQuantizedSpectrum, AacScaleFactorChannel, AacScaleFactorDelta,
-    AacScaleFactorSequence, AacSection, AacSpectralMagnitudePair, AacSpectralMagnitudeTables,
-    AacSpectralPair, AacSpectralTables, AdtsConfig,
+    AacQuadSection, AacQuantizedChannel, AacQuantizedSpectrum, AacScaleFactorChannel,
+    AacScaleFactorDelta, AacScaleFactorSequence, AacSection, AacSpectralMagnitudePair,
+    AacSpectralMagnitudeQuad, AacSpectralMagnitudeQuadTables, AacSpectralMagnitudeTables,
+    AacSpectralPair, AacSpectralQuad, AacSpectralTables, AdtsConfig,
     AAC_LC_48K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS, AAC_LC_PCM_STEP_CANDIDATES,
     AAC_SCALE_FACTOR_DELTA_ZERO_TABLE,
 };
@@ -535,6 +558,71 @@ pub fn encode_aac_adts_with_bitrate(
             "AAC bitrate encode requires mono or stereo PCM",
         )),
     }
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    let channels = u8::try_from(pcm.channels)
+        .map_err(|_| Error::InvalidInput("AAC channel count is unsupported"))?;
+    let adts = AdtsConfig::aac_lc(pcm.sample_rate, channels);
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
+        .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
+    let channel_config = AacLongBlockConfig::new(
+        180,
+        u8::try_from(offsets.len() - 1)
+            .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
+    );
+    let scale_factor_table = aac_scale_factor_delta_table();
+    let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+
+    match pcm.channels {
+        1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            pcm,
+            offsets,
+            AAC_LC_PCM_STEP_CANDIDATES,
+            target_bitrate_bps,
+            &scale_factor_table,
+            spectral_tables,
+        ),
+        2 => encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            channel_config,
+            pcm,
+            offsets,
+            AAC_LC_PCM_STEP_CANDIDATES,
+            target_bitrate_bps,
+            &scale_factor_table,
+            spectral_tables,
+        ),
+        _ => Err(Error::InvalidInput(
+            "AAC selected-scale-factor bitrate encode requires mono or stereo PCM",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(&encode_aac_adts_with_bitrate(pcm, target_bitrate_bps)?)
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(&encode_aac_adts_with_selected_scale_factors_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+    )?)
 }
 
 #[cfg(feature = "aac")]
@@ -988,6 +1076,111 @@ mod tests {
 
     #[test]
     #[cfg(feature = "mp3")]
+    fn exposes_mp3_psychoacoustic_scalefactor_helper() {
+        let pcm = AudioBuffer::new(44_100, 1, vec![0.0; 2304]).unwrap();
+        let scale_factors = super::select_mpeg1_layer3_psychoacoustic_long_scale_factors(
+            &pcm, 0, 576, 0.05, false, 1024,
+        )
+        .unwrap();
+
+        assert_eq!(
+            scale_factors,
+            [0_u8; super::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mp3")]
+    fn exposes_mp3_perceptual_scalefactor_stream_helper() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..1152)
+                .map(|sample| ((sample as f32) * 0.02).sin() * 0.2)
+                .collect(),
+        )
+        .unwrap();
+        let header = super::layer3_header_for_capacity(44_100, 1, 128, false, false).unwrap();
+        let candidates = [0.05_f32, 0.1, 0.2];
+        let selected =
+            super::select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_table_provider(
+                header,
+                &pcm,
+                0,
+                &candidates,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let active_selected = super::select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_provider(
+                header,
+                &pcm,
+                0,
+                &candidates,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let encoded =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider(
+                &pcm,
+                0.1,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let budgeted =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_max_payload_bits_and_table_provider(
+                &pcm,
+                &candidates,
+                selected.payload_bit_len,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let bitrate_header =
+            super::layer3_header_for_capacity(44_100, 1, 96, false, false).unwrap();
+        let bitrate_encoded =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_bitrate_and_table_provider(
+                &pcm,
+                &candidates,
+                96,
+                false,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let cbr_encoded =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_cbr_bitrate_and_table_provider(
+                &pcm,
+                &candidates,
+                96,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let active_cbr_encoded =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
+                &pcm,
+                &candidates,
+                96,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+
+        assert!(active_selected.payload_bit_len <= active_selected.frame_capacity_bits);
+        assert_eq!(encoded.len(), header.frame_len());
+        assert_eq!(budgeted.len(), header.frame_len());
+        assert_eq!(bitrate_encoded.len(), bitrate_header.frame_len());
+        assert_eq!(cbr_encoded.len(), bitrate_header.frame_len());
+        assert_eq!(active_cbr_encoded.len(), bitrate_header.frame_len());
+        assert_eq!(super::detect(&encoded), Some(Format::Mp3));
+        assert_eq!(super::detect(&budgeted), Some(Format::Mp3));
+        assert_eq!(
+            super::FrameHeader::parse(&bitrate_encoded[..4]).unwrap(),
+            bitrate_header
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mp3")]
     fn exposes_mp3_pcm_bitrate_helper() {
         let pcm = AudioBuffer::new(
             44_100,
@@ -1236,6 +1429,63 @@ mod tests {
         assert_eq!(table[60].symbol, super::AacScaleFactorDelta::new(0));
         assert_eq!(table[60].code, super::HuffmanCode::new(0, 1).unwrap());
         assert_eq!(table[120].symbol, super::AacScaleFactorDelta::new(60));
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
+    fn exposes_aac_spectral_quad_helpers() {
+        let quads = [super::AacSpectralQuad::new(1, -1, 0, 1)];
+        let sections = [super::AacQuadSection {
+            start: 0,
+            end: 4,
+            codebook_id: 2,
+        }];
+        let quantized = [1, -1, 0, 1];
+        let signed_table = [super::HuffmanEntry {
+            symbol: quads[0],
+            code: super::HuffmanCode::new(0b11, 2).unwrap(),
+        }];
+        let magnitude_table = [super::HuffmanEntry {
+            symbol: super::AacSpectralMagnitudeQuad::new(1, 1, 0, 1),
+            code: super::HuffmanCode::new(0b10, 2).unwrap(),
+        }];
+
+        assert_eq!(
+            super::pack_spectral_quads_with_table(&quads, &signed_table)
+                .unwrap()
+                .bit_len,
+            2
+        );
+        assert_eq!(
+            super::pack_spectral_quads_with_sign_bits(&quads, &magnitude_table)
+                .unwrap()
+                .bit_len,
+            5
+        );
+        let tables = super::AacSpectralMagnitudeQuadTables {
+            quads2: &magnitude_table,
+            ..Default::default()
+        };
+        assert_eq!(
+            super::pack_quad_section_data_with_len(&sections, 4)
+                .unwrap()
+                .bit_len,
+            9
+        );
+        assert_eq!(
+            super::pack_spectral_quad_sections_with_sign_bits(&sections, &quantized, tables)
+                .unwrap()
+                .bit_len,
+            5
+        );
+        assert_eq!(
+            super::pack_sectioned_spectral_quad_payload_with_sign_bits(
+                &sections, &quantized, 4, tables,
+            )
+            .unwrap()
+            .bit_len,
+            14
+        );
     }
 
     #[test]

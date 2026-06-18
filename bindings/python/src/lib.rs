@@ -157,6 +157,26 @@ fn encode_mp3_with_bitrate(
 }
 
 #[pyfunction]
+fn encode_mp3_cbr_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 fn encode_vorbis(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
     let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
         .map_err(to_py_value_error)?;
@@ -191,6 +211,22 @@ fn encode_aac_with_bitrate(
 }
 
 #[pyfunction]
+fn encode_aac_with_selected_scale_factors_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_aac_adts_with_selected_scale_factors_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 fn encode_m4a(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
     let aac = encode_aac(sample_rate, channels, samples)?;
     sonare_codec_rs::mux_aac_adts_as_m4a(&aac).map_err(to_py_value_error)
@@ -203,8 +239,22 @@ fn encode_m4a_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let aac = encode_aac_with_bitrate(sample_rate, channels, samples, target_bitrate_bps)?;
-    sonare_codec_rs::mux_aac_adts_as_m4a(&aac).map_err(to_py_value_error)
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_m4a_with_bitrate(&pcm, target_bitrate_bps).map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_m4a_with_selected_scale_factors_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
+        .map_err(to_py_value_error)
 }
 
 #[pyfunction]
@@ -219,6 +269,11 @@ fn aac_lc_adts_max_frame_len_for_bitrate(
 ) -> PyResult<usize> {
     sonare_codec_rs::aac_lc_adts_max_frame_len_for_bitrate(sample_rate, target_bitrate_bps)
         .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn aac_lc_default_production_bitrate_bps(channels: u8) -> PyResult<u32> {
+    sonare_codec_rs::aac_lc_default_production_bitrate_bps(channels).map_err(to_py_value_error)
 }
 
 #[pyfunction]
@@ -267,6 +322,51 @@ fn aac_unsigned_pairs8_table() -> Vec<u32> {
 }
 
 #[pyfunction]
+fn aac_unsigned_pairs9_table() -> Vec<u32> {
+    sonare_codec_rs::aac_unsigned_pairs9_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_unsigned_pairs10_table() -> Vec<u32> {
+    sonare_codec_rs::aac_unsigned_pairs10_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_escape_table() -> Vec<u32> {
+    sonare_codec_rs::aac_escape_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
 fn aac_scale_factor_delta_table() -> Vec<i32> {
     sonare_codec_rs::aac_scale_factor_delta_table()
         .iter()
@@ -278,6 +378,36 @@ fn aac_scale_factor_delta_table() -> Vec<i32> {
             ]
         })
         .collect()
+}
+
+#[pyfunction]
+fn aac_codebook6_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> PyResult<Vec<u32>> {
+    let pairs6 = [sonare_codec_rs::HuffmanEntry {
+        symbol: sonare_codec_rs::AacSpectralMagnitudePair::new(1, 1),
+        code: sonare_codec_rs::HuffmanCode::new(0b1, 1).expect("valid AAC codebook 6 unit code"),
+    }];
+    let sections = sonare_codec_rs::plan_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        sonare_codec_rs::AacSpectralMagnitudeTables {
+            pairs1: &[],
+            pairs5: &[],
+            pairs6: &pairs6,
+            escape: &[],
+        },
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook.id()),
+            ]
+        })
+        .collect())
 }
 
 #[pyfunction]
@@ -336,15 +466,28 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(encode_flac, module)?)?;
     module.add_function(wrap_pyfunction!(encode_mp3, module)?)?;
     module.add_function(wrap_pyfunction!(encode_mp3_with_bitrate, module)?)?;
+    module.add_function(wrap_pyfunction!(encode_mp3_cbr_with_bitrate, module)?)?;
     module.add_function(wrap_pyfunction!(encode_vorbis, module)?)?;
     module.add_function(wrap_pyfunction!(encode_opus, module)?)?;
     module.add_function(wrap_pyfunction!(encode_aac, module)?)?;
     module.add_function(wrap_pyfunction!(encode_aac_with_bitrate, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_with_selected_scale_factors_and_bitrate,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(encode_m4a, module)?)?;
     module.add_function(wrap_pyfunction!(encode_m4a_with_bitrate, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_m4a_with_selected_scale_factors_and_bitrate,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(demux_m4a_as_aac_adts, module)?)?;
     module.add_function(wrap_pyfunction!(
         aac_lc_adts_max_frame_len_for_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_lc_default_production_bitrate_bps,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
@@ -353,7 +496,11 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs7_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs8_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_unsigned_pairs9_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_unsigned_pairs10_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_escape_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_scale_factor_delta_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_codebook6_unit_section_plan, module)?)?;
     module.add_function(wrap_pyfunction!(
         mp3_layer3_main_data_capacity_bytes,
         module

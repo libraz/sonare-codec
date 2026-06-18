@@ -80,6 +80,14 @@ export function encode_mp3_with_bitrate(
   crc_protected: boolean
 ): Uint8Array;
 
+export function encode_mp3_cbr_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Uint8Array;
+
 export function encode_aac(
   sample_rate: number,
   channels: number,
@@ -87,6 +95,13 @@ export function encode_aac(
 ): Uint8Array;
 
 export function encode_aac_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
+export function encode_aac_with_selected_scale_factors_and_bitrate(
   sample_rate: number,
   channels: number,
   samples: Float32Array,
@@ -106,11 +121,22 @@ export function encode_m4a_with_bitrate(
   target_bitrate_bps: number
 ): Uint8Array;
 
+export function encode_m4a_with_selected_scale_factors_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
 export function demux_m4a_as_aac_adts(input: Uint8Array): Uint8Array;
 
 export function aac_lc_adts_max_frame_len_for_bitrate(
   sample_rate: number,
   target_bitrate_bps: number
+): number;
+
+export function aac_lc_default_production_bitrate_bps(
+  channels: number
 ): number;
 
 /**
@@ -129,9 +155,32 @@ export function aac_unsigned_pairs7_table(): Uint32Array;
 export function aac_unsigned_pairs8_table(): Uint32Array;
 
 /**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_unsigned_pairs9_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_unsigned_pairs10_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_escape_table(): Uint32Array;
+
+/**
  * Returns flattened entries as [delta, bits, len, ...].
  */
 export function aac_scale_factor_delta_table(): Int32Array;
+
+/**
+ * Returns flattened sections as [start, end, codebook_id, ...].
+ */
+export function aac_codebook6_unit_section_plan(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
 
 export function mp3_layer3_main_data_capacity_bytes(
   sample_rate: number,
