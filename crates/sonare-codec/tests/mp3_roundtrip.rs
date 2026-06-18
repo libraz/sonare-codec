@@ -183,6 +183,64 @@ fn mp3_reservoir_roundtrip_decodes_through_symphonia() {
     );
 }
 
+#[test]
+fn mp3_perceptual_roundtrip_decodes_through_symphonia() {
+    // A full stream assembled with psychoacoustic per-band scale-factor noise
+    // shaping must still decode through Symphonia and reconstruct the sweep: the
+    // decoder reverses the per-band gain via the transmitted scale factors, so
+    // shape and level hold (perceptual coding trades SNR in masked bands for
+    // bits, so this asserts correctness, not an SNR gain).
+    let sample_rate = 44_100;
+    let total_frames = 16 * 1152;
+    let pcm = sweep_pcm(total_frames, sample_rate, 300.0, 6_000.0, 0.3);
+
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+    let step = 0.5_f32;
+    let mut stream = Vec::new();
+    let mut start = 0usize;
+    while start + 1152 <= total_frames {
+        let header = sc_mp3::layer3_header_for_capacity(sample_rate, 1, 320, false, false).unwrap();
+        let frame =
+            sc_mp3::assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factors_and_table_provider(
+                header, &pcm, start, step, provider,
+            )
+            .expect("perceptual MP3 frame assembly");
+        stream.extend_from_slice(&frame);
+        start += 1152;
+    }
+
+    let decoded = sonare_codec::decode(&stream).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 1, "expected mono reconstruction");
+
+    let seg = 8_192;
+    let ref_start = 8_000;
+    let corr = aligned_channel_corr(&pcm.samples, &decoded.samples, seg, ref_start);
+    let reference = &pcm.samples[ref_start..ref_start + seg];
+    let mut best = (0_usize, f64::NEG_INFINITY);
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.samples.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded.samples[start..start + seg]);
+        if c > best.1 {
+            best = (d, c);
+        }
+    }
+    let aligned = &decoded.samples[ref_start + best.0..ref_start + best.0 + seg];
+    let level_ratio = rms(aligned) / rms(reference).max(1.0e-12);
+    eprintln!("perceptual roundtrip: corr={corr:.4} ratio={level_ratio:.3}");
+
+    assert!(
+        corr > 0.6,
+        "perceptual waveform correlation too low: {corr:.4}"
+    );
+    assert!(
+        (0.5..2.0).contains(&level_ratio),
+        "perceptual decoded level out of range: ratio={level_ratio:.3}"
+    );
+}
+
 /// Pearson correlation of two equal-length slices.
 fn correlation(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
