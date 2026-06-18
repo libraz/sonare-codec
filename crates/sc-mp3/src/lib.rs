@@ -452,7 +452,7 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider(
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<Vec<u8>, Error> {
     let header = mpeg1_layer3_header_for_pcm(pcm)?;
-    encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider(
+    encode_mpeg1_layer3_pcm_frames_with_header_cbr_padding_and_table_provider(
         header, pcm, candidates, provider,
     )
 }
@@ -654,6 +654,176 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_cbr_padding_and_table_provider
                 provider,
             )?,
         );
+    }
+    Ok(out)
+}
+
+/// MPEG-1 main-data backward pointer width: `main_data_begin` is 9 bits.
+const MAX_MAIN_DATA_BEGIN: usize = 511;
+
+/// One frame's reservoir-aware packing result, retained for the layout pass.
+struct Layer3ReservoirFrame {
+    header: FrameHeader,
+    side_info: Layer3SideInfo,
+    payload: Vec<u8>,
+    capacity: usize,
+    main_data_begin: usize,
+}
+
+/// Packs one Layer III frame at the finest quantizer step whose byte-padded
+/// payload fits a main-data byte budget (frame capacity plus borrowed reservoir).
+///
+/// Unlike the single-frame step search, the budget may exceed one frame's own
+/// capacity, so the per-step capacity guard is replaced by the supplied budget.
+fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    candidates: &[f32],
+    budget_bytes: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let mut best: Option<(f32, Layer3SideInfo, PackedBits)> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        let Ok((side_info, main_data)) = pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            provider,
+        ) else {
+            continue;
+        };
+        if main_data.bytes.len() > budget_bytes {
+            continue;
+        }
+        // Prefer the smallest fitting step (finest quantization, best quality).
+        best = match best {
+            Some((best_step, best_side_info, best_main_data)) if step >= best_step => {
+                Some((best_step, best_side_info, best_main_data))
+            }
+            _ => Some((step, side_info, main_data)),
+        };
+    }
+    best.map(|(_, side_info, main_data)| (side_info, main_data))
+        .ok_or(Error::UnsupportedFeature("MP3 reservoir step search"))
+}
+
+/// Encodes PCM as constant-bitrate MPEG-1 Layer III using a bit reservoir.
+///
+/// A frame whose granules need more bits than its own main-data slot provides
+/// borrows from the unused tail of earlier frames through `main_data_begin`, the
+/// spec's backward byte pointer into the shared main-data stream (ISO/IEC
+/// 11172-3 §2.4.1.7). Frames that quantize cheaply leave surplus slot bytes that
+/// later, busier frames consume, so the average bitrate stays constant while
+/// per-frame quality is no longer hard-capped at one frame's capacity.
+pub fn encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, pcm)?;
+    let mut padding = Layer3PaddingSchedule::new(base_header)?;
+
+    // Pass 1: choose each frame's step, pack its payload, and record how far the
+    // running reservoir lets its main data begin before its own slot.
+    let mut frames: Vec<Layer3ReservoirFrame> = Vec::with_capacity(frame_count);
+    let mut reservoir = 0_usize;
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(base_header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        let frame_header = padding.next_header();
+        let capacity = layer3_main_data_capacity_bytes(frame_header)?;
+        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
+        let budget_bytes = capacity
+            .checked_add(main_data_begin)
+            .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
+        let (mut side_info, main_data) = pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+            frame_header,
+            pcm,
+            start_frame,
+            candidates,
+            budget_bytes,
+            provider,
+        )?;
+        side_info.main_data_begin = u16::try_from(main_data_begin)
+            .map_err(|_| Error::InvalidInput("MP3 main_data_begin exceeds field width"))?;
+        let payload = main_data.bytes;
+        // Surplus beyond the 511-byte pointer range can never be referenced, so
+        // it is dropped here (those slot bytes stay zero padding in the file).
+        reservoir = main_data_begin
+            .checked_add(capacity)
+            .ok_or(Error::InvalidInput("MP3 reservoir overflows"))?
+            .checked_sub(payload.len())
+            .ok_or(Error::InvalidInput("MP3 reservoir underflows"))?;
+        frames.push(Layer3ReservoirFrame {
+            header: frame_header,
+            side_info,
+            payload,
+            capacity,
+            main_data_begin,
+        });
+    }
+
+    // Pass 2: lay each payload into the shared main-data stream at the byte its
+    // `main_data_begin` resolves to, then slice the stream back into frame slots.
+    let mut total_slots = 0_usize;
+    for frame in &frames {
+        total_slots = total_slots
+            .checked_add(frame.capacity)
+            .ok_or(Error::InvalidInput("MP3 total main-data size overflows"))?;
+    }
+    let mut stream = vec![0_u8; total_slots];
+    let mut slot_start = 0_usize;
+    for frame in &frames {
+        let payload_start =
+            slot_start
+                .checked_sub(frame.main_data_begin)
+                .ok_or(Error::InvalidInput(
+                    "MP3 main_data_begin precedes stream start",
+                ))?;
+        let payload_end = payload_start
+            .checked_add(frame.payload.len())
+            .filter(|end| *end <= stream.len())
+            .ok_or(Error::InvalidInput(
+                "MP3 payload overflows main-data stream",
+            ))?;
+        stream[payload_start..payload_end].copy_from_slice(&frame.payload);
+        slot_start = slot_start
+            .checked_add(frame.capacity)
+            .ok_or(Error::InvalidInput("MP3 main-data stream overflows"))?;
+    }
+
+    let mut out = Vec::with_capacity(total_slots + frames.len() * 64);
+    let mut slot_start = 0_usize;
+    for frame in &frames {
+        let slot = &stream[slot_start..slot_start + frame.capacity];
+        out.extend_from_slice(&assemble_layer3_frame(
+            frame.header,
+            &frame.side_info,
+            slot,
+        )?);
+        slot_start += frame.capacity;
     }
     Ok(out)
 }
@@ -8148,6 +8318,7 @@ mod tests {
         encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors,
         encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
         experimental_unit_magnitude_table_provider, layer3_analysis_subband_block,
@@ -8190,8 +8361,8 @@ mod tests {
         MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     };
     use sc_core::{
-        detect, quantize_spectrum, AudioBuffer, Error, Format, HuffmanCode, HuffmanEntry,
-        PackedBits,
+        detect, quantize_spectrum, AudioBuffer, BitReader, Error, Format, HuffmanCode,
+        HuffmanEntry, PackedBits,
     };
 
     /// Inverse of the `sc-core` (unnormalized) MDCT used by `mdct_long_block`:
@@ -11171,6 +11342,64 @@ mod tests {
         );
         assert_eq!(fixed.len(), 3 * unpadded_header.frame_len());
         assert!(cbr.len() > fixed.len());
+    }
+
+    #[test]
+    fn reservoir_encode_borrows_main_data_across_frames() {
+        // Alternate broadband (expensive to quantize) and near-silent (cheap)
+        // frames so the shared main-data stream builds a reservoir that later
+        // frames reference: main_data_begin must climb above zero somewhere.
+        let frames = 8_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame);
+        for frame in 0..frames {
+            let loud = frame % 2 == 0;
+            for n in 0..samples_per_frame {
+                let t = n as f32;
+                let value = if loud {
+                    0.3 * ((t * 0.043).sin()
+                        + (t * 0.131).sin()
+                        + (t * 0.277).sin()
+                        + (t * 0.611).sin())
+                } else {
+                    0.02 * (t * 0.05).sin()
+                };
+                samples.push(value);
+            }
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let stream = encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+
+        // Walk the stream: every frame parses, the buffer is consumed exactly,
+        // and main_data_begin (the first 9 side-info bits) exceeds zero on at
+        // least one frame, proving cross-frame borrowing.
+        let mut offset = 0_usize;
+        let mut frame_count = 0_usize;
+        let mut max_main_data_begin = 0_u32;
+        while offset < stream.len() {
+            let header = FrameHeader::parse(&stream[offset..offset + 4]).unwrap();
+            let mut reader = BitReader::new(&stream[offset + 4..]);
+            let main_data_begin = reader.read_bits(9).unwrap();
+            max_main_data_begin = max_main_data_begin.max(main_data_begin);
+            offset += header.frame_len();
+            frame_count += 1;
+        }
+        assert_eq!(offset, stream.len(), "frames did not tile the stream");
+        assert_eq!(frame_count, frames);
+        assert!(
+            max_main_data_begin > 0,
+            "reservoir never used: main_data_begin stayed zero"
+        );
+        // The MPEG-1 main_data_begin pointer is 9 bits wide.
+        assert!(max_main_data_begin <= 511);
     }
 
     #[test]
