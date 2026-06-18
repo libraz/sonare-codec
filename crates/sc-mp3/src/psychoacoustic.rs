@@ -207,6 +207,91 @@ pub fn bin_barks(num_bins: usize, sample_rate: u32, fft_len: usize) -> Result<Ve
     Ok((0..num_bins).map(|k| bark(k as f64 * resolution)).collect())
 }
 
+/// Smallest allowed-noise energy assigned to a band, so a fully masked band
+/// still yields a finite (rather than zero) target.
+const MIN_ALLOWED_NOISE: f64 = 1.0e-12;
+
+/// Computes the allowed quantization-noise energy per long-block scale-factor
+/// band in the MDCT domain.
+///
+/// The masking threshold is computed in the FFT power-spectrum domain, but
+/// scale-factor allocation must compare it against quantization noise in the
+/// MDCT domain, whose energy normalization differs. Rather than calibrate an
+/// absolute constant between the two, this forms a dimensionless masking ratio
+/// per band — `fft_threshold / fft_signal`, the fraction of band energy that
+/// noise may reach — and applies it to the band's MDCT signal energy. The
+/// transform-dependent normalization cancels.
+///
+/// `fft_energy` and `fft_threshold` are the per-bin power spectrum and masking
+/// threshold (same length); `mdct_spectrum` is the granule's MDCT line spectrum.
+/// The result covers the 21 transmitted bands (the residual highest band carries
+/// no scale factor).
+pub fn perceptual_band_allowed_noise(
+    mdct_spectrum: &[f32],
+    fft_energy: &[f64],
+    fft_threshold: &[f64],
+    sample_rate: u32,
+    fft_len: usize,
+) -> Result<[f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    if fft_energy.len() != fft_threshold.len() {
+        return Err(Error::InvalidInput(
+            "psychoacoustic energy and threshold arrays must match in length",
+        ));
+    }
+    if mdct_spectrum.is_empty() || fft_len == 0 || sample_rate == 0 {
+        return Err(Error::InvalidInput(
+            "perceptual band thresholds need a spectrum, FFT length, and rate",
+        ));
+    }
+
+    let mdct_lines = mdct_spectrum.len() as f64;
+    let mdct_resolution = f64::from(sample_rate) / (2.0 * mdct_lines);
+    let fft_resolution = f64::from(sample_rate) / fft_len as f64;
+
+    let mut allowed = [MIN_ALLOWED_NOISE; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    for (band, slot) in allowed.iter_mut().enumerate() {
+        let (start, end) = crate::mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        let freq_lo = start as f64 * mdct_resolution;
+        let freq_hi = end as f64 * mdct_resolution;
+
+        let mut mdct_energy = 0.0_f64;
+        for &line in &mdct_spectrum[start.min(mdct_spectrum.len())..end.min(mdct_spectrum.len())] {
+            mdct_energy += f64::from(line) * f64::from(line);
+        }
+
+        // Accumulate the FFT signal and threshold over the band's frequency span.
+        let mut fft_signal = 0.0_f64;
+        let mut fft_thresh = 0.0_f64;
+        let mut covered = false;
+        for (bin, (&energy, &threshold)) in fft_energy.iter().zip(fft_threshold.iter()).enumerate()
+        {
+            let freq = bin as f64 * fft_resolution;
+            if freq >= freq_lo && freq < freq_hi {
+                fft_signal += energy;
+                fft_thresh += threshold;
+                covered = true;
+            }
+        }
+        // Narrow low bands may fall between FFT bins; use the nearest bin so the
+        // ratio is still defined.
+        if !covered {
+            let center = 0.5 * (freq_lo + freq_hi);
+            let nearest = ((center / fft_resolution).round() as usize).min(fft_energy.len() - 1);
+            fft_signal = fft_energy[nearest];
+            fft_thresh = fft_threshold[nearest];
+        }
+
+        let mask_ratio = if fft_signal > 0.0 {
+            fft_thresh / fft_signal
+        } else {
+            // No signal in band: noise here is inaudible, allow it freely.
+            f64::INFINITY
+        };
+        *slot = (mask_ratio * mdct_energy).max(MIN_ALLOWED_NOISE);
+    }
+    Ok(allowed)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -363,5 +448,44 @@ mod tests {
             assert!(pair[1] >= pair[0]);
         }
         assert!(bin_barks(0, 0, 1024).is_err());
+    }
+
+    #[test]
+    fn allowed_noise_applies_the_mask_ratio_to_mdct_energy() {
+        // A uniform FFT threshold/signal ratio means every covered band's allowed
+        // noise equals ratio * the band's MDCT signal energy, independent of the
+        // FFT vs MDCT normalization — the dimensionless ratio cancels it.
+        let fft_len = 1024usize;
+        let bins = fft_len / 2 + 1;
+        let ratio = 0.1_f64;
+        let fft_energy = vec![1.0_f64; bins];
+        let fft_threshold = vec![ratio; bins];
+
+        let mut mdct = vec![0.0_f32; 576];
+        mdct[2] = 3.0; // band 0 (lines 0..4): energy 9
+        mdct[50] = 4.0; // band 9 (lines 44..52): energy 16
+
+        let allowed =
+            perceptual_band_allowed_noise(&mdct, &fft_energy, &fft_threshold, 44_100, fft_len)
+                .unwrap();
+
+        assert!(approx(allowed[0], ratio * 9.0, 1.0e-9));
+        assert!(approx(allowed[9], ratio * 16.0, 1.0e-9));
+        // A band with no MDCT energy collapses to the floor, not zero.
+        assert!(approx(allowed[2], MIN_ALLOWED_NOISE, 1.0e-15));
+
+        // Doubling the masking threshold doubles the allowed noise.
+        let louder_threshold = vec![ratio * 2.0; bins];
+        let louder =
+            perceptual_band_allowed_noise(&mdct, &fft_energy, &louder_threshold, 44_100, fft_len)
+                .unwrap();
+        assert!(approx(louder[0], 2.0 * allowed[0], 1.0e-9));
+    }
+
+    #[test]
+    fn allowed_noise_rejects_mismatched_or_empty_inputs() {
+        let mdct = vec![1.0_f32; 576];
+        assert!(perceptual_band_allowed_noise(&mdct, &[1.0, 2.0], &[1.0], 44_100, 1024).is_err());
+        assert!(perceptual_band_allowed_noise(&[], &[1.0], &[1.0], 44_100, 1024).is_err());
     }
 }
