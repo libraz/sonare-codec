@@ -281,13 +281,17 @@ pub fn perceptual_band_allowed_noise(
             fft_thresh = fft_threshold[nearest];
         }
 
-        let mask_ratio = if fft_signal > 0.0 {
-            fft_thresh / fft_signal
+        *slot = if mdct_energy <= 0.0 {
+            // Silent band: no signal to mask, so the target is irrelevant; pin it
+            // to the floor rather than forming 0 · ∞.
+            MIN_ALLOWED_NOISE
+        } else if fft_signal > 0.0 {
+            (fft_thresh / fft_signal * mdct_energy).max(MIN_ALLOWED_NOISE)
         } else {
-            // No signal in band: noise here is inaudible, allow it freely.
+            // Signal present in the MDCT band but none in the FFT span: treat as
+            // fully masked so the band is never forced to spend bits.
             f64::INFINITY
         };
-        *slot = (mask_ratio * mdct_energy).max(MIN_ALLOWED_NOISE);
     }
     Ok(allowed)
 }
@@ -376,6 +380,39 @@ pub fn allocate_long_block_scalefactors(
         }
     }
     Ok(scale_factors)
+}
+
+/// Derives perceptual long-block scale factors for one granule.
+///
+/// Runs the full model: Hann-window and transform `pcm_window` to a power
+/// spectrum, estimate its tonality, spread it into a masking threshold, convert
+/// that to per-band allowed noise against the granule's MDCT spectrum, and run
+/// the noise-control allocation. `pcm_window` is the block of PCM samples the
+/// FFT analyses (its length is the FFT length); `mdct_spectrum` is the granule's
+/// MDCT line spectrum in whatever sign convention the caller quantizes (energy
+/// is sign-independent). The returned scale factors feed
+/// [`crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
+pub fn perceptual_long_block_scalefactors(
+    mdct_spectrum: &[f32],
+    pcm_window: &[f64],
+    step: f32,
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<[u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    let fft_len = pcm_window.len();
+    let window = hann_window(fft_len)?;
+    let windowed: Vec<f64> = pcm_window
+        .iter()
+        .zip(window.iter())
+        .map(|(&sample, &scale)| sample * scale)
+        .collect();
+    let energy = power_spectrum(&windowed)?;
+    let tonality = spectral_flatness_tonality(&energy);
+    let barks = bin_barks(energy.len(), sample_rate, fft_len)?;
+    let threshold = spread_masking_threshold(&energy, &barks, tonality)?;
+    let allowed =
+        perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)?;
+    allocate_long_block_scalefactors(mdct_spectrum, &allowed, step, scalefac_scale, sample_rate)
 }
 
 #[cfg(test)]
@@ -665,5 +702,56 @@ mod tests {
         let spectrum = vec![0.1_f32; 576];
         let allowed = [1.0_f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
         assert!(allocate_long_block_scalefactors(&spectrum, &allowed, 0.0, false, 44_100).is_err());
+    }
+
+    #[test]
+    fn allowed_noise_is_finite_for_a_fully_silent_granule() {
+        // A silent FFT span and silent MDCT band must not produce 0 · ∞ = NaN.
+        let mdct = vec![0.0_f32; 576];
+        let bins = 1024 / 2 + 1;
+        let allowed =
+            perceptual_band_allowed_noise(&mdct, &vec![0.0; bins], &vec![0.0; bins], 44_100, 1024)
+                .unwrap();
+        for &value in &allowed {
+            assert!(
+                value.is_finite(),
+                "silent granule produced a non-finite target"
+            );
+        }
+    }
+
+    #[test]
+    fn driver_produces_valid_scalefactors_for_a_tone() {
+        // A 1 kHz tone through the full driver yields in-range scale factors.
+        let fft_len = 1024usize;
+        let pcm_window: Vec<f64> = (0..fft_len)
+            .map(|n| 0.5 * (std::f64::consts::TAU * 1000.0 * n as f64 / 44_100.0).sin())
+            .collect();
+        // A decaying low-frequency MDCT spectrum to allocate against.
+        let mdct: Vec<f32> = (0..576)
+            .map(|l| 0.3 * (-(l as f32) / 120.0).exp())
+            .collect();
+        let scale_factors =
+            perceptual_long_block_scalefactors(&mdct, &pcm_window, 0.05, false, 44_100).unwrap();
+        for (band, &sf) in scale_factors.iter().enumerate() {
+            let cap = if band < 11 { 15 } else { 7 };
+            assert!(sf <= cap, "band {band} scale factor {sf} exceeds cap {cap}");
+        }
+    }
+
+    #[test]
+    fn driver_leaves_a_silent_granule_at_zero() {
+        let scale_factors = perceptual_long_block_scalefactors(
+            &[0.0_f32; 576],
+            &[0.0_f64; 1024],
+            0.05,
+            false,
+            44_100,
+        )
+        .unwrap();
+        assert_eq!(
+            scale_factors,
+            [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+        );
     }
 }
