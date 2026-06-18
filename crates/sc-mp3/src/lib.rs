@@ -8,6 +8,8 @@ use sc_core::{
     PackedBits,
 };
 
+mod filterbank;
+
 pub const MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT: usize = 21;
 pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     0.0005,
@@ -21,6 +23,15 @@ pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     0.2,
     0.5,
     1.0,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    50.0,
+    100.0,
+    200.0,
+    500.0,
+    1_000.0,
     f32::MAX,
 ];
 
@@ -446,6 +457,49 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider(
     )
 }
 
+/// Encodes PCM through the frame scaffold, selecting each frame within an
+/// explicit Layer III payload bit budget.
+pub fn encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    max_payload_bit_len: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider(
+        header,
+        pcm,
+        candidates,
+        max_payload_bit_len,
+        provider,
+    )
+}
+
+/// Encodes PCM through the frame scaffold using a caller-selected Layer III bitrate.
+///
+/// This builds the MPEG header and derives each frame's main-data capacity from
+/// that header, so callers can drive the existing per-frame step search from a
+/// bitrate without duplicating header/capacity calculations.
+pub fn encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    padding: bool,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        padding,
+        crc_protected,
+    )?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider(
+        header, pcm, candidates, provider,
+    )
+}
+
 /// Encodes PCM with an explicit MPEG-1 Layer III header through the frame scaffold.
 pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors(
     header: FrameHeader,
@@ -490,6 +544,42 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provid
             pcm,
             start_frame,
             candidates,
+            provider,
+        )?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider(
+                header,
+                pcm,
+                start_frame,
+                step,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with an explicit MPEG-1 Layer III header and per-frame step
+/// search constrained by a caller-provided payload bit budget.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    max_payload_bit_len: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        let step = select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider(
+            header,
+            pcm,
+            start_frame,
+            candidates,
+            max_payload_bit_len,
             provider,
         )?;
         out.extend_from_slice(
@@ -551,6 +641,28 @@ pub fn select_mpeg1_layer3_pcm_frame_step_with_table_provider(
     )
 }
 
+/// Selects the finest quantizer step within a caller-provided Layer III payload budget.
+pub fn select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    candidates: &[f32],
+    max_payload_bit_len: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<f32, Error> {
+    Ok(
+        select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+            header,
+            pcm,
+            start_frame,
+            candidates,
+            max_payload_bit_len,
+            provider,
+        )?
+        .step,
+    )
+}
+
 /// Selects the finest quantizer step and reports the resulting frame payload cost.
 pub fn select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
     header: FrameHeader,
@@ -593,6 +705,78 @@ pub fn select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
     selected.ok_or(Error::UnsupportedFeature("MP3 quantizer step search"))
 }
 
+/// Selects the finest quantizer step and reports the payload cost relative to a
+/// caller-provided bit budget.
+pub fn select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    candidates: &[f32],
+    max_payload_bit_len: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Layer3PcmFrameStepSelection, Error> {
+    if max_payload_bit_len == 0 {
+        return Err(Error::InvalidInput(
+            "MP3 max payload bit length must be greater than zero",
+        ));
+    }
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<Layer3PcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) = evaluate_mpeg1_layer3_pcm_frame_step_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            provider,
+        ) {
+            let Some(selection) =
+                limit_mpeg1_layer3_pcm_frame_step_selection(selection, max_payload_bit_len)
+            else {
+                continue;
+            };
+            selected = select_better_mpeg1_layer3_pcm_frame_step(selected, selection);
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("MP3 quantizer step search"))
+}
+
+fn limit_mpeg1_layer3_pcm_frame_step_selection(
+    mut selection: Layer3PcmFrameStepSelection,
+    max_payload_bit_len: usize,
+) -> Option<Layer3PcmFrameStepSelection> {
+    if selection.payload_bit_len > max_payload_bit_len {
+        return None;
+    }
+    selection.frame_capacity_bits = max_payload_bit_len;
+    Some(selection)
+}
+
+fn select_better_mpeg1_layer3_pcm_frame_step(
+    selected: Option<Layer3PcmFrameStepSelection>,
+    selection: Layer3PcmFrameStepSelection,
+) -> Option<Layer3PcmFrameStepSelection> {
+    match selected {
+        Some(previous)
+            if selection.step > previous.step
+                || (selection.step == previous.step
+                    && selection.payload_bit_len <= previous.payload_bit_len) =>
+        {
+            Some(previous)
+        }
+        _ => Some(selection),
+    }
+}
+
 fn evaluate_mpeg1_layer3_pcm_frame_step_with_table_provider(
     header: FrameHeader,
     pcm: &AudioBuffer,
@@ -621,7 +805,8 @@ fn evaluate_mpeg1_layer3_pcm_frame_step_with_table_provider(
     })
 }
 
-fn layer3_main_data_capacity_bytes(header: FrameHeader) -> Result<usize, Error> {
+/// Returns the Layer III main-data payload capacity for one frame.
+pub fn layer3_main_data_capacity_bytes(header: FrameHeader) -> Result<usize, Error> {
     if header.layer != Layer::Layer3 {
         return Err(Error::UnsupportedFeature(
             "MP3 frame assembly requires Layer III",
@@ -641,6 +826,49 @@ fn layer3_main_data_capacity_bytes(header: FrameHeader) -> Result<usize, Error> 
         .frame_len()
         .checked_sub(fixed_len)
         .ok_or(Error::InvalidInput("MP3 frame length overflow"))
+}
+
+/// Builds a Layer III header for capacity and frame-budget calculations.
+///
+/// `channels` accepts mono (`1`) or stereo (`2`). `crc_protected` follows the
+/// user-facing meaning and is converted to the MPEG header's `protection_absent`
+/// bit.
+pub fn layer3_header_for_capacity(
+    sample_rate: u32,
+    channels: u16,
+    bitrate_kbps: u16,
+    padding: bool,
+    crc_protected: bool,
+) -> Result<FrameHeader, Error> {
+    let version = match sample_rate {
+        32_000 | 44_100 | 48_000 => MpegVersion::Mpeg1,
+        16_000 | 22_050 | 24_000 => MpegVersion::Mpeg2,
+        8_000 | 11_025 | 12_000 => MpegVersion::Mpeg25,
+        _ => return Err(Error::UnsupportedFeature("MP3 Layer III sample rate")),
+    };
+    let channel_mode = match channels {
+        1 => ChannelMode::SingleChannel,
+        2 => ChannelMode::Stereo,
+        _ => return Err(Error::UnsupportedFeature("MP3 Layer III channel count")),
+    };
+    let header = FrameHeader {
+        version,
+        layer: Layer::Layer3,
+        protection_absent: !crc_protected,
+        bitrate_kbps,
+        sample_rate,
+        padding,
+        channel_mode,
+    };
+    header.to_bytes()?;
+    Ok(header)
+}
+
+/// Returns the Layer III main-data payload capacity in bits for one frame.
+pub fn layer3_main_data_capacity_bits(header: FrameHeader) -> Result<usize, Error> {
+    layer3_main_data_capacity_bytes(header)?
+        .checked_mul(8)
+        .ok_or(Error::InvalidInput("MP3 frame capacity overflows"))
 }
 
 pub fn assemble_layer3_frame(
@@ -721,26 +949,232 @@ pub fn quantize_long_block(samples: &[f32; 36], step: f32) -> Result<Vec<i32>, E
     quantize_spectrum(&mdct_long_block(samples)?, step, 8191)
 }
 
-/// Extracts one PCM channel and quantizes one Layer III long analysis block.
+/// Reads one channel sample at a (possibly negative) frame index.
+///
+/// Returns `0.0` for indices before the start of the buffer or past its end, as
+/// required by the analysis filterbank, which slides a 512-sample window over
+/// the input and zero-pads outside it.
+fn channel_sample_or_zero(pcm: &AudioBuffer, channel: usize, frame: isize) -> f32 {
+    if frame < 0 {
+        return 0.0;
+    }
+    let channels = usize::from(pcm.channels);
+    (frame as usize)
+        .checked_mul(channels)
+        .and_then(|base| base.checked_add(channel))
+        .and_then(|index| pcm.samples.get(index))
+        .copied()
+        .unwrap_or(0.0)
+}
+
+/// Runs the 32-band polyphase analysis filterbank over 36 consecutive hops.
+///
+/// Returns the subband samples as `out[hop][subband]`, where hop `h` analyses
+/// the 32-sample block ending at frame `start_frame + h * 32 + 31`.
+fn analysis_subband_hops(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+) -> Result<[[f32; filterbank::SUBBANDS]; 36], Error> {
+    if channel >= usize::from(pcm.channels) {
+        return Err(Error::InvalidPcm("channel index out of range"));
+    }
+
+    let mut hops = [[0.0_f32; filterbank::SUBBANDS]; 36];
+    let mut window = [0.0_f32; filterbank::WINDOW_LEN];
+    for (hop, out) in hops.iter_mut().enumerate() {
+        let newest = start_frame
+            .checked_add(
+                hop.checked_mul(32)
+                    .and_then(|offset| offset.checked_add(31))
+                    .ok_or(Error::InvalidInput("MP3 analysis hop start overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 analysis hop start overflows"))?;
+        let newest = isize::try_from(newest)
+            .map_err(|_| Error::InvalidInput("MP3 analysis hop start overflows"))?;
+        for (offset, slot) in window.iter_mut().enumerate() {
+            *slot = channel_sample_or_zero(pcm, channel, newest - offset as isize);
+        }
+        *out = filterbank::analysis_hop(&window);
+    }
+    Ok(hops)
+}
+
+/// Builds a 36-sample approximation of one Layer III analysis subband.
+///
+/// This is a standards-shaped placeholder for the full 32-band polyphase
+/// analysis filterbank. It separates PCM into 32 cosine-modulated bands before
+/// the hybrid MDCT stage, which is closer to Layer III than directly MDCT'ing
+/// adjacent PCM windows.
+pub fn layer3_analysis_subband_block(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    subband: usize,
+) -> Result<[f32; 36], Error> {
+    if subband >= 32 {
+        return Err(Error::InvalidInput("MP3 subband index exceeds 31"));
+    }
+
+    let mut out = [0.0_f32; 36];
+    for (slot, sample) in out.iter_mut().enumerate() {
+        let slot_start = start_frame
+            .checked_add(
+                slot.checked_mul(32)
+                    .ok_or(Error::InvalidInput("MP3 analysis slot start overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 analysis slot start overflows"))?;
+        let pcm_window = pcm.channel_block(channel, slot_start, 32)?;
+        let mut value = 0.0_f32;
+        for (tap, pcm_sample) in pcm_window.iter().enumerate() {
+            let phase =
+                core::f32::consts::PI / 32.0 * ((tap as f32) + 0.5) * ((subband as f32) + 0.5);
+            value += *pcm_sample * phase.cos();
+        }
+        *sample = value * -0.25;
+    }
+    Ok(out)
+}
+
+/// Number of subband samples a long block contributes per granule.
+const LONG_BLOCK_GRANULE_SAMPLES: usize = 18;
+
+/// Applies Layer III odd-subband frequency inversion to one granule's samples.
+///
+/// The hybrid synthesis filterbank negates the odd-indexed time samples of every
+/// odd subband; the encoder pre-applies the same inversion so the two cancel.
+fn apply_frequency_inversion(subband: usize, samples: &mut [f32; LONG_BLOCK_GRANULE_SAMPLES]) {
+    if subband % 2 == 1 {
+        for sample in samples.iter_mut().skip(1).step_by(2) {
+            *sample = -*sample;
+        }
+    }
+}
+
+/// Collects one granule's 18 subband samples for `subband`, newest hop last,
+/// with the odd-subband frequency inversion applied.
+fn long_block_granule_samples(
+    hops: &[[f32; filterbank::SUBBANDS]; 36],
+    subband: usize,
+) -> [f32; LONG_BLOCK_GRANULE_SAMPLES] {
+    let mut samples = [0.0_f32; LONG_BLOCK_GRANULE_SAMPLES];
+    for (slot, hop) in samples.iter_mut().zip(hops.iter()) {
+        *slot = hop[subband];
+    }
+    apply_frequency_inversion(subband, &mut samples);
+    samples
+}
+
+/// ISO/IEC 11172-3 alias-reduction coefficients `c[i]`.
+const ALIAS_REDUCTION_C: [f32; 8] = [
+    -0.6, -0.535, -0.33, -0.185, -0.095, -0.041, -0.0142, -0.0037,
+];
+
+/// Applies the encoder-side (forward) alias-reduction butterflies in place.
+///
+/// The decoder rotates spectral lines across each subband boundary to cancel
+/// aliasing introduced by the polyphase filterbank; the encoder applies the
+/// inverse rotation so the cascade is transparent. Operates on the 576-line
+/// subband-major long-block spectrum.
+fn apply_alias_reduction(spectrum: &mut [f32]) {
+    for boundary in 0..(filterbank::SUBBANDS - 1) {
+        let upper_base = boundary * LONG_BLOCK_GRANULE_SAMPLES + (LONG_BLOCK_GRANULE_SAMPLES - 1);
+        let lower_base = (boundary + 1) * LONG_BLOCK_GRANULE_SAMPLES;
+        for (i, &c) in ALIAS_REDUCTION_C.iter().enumerate() {
+            let cs = 1.0 / (1.0 + c * c).sqrt();
+            let ca = c / (1.0 + c * c).sqrt();
+            let upper = upper_base - i;
+            let lower = lower_base + i;
+            let a = spectrum[upper];
+            let b = spectrum[lower];
+            // Inverse of the decoder rotation `(a*cs - b*ca, b*cs + a*ca)`.
+            spectrum[upper] = a * cs + b * ca;
+            spectrum[lower] = b * cs - a * ca;
+        }
+    }
+}
+
+/// Computes the 576 long-block MDCT spectral lines for one granule.
+///
+/// Each subband forms a 36-sample MDCT block from the previous granule's 18
+/// subband samples followed by the current granule's 18, matching the 50%
+/// overlap the decoder reconstructs with overlap-add. Encoder-side alias
+/// reduction is then applied across subband boundaries.
+pub fn layer3_long_block_spectrum(
+    pcm: &AudioBuffer,
+    channel: usize,
+    granule_start: usize,
+) -> Result<Vec<f32>, Error> {
+    let current = analysis_subband_hops(pcm, channel, granule_start)?;
+    let previous = match granule_start.checked_sub(576) {
+        Some(prev_start) => Some(analysis_subband_hops(pcm, channel, prev_start)?),
+        None => None,
+    };
+
+    let mut spectrum = Vec::with_capacity(576);
+    let mut block = [0.0_f32; 36];
+    for subband in 0_usize..filterbank::SUBBANDS {
+        let current_samples = long_block_granule_samples(&current, subband);
+        let previous_samples = previous
+            .as_ref()
+            .map(|hops| long_block_granule_samples(hops, subband))
+            .unwrap_or([0.0_f32; LONG_BLOCK_GRANULE_SAMPLES]);
+
+        block[..LONG_BLOCK_GRANULE_SAMPLES].copy_from_slice(&previous_samples);
+        block[LONG_BLOCK_GRANULE_SAMPLES..].copy_from_slice(&current_samples);
+        spectrum.extend(mdct_long_block(&block)?);
+    }
+    apply_alias_reduction(&mut spectrum);
+    Ok(spectrum)
+}
+
+/// Extracts one PCM channel and quantizes one Layer III long granule.
 pub fn quantize_pcm_long_block(
     pcm: &AudioBuffer,
     channel: usize,
     start_frame: usize,
     step: f32,
 ) -> Result<Vec<i32>, Error> {
+    if pcm.channels == 1 {
+        let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
+        let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
+        return quantize_spectrum(&inverted, step, 8191);
+    }
+
+    quantize_pcm_long_block_with_cosine_subband_scaffold(pcm, channel, start_frame, step)
+}
+
+fn quantize_pcm_long_block_with_cosine_subband_scaffold(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+) -> Result<Vec<i32>, Error> {
     let mut quantized = Vec::with_capacity(576);
-    for window_index in 0_usize..32 {
-        let window_start = start_frame
-            .checked_add(
-                window_index
-                    .checked_mul(18)
-                    .ok_or(Error::InvalidInput("MP3 analysis window start overflows"))?,
-            )
-            .ok_or(Error::InvalidInput("MP3 analysis window start overflows"))?;
-        let block = fixed_block::<36>(&pcm.channel_block(channel, window_start, 36)?)?;
+    for subband in 0_usize..32 {
+        let block = layer3_analysis_subband_block(pcm, channel, start_frame, subband)?;
         quantized.extend(quantize_long_block(&block, step)?);
     }
     Ok(quantized)
+}
+
+/// Computes the `global_gain` that inverts a given quantizer `step`.
+///
+/// The decoder requantizes a long-block line as
+/// `sign · |is|^(4/3) · 2^((global_gain − 210)/4)` (ISO/IEC 11172-3 §2.4.3.4,
+/// scale factors and preflag zero), while the encoder forms
+/// `is = round(|coeff|^(3/4) / step)`. Substituting the latter into the former
+/// reconstructs `coeff` exactly when `2^((global_gain − 210)/4) = step^(4/3)`,
+/// i.e. `global_gain = 210 + (16/3)·log2(step)`. The result is rounded to the
+/// nearest 8-bit value and clamped to the syntax range `[0, 255]`; degenerate
+/// steps fall back to the ISO reference gain of 210.
+#[must_use]
+pub fn mpeg1_layer3_global_gain_for_step(step: f32) -> u8 {
+    if !step.is_finite() || step <= 0.0 {
+        return 210;
+    }
+    let raw = (210.0 + (16.0 / 3.0) * step.log2()).round();
+    raw.clamp(0.0, 255.0) as u8
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2350,7 +2784,13 @@ pub fn pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_and
 }
 
 /// Builds one MPEG-1 Layer III long-block payload from PCM analysis.
-pub fn pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule(
+///
+/// The quantizer `step` is folded entirely into `global_gain`
+/// (see [`mpeg1_layer3_global_gain_for_step`]) and all scale factors are left at
+/// zero, so the decoder's per-line requantization inverts the encoder's
+/// quantization without per-band double scaling. An all-zero granule keeps the
+/// ISO reference gain, preserving the canonical silent-frame encoding.
+pub fn pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule(
     granule: &mut Layer3GranuleChannelInfo,
     pcm: &AudioBuffer,
     channel: usize,
@@ -2359,13 +2799,22 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule(
     tables: Layer3EntropyTables<'_>,
 ) -> Result<PackedBits, Error> {
     let quantized = quantize_pcm_long_block(pcm, channel, start_frame, step)?;
-    pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_for_granule(
-        granule, &quantized, tables,
-    )
+    let scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_for_granule(
+        granule,
+        &scale_factors,
+        &quantized,
+        tables,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
 }
 
 /// Builds one MPEG-1 Layer III long-block payload from PCM analysis using provider lookup.
-pub fn pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider(
+///
+/// Behaves like [`pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule`]
+/// but resolves the entropy tables through a [`Layer3EntropyTableProvider`].
+pub fn pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
     granule: &mut Layer3GranuleChannelInfo,
     pcm: &AudioBuffer,
     channel: usize,
@@ -2374,9 +2823,26 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_pr
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<PackedBits, Error> {
     let quantized = quantize_pcm_long_block(pcm, channel, start_frame, step)?;
-    pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_and_table_provider(
-        granule, &quantized, provider,
-    )
+    let scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+/// Picks the `global_gain` for a packed granule: the step-inverting value for a
+/// granule that carries energy, or the ISO reference gain (210) for an all-zero
+/// granule whose gain is acoustically irrelevant.
+fn calibrated_global_gain_for_granule(quantized: &[i32], step: f32) -> u8 {
+    if quantized.iter().all(|&line| line == 0) {
+        210
+    } else {
+        mpeg1_layer3_global_gain_for_step(step)
+    }
 }
 
 /// Assembles one MPEG-1 Layer III frame from PCM long-block payload scaffolding.
@@ -2398,7 +2864,7 @@ pub fn assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors(
             )
             .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
         for channel in 0..header.channel_count() {
-            let payload = pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule(
+            let payload = pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule(
                 &mut side_info.granules[granule][channel],
                 pcm,
                 channel,
@@ -2448,15 +2914,14 @@ fn pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
             )
             .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
         for channel in 0..header.channel_count() {
-            let payload =
-                pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider(
-                    &mut side_info.granules[granule][channel],
-                    pcm,
-                    channel,
-                    granule_start,
-                    step,
-                    provider,
-                )?;
+            let payload = pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
+                &mut side_info.granules[granule][channel],
+                pcm,
+                channel,
+                granule_start,
+                step,
+                provider,
+            )?;
             payloads.push(payload);
         }
     }
@@ -2944,12 +3409,6 @@ fn decode_silent_layer3(input: &[u8]) -> Result<AudioBuffer, Error> {
     )
 }
 
-fn fixed_block<const N: usize>(samples: &[f32]) -> Result<[f32; N], Error> {
-    samples
-        .try_into()
-        .map_err(|_| Error::InvalidInput("analysis block length mismatch"))
-}
-
 /// Computes the MPEG audio CRC16 over header/side-information bits after the
 /// sync word, using polynomial 0x8005 and initial value 0xffff.
 #[must_use]
@@ -3091,20 +3550,27 @@ fn sample_rate_index(version: MpegVersion, target_sample_rate: u32) -> Result<u8
 
 #[cfg(test)]
 mod tests {
+    use super::filterbank;
     use super::{
-        apply_big_value_table_to_granule, apply_count1_table_to_granule,
-        apply_part2_3_length_to_granule, apply_scale_factor_compress_to_granule,
-        apply_spectral_regions_to_granule, assemble_layer3_frame,
-        assemble_layer3_frame_from_payloads,
+        apply_alias_reduction, apply_big_value_table_to_granule, apply_count1_table_to_granule,
+        apply_frequency_inversion, apply_part2_3_length_to_granule,
+        apply_scale_factor_compress_to_granule, apply_spectral_regions_to_granule,
+        assemble_layer3_frame, assemble_layer3_frame_from_payloads,
         assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors,
         assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider,
         big_value_pairs, count1_quads, crc16_mpeg_audio, decode, encode,
         encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors,
         encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
-        experimental_unit_magnitude_table_provider, mdct_long_block,
+        experimental_unit_magnitude_table_provider, layer3_analysis_subband_block,
+        layer3_header_for_capacity, layer3_long_block_spectrum, layer3_main_data_capacity_bits,
+        layer3_main_data_capacity_bytes, mdct_long_block, mpeg1_layer3_global_gain_for_step,
         mpeg1_layer3_standard_big_value_table_provider, mpeg1_layer3_standard_table_provider,
         pack_big_value_pairs_with_linbits, pack_big_value_pairs_with_region_tables_and_provider,
         pack_big_value_pairs_with_sign_bits, pack_big_value_pairs_with_table,
@@ -3117,8 +3583,8 @@ mod tests {
         pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_for_granule,
         pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider,
         pack_mpeg1_layer3_long_scale_factors, pack_mpeg1_layer3_long_scale_factors_for_granule,
-        pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider,
-        pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule,
+        pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider,
+        pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
         pack_quantized_spectrum_for_granule,
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
@@ -3128,15 +3594,18 @@ mod tests {
         select_big_value_table_by_bit_cost, select_count1_table, select_count1_table_by_bit_cost,
         select_mpeg1_layer3_long_scale_factor_compress,
         select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
+        select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
+        select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_with_table_provider, BitWriter, ChannelMode,
         FrameHeader, Layer, Layer3BigValueMagnitude, Layer3BigValuePair,
         Layer3BigValueRegionTableSelection, Layer3BigValueTableSelection,
         Layer3Count1MagnitudeQuad, Layer3Count1Quad, Layer3Count1TableSelection,
         Layer3EntropyTableProvider, Layer3EntropyTables, Layer3GranuleChannelInfo,
         Layer3PcmFrameStepSelection, Layer3ScaleFactorCompress, Layer3SideInfo,
-        Layer3SpectralRegions, Layer3WindowSwitching, MpegVersion,
-        MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        Layer3SpectralRegions, Layer3WindowSwitching, MpegVersion, ALIAS_REDUCTION_C,
+        LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
+        MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     };
     use sc_core::{detect, AudioBuffer, Error, Format, HuffmanCode, HuffmanEntry, PackedBits};
 
@@ -3156,6 +3625,8 @@ mod tests {
         assert_eq!(header.channel_count(), 2);
         assert_eq!(header.layer3_granule_count(), 2);
         assert_eq!(header.layer3_side_info_len(), Some(32));
+        assert_eq!(layer3_main_data_capacity_bytes(header).unwrap(), 381);
+        assert_eq!(layer3_main_data_capacity_bits(header).unwrap(), 3048);
     }
 
     #[test]
@@ -3173,6 +3644,27 @@ mod tests {
         assert_eq!(header.channel_count(), 1);
         assert_eq!(header.layer3_granule_count(), 1);
         assert_eq!(header.layer3_side_info_len(), Some(9));
+        assert_eq!(layer3_main_data_capacity_bytes(header).unwrap(), 196);
+        assert_eq!(layer3_main_data_capacity_bits(header).unwrap(), 1568);
+    }
+
+    #[test]
+    fn builds_layer3_capacity_headers() {
+        let mono = layer3_header_for_capacity(44_100, 1, 128, false, false).unwrap();
+        let stereo = layer3_header_for_capacity(44_100, 2, 128, false, false).unwrap();
+        let mpeg2 = layer3_header_for_capacity(22_050, 1, 64, true, false).unwrap();
+
+        assert_eq!(mono.version, MpegVersion::Mpeg1);
+        assert_eq!(mono.channel_mode, ChannelMode::SingleChannel);
+        assert_eq!(layer3_main_data_capacity_bytes(mono).unwrap(), 396);
+        assert_eq!(layer3_main_data_capacity_bits(mono).unwrap(), 3168);
+        assert_eq!(stereo.version, MpegVersion::Mpeg1);
+        assert_eq!(stereo.channel_mode, ChannelMode::Stereo);
+        assert_eq!(layer3_main_data_capacity_bytes(stereo).unwrap(), 381);
+        assert_eq!(mpeg2.version, MpegVersion::Mpeg2);
+        assert_eq!(layer3_main_data_capacity_bytes(mpeg2).unwrap(), 196);
+        assert!(layer3_header_for_capacity(44_100, 3, 128, false, false).is_err());
+        assert!(layer3_header_for_capacity(44_100, 1, 123, false, false).is_err());
     }
 
     #[test]
@@ -3556,6 +4048,143 @@ mod tests {
         assert_eq!(coeffs.len(), 18);
         assert!(coeffs.iter().any(|coeff| coeff.abs() > 0.0));
         assert_eq!(mdct_long_block(&[0.0; 36]).unwrap(), vec![0.0; 18]);
+    }
+
+    #[test]
+    fn builds_layer3_analysis_subband_blocks() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..2304)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+
+        let low = layer3_analysis_subband_block(&pcm, 0, 0, 0).unwrap();
+        let high = layer3_analysis_subband_block(&pcm, 0, 0, 31).unwrap();
+        let padded = layer3_analysis_subband_block(&pcm, 0, 4096, 0).unwrap();
+
+        assert_eq!(low.len(), 36);
+        assert_eq!(high.len(), 36);
+        assert_ne!(low, high);
+        assert!(low.iter().any(|sample| sample.abs() > 0.0));
+        assert_eq!(padded, [0.0; 36]);
+        assert!(layer3_analysis_subband_block(&pcm, 0, 0, 32).is_err());
+    }
+
+    #[test]
+    fn analysis_filterbank_localizes_tones_by_subband() {
+        let sample_rate = 44_100.0_f32;
+        // Subband `b` covers the band centered near (b + 0.5) * sample_rate / 64.
+        for band in [0_usize, 5, 16, 28] {
+            let freq = (band as f32 + 0.5) * sample_rate / 64.0;
+            let pcm = AudioBuffer::new(
+                44_100,
+                1,
+                (0..4096)
+                    .map(|n| {
+                        (2.0 * core::f32::consts::PI * freq * (n as f32) / sample_rate).sin() * 0.5
+                    })
+                    .collect(),
+            )
+            .unwrap();
+
+            // Analyse a granule whose 512-sample window is fully populated.
+            let energy = |subband: usize| -> f32 {
+                layer3_analysis_subband_block(&pcm, 0, 1152, subband)
+                    .unwrap()
+                    .iter()
+                    .map(|s| s * s)
+                    .sum()
+            };
+            let peak = (0..32)
+                .max_by(|a, b| energy(*a).partial_cmp(&energy(*b)).unwrap())
+                .unwrap();
+            assert_eq!(
+                peak, band,
+                "tone at {freq} Hz should peak in subband {band}"
+            );
+        }
+    }
+
+    #[test]
+    fn frequency_inversion_is_scoped_and_self_inverse() {
+        let original: [f32; LONG_BLOCK_GRANULE_SAMPLES] = core::array::from_fn(|i| i as f32 + 1.0);
+
+        // Even subbands are untouched.
+        let mut even = original;
+        apply_frequency_inversion(0, &mut even);
+        assert_eq!(even, original);
+
+        // Odd subbands negate odd-indexed samples only.
+        let mut odd = original;
+        apply_frequency_inversion(1, &mut odd);
+        for (i, (got, base)) in odd.iter().zip(original.iter()).enumerate() {
+            if i % 2 == 1 {
+                assert_eq!(*got, -*base);
+            } else {
+                assert_eq!(*got, *base);
+            }
+        }
+
+        // Applying the inversion twice restores the input.
+        apply_frequency_inversion(1, &mut odd);
+        assert_eq!(odd, original);
+    }
+
+    #[test]
+    fn alias_reduction_inverts_the_decoder_rotation() {
+        let mut spectrum: Vec<f32> = (0..576).map(|i| ((i * 7) % 13) as f32 - 6.0).collect();
+        let original = spectrum.clone();
+
+        apply_alias_reduction(&mut spectrum);
+        assert_ne!(
+            spectrum, original,
+            "alias reduction should change the spectrum"
+        );
+
+        // The decoder applies the forward rotation; it must undo the encoder's.
+        for boundary in 0..(filterbank::SUBBANDS - 1) {
+            let upper_base =
+                boundary * LONG_BLOCK_GRANULE_SAMPLES + (LONG_BLOCK_GRANULE_SAMPLES - 1);
+            let lower_base = (boundary + 1) * LONG_BLOCK_GRANULE_SAMPLES;
+            for (i, &c) in ALIAS_REDUCTION_C.iter().enumerate() {
+                let cs = 1.0 / (1.0 + c * c).sqrt();
+                let ca = c / (1.0 + c * c).sqrt();
+                let upper = upper_base - i;
+                let lower = lower_base + i;
+                let a = spectrum[upper];
+                let b = spectrum[lower];
+                spectrum[upper] = a * cs - b * ca;
+                spectrum[lower] = b * cs + a * ca;
+            }
+        }
+
+        for (got, base) in spectrum.iter().zip(original.iter()) {
+            assert!(
+                (got - base).abs() < 1e-5,
+                "rotation pair should be transparent"
+            );
+        }
+    }
+
+    #[test]
+    fn long_block_spectrum_shape_and_silence() {
+        let silent = AudioBuffer::new(44_100, 1, vec![0.0; 2304]).unwrap();
+        let spectrum = layer3_long_block_spectrum(&silent, 0, 0).unwrap();
+        assert_eq!(spectrum.len(), 576);
+        assert!(spectrum.iter().all(|line| *line == 0.0));
+
+        let tone = AudioBuffer::new(
+            44_100,
+            1,
+            (0..4096).map(|n| (n as f32 * 0.05).sin() * 0.4).collect(),
+        )
+        .unwrap();
+        let spectrum = layer3_long_block_spectrum(&tone, 0, 1152).unwrap();
+        assert_eq!(spectrum.len(), 576);
+        assert!(spectrum.iter().any(|line| line.abs() > 0.0));
     }
 
     #[test]
@@ -4441,7 +5070,7 @@ mod tests {
             .unwrap();
 
         let mut pcm_granule = Layer3GranuleChannelInfo::default();
-        let packed = pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule(
+        let packed = pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule(
             &mut pcm_granule,
             &pcm,
             0,
@@ -4475,22 +5104,21 @@ mod tests {
             .unwrap();
 
         let mut pcm_granule = Layer3GranuleChannelInfo::default();
-        let packed =
-            pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider(
-                &mut pcm_granule,
-                &pcm,
-                0,
-                0,
-                1.0,
-                provider,
-            )
-            .unwrap();
+        let packed = pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
+            &mut pcm_granule,
+            &pcm,
+            0,
+            0,
+            1.0,
+            provider,
+        )
+        .unwrap();
 
         assert_eq!(packed, manual);
         assert_eq!(pcm_granule.big_values, 0);
         assert_eq!(pcm_granule.part2_3_length, manual_granule.part2_3_length);
         assert!(
-            pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider(
+            pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
                 &mut Layer3GranuleChannelInfo::default(),
                 &pcm,
                 1,
@@ -5298,6 +5926,230 @@ mod tests {
     }
 
     #[test]
+    fn selects_pcm_frame_step_with_max_payload_bits() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..1152)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let header = FrameHeader {
+            version: MpegVersion::Mpeg1,
+            layer: Layer::Layer3,
+            protection_absent: true,
+            bitrate_kbps: 128,
+            sample_rate: 44_100,
+            padding: false,
+            channel_mode: ChannelMode::SingleChannel,
+        };
+        let provider = mpeg1_layer3_standard_table_provider();
+        let unconstrained = select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
+            header,
+            &pcm,
+            0,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            provider,
+        )
+        .unwrap();
+        let positive_payload_selections = MPEG1_LAYER3_PCM_STEP_CANDIDATES
+            .iter()
+            .copied()
+            .filter_map(|candidate| {
+                select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
+                    header,
+                    &pcm,
+                    0,
+                    &[candidate],
+                    provider,
+                )
+                .ok()
+            })
+            .filter(|selection| selection.payload_bit_len > 0)
+            .collect::<Vec<_>>();
+        let budget = positive_payload_selections
+            .iter()
+            .filter(|selection| selection.step > unconstrained.step)
+            .map(|selection| selection.payload_bit_len)
+            .min()
+            .expect("at least one coarser positive-payload MP3 step candidate");
+        let min_positive_budget = positive_payload_selections
+            .iter()
+            .map(|selection| selection.payload_bit_len)
+            .min()
+            .unwrap();
+        let positive_payload_candidates = positive_payload_selections
+            .iter()
+            .map(|selection| selection.step)
+            .collect::<Vec<_>>();
+
+        let step = select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider(
+            header,
+            &pcm,
+            0,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            budget,
+            provider,
+        )
+        .unwrap();
+        let details =
+            select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                0,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                budget,
+                provider,
+            )
+            .unwrap();
+
+        assert_eq!(step, details.step);
+        assert!(details.step > unconstrained.step);
+        assert_eq!(details.frame_capacity_bits, budget);
+        assert!(details.payload_bit_len <= budget);
+        assert!(
+            select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                0,
+                &positive_payload_candidates,
+                min_positive_budget - 1,
+                provider,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn encodes_pcm_frames_with_max_payload_bits() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..2304)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let header = FrameHeader {
+            version: MpegVersion::Mpeg1,
+            layer: Layer::Layer3,
+            protection_absent: true,
+            bitrate_kbps: 128,
+            sample_rate: 44_100,
+            padding: false,
+            channel_mode: ChannelMode::SingleChannel,
+        };
+        let provider = mpeg1_layer3_standard_table_provider();
+        let first_frame = select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
+            header,
+            &pcm,
+            0,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            provider,
+        )
+        .unwrap();
+        let budget = first_frame.payload_bit_len;
+        let step = select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider(
+            header,
+            &pcm,
+            0,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            budget,
+            provider,
+        )
+        .unwrap();
+
+        let budgeted = encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            budget,
+            provider,
+        )
+        .unwrap();
+        let budgeted_with_header =
+            encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                budget,
+                provider,
+            )
+            .unwrap();
+        let selected =
+            encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
+                &pcm, step, provider,
+            )
+            .unwrap();
+
+        assert_eq!(budgeted, budgeted_with_header);
+        // The budget path and the explicit-step path agree on the first frame,
+        // since `step` is the budgeted step selected for frame 0. Later frames
+        // carry distinct spectra and may select a different per-frame step.
+        let frame_len = header.frame_len();
+        assert_eq!(budgeted[..frame_len], selected[..frame_len]);
+        assert_eq!(budgeted.len(), selected.len());
+        assert_eq!(budgeted.len(), header.frame_len() * 2);
+        assert!(
+            encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                0,
+                provider,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn encodes_pcm_frames_with_bitrate_helper() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..1152)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let header = layer3_header_for_capacity(44_100, 1, 96, false, false).unwrap();
+
+        let encoded = encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            96,
+            false,
+            false,
+            provider,
+        )
+        .unwrap();
+        let explicit = encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider(
+            header,
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            provider,
+        )
+        .unwrap();
+        let parsed = FrameHeader::parse(&encoded[..4]).unwrap();
+
+        assert_eq!(encoded, explicit);
+        assert_eq!(parsed, header);
+        assert_eq!(parsed.bitrate_kbps, 96);
+        assert_eq!(encoded.len(), header.frame_len());
+        assert!(
+            encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                123,
+                false,
+                false,
+                provider,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn decodes_own_silent_layer3_frames() {
         let pcm = AudioBuffer::new(44_100, 2, vec![0.0; 1153 * 2]).unwrap();
         let mp3 = encode(&pcm).unwrap();
@@ -5381,5 +6233,76 @@ mod tests {
         let err = encode(&pcm).unwrap_err();
 
         assert!(matches!(err, Error::UnsupportedFeature("MP3 sample rate")));
+    }
+
+    /// ISO/IEC 11172-3 §2.4.3.4 long-block requantization with zero scale
+    /// factors and zero preflag: `xr = sign(is)·|is|^(4/3)·2^((global_gain−210)/4)`.
+    fn requantize_long_line(is: i32, global_gain: u8) -> f32 {
+        let sign = if is < 0 { -1.0 } else { 1.0 };
+        let magnitude = (is.unsigned_abs() as f32).powf(4.0 / 3.0);
+        let gain = 2.0_f32.powf(0.25 * (f32::from(global_gain) - 210.0));
+        sign * magnitude * gain
+    }
+
+    #[test]
+    fn global_gain_for_step_inverts_the_quantizer_step() {
+        // At step == 1 the gain is the ISO reference value, and each octave of
+        // step shifts the gain by 16/3 quarter-dB units.
+        assert_eq!(mpeg1_layer3_global_gain_for_step(1.0), 210);
+        assert_eq!(mpeg1_layer3_global_gain_for_step(2.0), 215);
+        assert_eq!(mpeg1_layer3_global_gain_for_step(0.5), 205);
+        // Degenerate steps fall back to the reference gain instead of panicking.
+        assert_eq!(mpeg1_layer3_global_gain_for_step(0.0), 210);
+        assert_eq!(mpeg1_layer3_global_gain_for_step(-1.0), 210);
+        assert_eq!(mpeg1_layer3_global_gain_for_step(f32::NAN), 210);
+        // The gain stays inside the 8-bit syntax range for extreme steps.
+        assert_eq!(mpeg1_layer3_global_gain_for_step(f32::MIN_POSITIVE), 0);
+        assert_eq!(mpeg1_layer3_global_gain_for_step(1.0e30), 255);
+    }
+
+    #[test]
+    fn calibrated_gain_requantizes_the_long_block_spectrum() {
+        // A non-periodic frequency sweep exercises every scale-factor band. The
+        // encoder quantizes the (sign-inverted) spectrum, so the ISO
+        // requantization with the calibrated gain and zero scale factors must
+        // reconstruct that same signal within quantization noise (positive
+        // SNR), and finer steps must not regress.
+        let samples: Vec<f32> = (0..2304)
+            .map(|n| {
+                let t = n as f32 / 44_100.0;
+                let f = 200.0 + 6000.0 * t;
+                0.6 * (std::f32::consts::TAU * f * t).sin()
+            })
+            .collect();
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let spectrum = layer3_long_block_spectrum(&pcm, 0, 576).unwrap();
+
+        let mut previous_snr = f64::NEG_INFINITY;
+        for &step in &[1.0_f32, 0.25, 0.05] {
+            let global_gain = mpeg1_layer3_global_gain_for_step(step);
+            let quantized = quantize_pcm_long_block(&pcm, 0, 576, step).unwrap();
+
+            let mut signal = 0.0_f64;
+            let mut noise = 0.0_f64;
+            for (&line, &is) in spectrum.iter().zip(quantized.iter()) {
+                // The encoder quantizes the negated spectrum.
+                let reference = f64::from(-line);
+                let reconstructed = f64::from(requantize_long_line(is, global_gain));
+                signal += reference * reference;
+                let error = reconstructed - reference;
+                noise += error * error;
+            }
+
+            let snr = 10.0 * (signal / noise.max(1.0e-30)).log10();
+            assert!(
+                snr > 10.0,
+                "step {step} reconstruction SNR too low: {snr} dB"
+            );
+            assert!(
+                snr >= previous_snr - 0.5,
+                "finer step {step} regressed SNR: {snr} dB vs {previous_snr} dB"
+            );
+            previous_snr = snr;
+        }
     }
 }
