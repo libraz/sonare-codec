@@ -3939,6 +3939,50 @@ mod tests {
         );
     }
 
+    #[ignore = "diagnostic: report auto-selected quantizer step and bit usage"]
+    #[test]
+    fn diagnostic_reports_step_and_bit_usage() {
+        let header = FrameHeader::parse(&[0xff, 0xfb, 0x90, 0xc0]).unwrap();
+        let sample_rate = 44_100_u32;
+        let samples: Vec<f32> = (0..22_050)
+            .map(|i| {
+                0.5 * (std::f32::consts::TAU * 2_000.0 * (i as f32 / sample_rate as f32)).sin()
+            })
+            .collect();
+        let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let start = usize::from(header.samples_per_frame());
+        for &step in MPEG1_LAYER3_PCM_STEP_CANDIDATES {
+            let q = quantize_pcm_long_block(&pcm, 0, start, step);
+            let max_is = q
+                .as_ref()
+                .map(|v| v.iter().map(|x| x.unsigned_abs()).max().unwrap_or(0))
+                .unwrap_or(0);
+            let pack = q.as_ref().ok().map(|quantized| {
+                let mut g = Layer3GranuleChannelInfo::default();
+                pack_quantized_spectrum_with_table_provider(&mut g, quantized, provider)
+                    .map(|p| p.bit_len)
+                    .map_err(|e| format!("{e:?}"))
+            });
+            println!(
+                "  step={step:>9} quant_ok={} max_is={max_is} pack={pack:?}",
+                q.is_ok(),
+            );
+        }
+        let sel = select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
+            header,
+            &pcm,
+            start,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            provider,
+        )
+        .unwrap();
+        println!(
+            "selected step={} payload_bits={}",
+            sel.step, sel.payload_bit_len
+        );
+    }
+
     #[test]
     fn parses_mpeg1_layer3_header() {
         let header = FrameHeader::parse(&[0xff, 0xfb, 0x90, 0x64]).unwrap();
