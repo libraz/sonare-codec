@@ -7735,6 +7735,72 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
     Ok(packed)
 }
 
+/// FFT length the perceptual model analyses for one long granule. The granule's
+/// 576 samples are centred in this window, zero-padded past the stream edges.
+const MPEG1_LAYER3_PSY_FFT_LEN: usize = 1024;
+
+/// Builds one MPEG-1 Layer III long-block payload from PCM analysis, shaping the
+/// quantization noise per scale-factor band with the psychoacoustic model.
+///
+/// Like
+/// [`pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider`],
+/// but instead of zeroing the scale factors it runs the psychoacoustic model
+/// over a Hann-windowed FFT block centred on the granule and allocates per-band
+/// scale factors that drive quantization noise under the masking threshold. The
+/// decoder reverses the per-band gain via the transmitted scale factors and
+/// `scalefac_scale`, so reconstruction stays consistent with the calibrated
+/// global gain.
+pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
+    // The chain quantizes the sign-negated spectrum (see `quantize_pcm_long_block`).
+    let negated: Vec<f32> = spectrum.iter().map(|&line| -line).collect();
+
+    // Centre the analysis FFT on the granule, zero-padding past the stream edges.
+    let offset = (MPEG1_LAYER3_PSY_FFT_LEN.saturating_sub(spectrum.len())) / 2;
+    let window_start = start_frame as isize - offset as isize;
+    let pcm_window: Vec<f64> = (0..MPEG1_LAYER3_PSY_FFT_LEN)
+        .map(|n| {
+            f64::from(channel_sample_or_zero(
+                pcm,
+                channel,
+                window_start + n as isize,
+            ))
+        })
+        .collect();
+
+    let scalefac_scale = false;
+    let scale_factors = psychoacoustic::perceptual_long_block_scalefactors(
+        &negated,
+        &pcm_window,
+        step,
+        scalefac_scale,
+        pcm.sample_rate,
+    )?;
+    let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+        &negated,
+        step,
+        &scale_factors,
+        scalefac_scale,
+        pcm.sample_rate,
+    )?;
+    granule.scalefac_scale = scalefac_scale;
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
 /// Picks the `global_gain` for a packed granule: the step-inverting value for a
 /// granule that carries energy, or the ISO reference gain (210) for an all-zero
 /// granule whose gain is acoustically irrelevant.
@@ -8498,6 +8564,7 @@ mod tests {
         pack_mpeg1_layer3_long_scale_factors, pack_mpeg1_layer3_long_scale_factors_for_granule,
         pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider,
         pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
+        pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider,
         pack_quantized_spectrum_for_granule,
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
@@ -10383,6 +10450,53 @@ mod tests {
             manual_granule.scalefac_compress
         );
         assert_eq!(pcm_granule.part2_3_length, manual_granule.part2_3_length);
+    }
+
+    #[test]
+    fn packs_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors() {
+        // A tonal granule: the perceptual path must pack within the 12-bit
+        // part2_3 field and leave scalefac_scale at zero.
+        let samples: Vec<f32> = (0..1152)
+            .map(|n| 0.4 * (std::f64::consts::TAU * 1000.0 * n as f64 / 44_100.0).sin() as f32)
+            .collect();
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        let mut granule = Layer3GranuleChannelInfo::default();
+        let packed =
+            pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider(
+                &mut granule,
+                &pcm,
+                0,
+                0,
+                0.05,
+                provider,
+            )
+            .unwrap();
+
+        assert!(!granule.scalefac_scale);
+        assert!(packed.bit_len > 0, "a tonal granule must encode some bits");
+        assert!(
+            granule.part2_3_length <= 4095,
+            "part2_3_length {} exceeds the 12-bit field",
+            granule.part2_3_length
+        );
+
+        // A silent granule packs cleanly with the reference gain and no bits.
+        let silent = AudioBuffer::new(44_100, 1, vec![0.0; 1152]).unwrap();
+        let mut silent_granule = Layer3GranuleChannelInfo::default();
+        let silent_packed =
+            pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider(
+                &mut silent_granule,
+                &silent,
+                0,
+                0,
+                0.05,
+                provider,
+            )
+            .unwrap();
+        assert_eq!(silent_packed.bit_len, 0);
+        assert_eq!(silent_granule.global_gain, 210);
     }
 
     #[test]
