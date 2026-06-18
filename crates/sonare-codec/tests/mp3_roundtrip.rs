@@ -133,6 +133,56 @@ fn mp3_multirate_roundtrip_reconstructs_mono_and_stereo() {
     }
 }
 
+#[test]
+fn mp3_reservoir_roundtrip_decodes_through_symphonia() {
+    // The bit-reservoir encoder lets frames borrow main-data bytes from earlier
+    // frames via main_data_begin. Symphonia must reassemble that cross-frame
+    // stream and reconstruct the sweep just like the self-contained encoder does;
+    // a wrong main_data_begin or payload offset collapses this to noise.
+    let sample_rate = 44_100;
+    let pcm = sweep_pcm(22_050, sample_rate, 300.0, 6_000.0, 0.5);
+
+    let mp3 = sonare_codec::encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        128,
+        false,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("reservoir MP3 encode");
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 1, "expected mono reconstruction");
+
+    let seg = 8_192;
+    let ref_start = 8_000;
+    let corr = aligned_channel_corr(&pcm.samples, &decoded.samples, seg, ref_start);
+    // Recover the aligned segment to also check the level is sane.
+    let reference = &pcm.samples[ref_start..ref_start + seg];
+    let mut best = (0_usize, f64::NEG_INFINITY);
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.samples.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded.samples[start..start + seg]);
+        if c > best.1 {
+            best = (d, c);
+        }
+    }
+    let aligned = &decoded.samples[ref_start + best.0..ref_start + best.0 + seg];
+    let level_ratio = rms(aligned) / rms(reference).max(1.0e-12);
+    eprintln!("reservoir roundtrip: corr={corr:.4} ratio={level_ratio:.3}");
+
+    assert!(
+        corr > 0.6,
+        "reservoir waveform correlation too low: {corr:.4}"
+    );
+    assert!(
+        (0.5..2.0).contains(&level_ratio),
+        "reservoir decoded level out of range: ratio={level_ratio:.3}"
+    );
+}
+
 /// Pearson correlation of two equal-length slices.
 fn correlation(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
