@@ -124,6 +124,89 @@ pub fn spreading_db(masker_bark: f64, maskee_bark: f64) -> f64 {
     15.81 + 7.5 * shifted - 17.5 * (1.0 + shifted * shifted).sqrt()
 }
 
+/// Signal-to-mask ratio (dB) demanded by a fully tonal masker (tone-masking-
+/// noise), per the psychoacoustic literature.
+const TONE_MASKING_NOISE_DB: f64 = 18.0;
+
+/// Signal-to-mask ratio (dB) demanded by a fully noise-like masker (noise-
+/// masking-tone).
+const NOISE_MASKING_TONE_DB: f64 = 6.0;
+
+/// Floor used in place of zero energy when forming the geometric mean.
+const TONALITY_ENERGY_FLOOR: f64 = 1.0e-12;
+
+/// Estimates the tonality of a spectrum (0 = noise-like, 1 = tonal) from its
+/// spectral flatness measure (Johnston).
+///
+/// The spectral flatness is the ratio of the geometric to the arithmetic mean
+/// of the per-bin energies; in dB it ranges from 0 (perfectly flat / noise) down
+/// toward large negative values for a pure tone. It is mapped to a tonality
+/// index by `min(SFM_dB / −60 dB, 1)`. An empty spectrum is treated as fully
+/// noise-like.
+#[must_use]
+pub fn spectral_flatness_tonality(energy: &[f64]) -> f64 {
+    if energy.is_empty() {
+        return 0.0;
+    }
+    let n = energy.len() as f64;
+    let mut log_sum = 0.0_f64;
+    let mut arith_sum = 0.0_f64;
+    for &e in energy {
+        let clamped = e.max(TONALITY_ENERGY_FLOOR);
+        log_sum += clamped.ln();
+        arith_sum += clamped;
+    }
+    let geometric_mean = (log_sum / n).exp();
+    let arithmetic_mean = arith_sum / n;
+    let sfm_db = 10.0 * (geometric_mean / arithmetic_mean).log10();
+    (sfm_db / -60.0).clamp(0.0, 1.0)
+}
+
+/// Computes the per-bin masking threshold energy from a power spectrum.
+///
+/// Each bin's energy is spread across the bark scale by the Schroeder
+/// [`spreading_db`] function (accumulated in the energy domain), then lowered by
+/// the signal-to-mask ratio interpolated between the tone- and noise-masking
+/// values according to `tonality`. The result is the maximum quantization-noise
+/// energy each bin can carry while staying masked. `energy` and `bark` must be
+/// the same length.
+pub fn spread_masking_threshold(
+    energy: &[f64],
+    bark: &[f64],
+    tonality: f64,
+) -> Result<Vec<f64>, Error> {
+    if energy.len() != bark.len() {
+        return Err(Error::InvalidInput(
+            "psychoacoustic energy and bark arrays must match in length",
+        ));
+    }
+    let tonality = tonality.clamp(0.0, 1.0);
+    let smr_db = tonality * TONE_MASKING_NOISE_DB + (1.0 - tonality) * NOISE_MASKING_TONE_DB;
+    let smr_gain = 10.0_f64.powf(-smr_db / 10.0);
+
+    let mut threshold = Vec::with_capacity(energy.len());
+    for &maskee in bark {
+        let mut spread = 0.0_f64;
+        for (&masker, &masker_energy) in bark.iter().zip(energy.iter()) {
+            spread += masker_energy * 10.0_f64.powf(spreading_db(masker, maskee) / 10.0);
+        }
+        threshold.push(spread * smr_gain);
+    }
+    Ok(threshold)
+}
+
+/// Maps each retained half-spectrum bin to its critical-band rate (bark) for an
+/// FFT of length `fft_len` sampled at `sample_rate`.
+pub fn bin_barks(num_bins: usize, sample_rate: u32, fft_len: usize) -> Result<Vec<f64>, Error> {
+    if fft_len == 0 || sample_rate == 0 {
+        return Err(Error::InvalidInput(
+            "psychoacoustic bin-bark mapping needs a non-zero FFT length and rate",
+        ));
+    }
+    let resolution = f64::from(sample_rate) / fft_len as f64;
+    Ok((0..num_bins).map(|k| bark(k as f64 * resolution)).collect())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +302,66 @@ mod tests {
         assert!(spreading_db(10.0, 8.0) < at_masker);
         // Asymmetry: two barks below the masker is attenuated more than two above.
         assert!(spreading_db(10.0, 8.0) < spreading_db(10.0, 12.0));
+    }
+
+    #[test]
+    fn tonality_separates_tones_from_noise() {
+        // A perfectly flat spectrum is maximally noise-like (tonality 0).
+        assert!(approx(spectral_flatness_tonality(&[1.0; 64]), 0.0, 1.0e-9));
+        // A lone, well-isolated spectral spike is maximally tonal (clamps to 1),
+        // and a tone with realistic −40 dB sidelobes still reads as strongly tonal
+        // and well above a noise-like spectrum.
+        let mut isolated = [1.0e-9_f64; 64];
+        isolated[8] = 1.0;
+        assert!(spectral_flatness_tonality(&isolated) > 0.99);
+        let mut leaky = [1.0e-4_f64; 64];
+        leaky[8] = 1.0;
+        let leaky_tonality = spectral_flatness_tonality(&leaky);
+        assert!(leaky_tonality > 0.3);
+        assert!(leaky_tonality > spectral_flatness_tonality(&[1.0; 64]));
+        // An empty spectrum is treated as noise-like rather than panicking.
+        assert!(approx(spectral_flatness_tonality(&[]), 0.0, 1.0e-12));
+    }
+
+    #[test]
+    fn masking_threshold_peaks_under_a_tone_and_decays_with_bark() {
+        // A single tonal masker at bin 20: the masked threshold should peak at the
+        // masker and fall off monotonically with bark distance on the high side.
+        let bins = 64usize;
+        let bark: Vec<f64> = (0..bins).map(|k| k as f64 * 0.25).collect();
+        let mut energy = vec![0.0_f64; bins];
+        energy[20] = 1.0;
+        let threshold = spread_masking_threshold(&energy, &bark, 1.0).unwrap();
+
+        let peak = threshold
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(index, _)| index)
+            .unwrap();
+        assert_eq!(peak, 20);
+        for j in 21..bins - 1 {
+            assert!(threshold[j] >= threshold[j + 1]);
+        }
+        // The tonal masker demands an 18 dB signal-to-mask ratio, so its own bin's
+        // threshold sits ~18 dB below the masker energy (the spreading peak is ~0 dB).
+        let smr_db = 10.0 * (energy[20] / threshold[20]).log10();
+        assert!(approx(smr_db, 18.0, 1.0));
+    }
+
+    #[test]
+    fn masking_threshold_rejects_mismatched_lengths() {
+        assert!(spread_masking_threshold(&[1.0, 2.0], &[0.0], 0.5).is_err());
+    }
+
+    #[test]
+    fn bin_barks_increase_with_frequency() {
+        let barks = bin_barks(513, 44_100, 1024).unwrap();
+        assert_eq!(barks.len(), 513);
+        assert!(approx(barks[0], 0.0, 1.0e-9));
+        for pair in barks.windows(2) {
+            assert!(pair[1] >= pair[0]);
+        }
+        assert!(bin_barks(0, 0, 1024).is_err());
     }
 }
