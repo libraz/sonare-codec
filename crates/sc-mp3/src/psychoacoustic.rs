@@ -292,6 +292,92 @@ pub fn perceptual_band_allowed_noise(
     Ok(allowed)
 }
 
+/// Syntax width cap for a transmitted long-block scale-factor band: bands 0..11
+/// carry `slen1` (up to 4 bits → 15), bands 11..21 carry `slen2` (up to 3 bits
+/// → 7).
+fn band_scalefactor_cap(band: usize) -> u8 {
+    if band < 11 {
+        15
+    } else {
+        7
+    }
+}
+
+/// Allocates per-band long-block scale factors so quantization noise stays below
+/// the perceptual allowed-noise target.
+///
+/// Starting from zero, the noise-control loop quantizes the spectrum, measures
+/// the requantization-noise energy in each scale-factor band, and raises the
+/// scale factor of every band whose noise exceeds its target and still has
+/// headroom in its syntax width. It repeats until all bands are satisfied or
+/// capped. If amplification would push a band past the quantizer's magnitude
+/// bound, the last allocation that quantized cleanly is returned. The result
+/// feeds [`crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
+pub fn allocate_long_block_scalefactors(
+    mdct_spectrum: &[f32],
+    allowed_noise: &[f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    step: f32,
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<[u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    if !step.is_finite() || step <= 0.0 {
+        return Err(Error::InvalidInput("quantization step must be positive"));
+    }
+    let global_gain = crate::mpeg1_layer3_global_gain_for_step(step);
+    let gain = 2.0_f64.powf(0.25 * (f64::from(global_gain) - 210.0));
+    let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
+
+    let mut scale_factors = [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    let mut last_good = scale_factors;
+    // Each pass raises at least one band by one; bound iterations by the total
+    // scale-factor headroom so the loop always terminates.
+    let max_iterations: usize = (0..crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT)
+        .map(|band| usize::from(band_scalefactor_cap(band)))
+        .sum();
+
+    for _ in 0..=max_iterations {
+        let quantized = match crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+            mdct_spectrum,
+            step,
+            &scale_factors,
+            scalefac_scale,
+            sample_rate,
+        ) {
+            Ok(quantized) => quantized,
+            // Amplification clipped the quantizer; fall back to the last clean fit.
+            Err(_) => return Ok(last_good),
+        };
+        last_good = scale_factors;
+
+        let mut raised = false;
+        for band in 0..crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+            if scale_factors[band] >= band_scalefactor_cap(band) {
+                continue;
+            }
+            let (start, end) = crate::mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+            let attenuation = 2.0_f64.powf(-multiplier * f64::from(scale_factors[band]));
+
+            let mut noise = 0.0_f64;
+            for line in start..end.min(mdct_spectrum.len()) {
+                let is = quantized[line];
+                let sign = if is < 0 { -1.0 } else { 1.0 };
+                let reconstructed =
+                    (is.unsigned_abs() as f64).powf(4.0 / 3.0) * gain * attenuation * sign;
+                let error = f64::from(mdct_spectrum[line]) - reconstructed;
+                noise += error * error;
+            }
+            if noise > allowed_noise[band] {
+                scale_factors[band] += 1;
+                raised = true;
+            }
+        }
+        if !raised {
+            return Ok(scale_factors);
+        }
+    }
+    Ok(scale_factors)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -487,5 +573,97 @@ mod tests {
         let mdct = vec![1.0_f32; 576];
         assert!(perceptual_band_allowed_noise(&mdct, &[1.0, 2.0], &[1.0], 44_100, 1024).is_err());
         assert!(perceptual_band_allowed_noise(&[], &[1.0], &[1.0], 44_100, 1024).is_err());
+    }
+
+    /// Recomputes the requantization-noise energy in one band for a scale-factor
+    /// set, mirroring the allocator's internal measurement.
+    fn band_noise(
+        spectrum: &[f32],
+        scale_factors: &[u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+        band: usize,
+        step: f32,
+    ) -> f64 {
+        let quantized = crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+            spectrum,
+            step,
+            scale_factors,
+            false,
+            44_100,
+        )
+        .unwrap();
+        let gain = 2.0_f64
+            .powf(0.25 * (f64::from(crate::mpeg1_layer3_global_gain_for_step(step)) - 210.0));
+        let attenuation = 2.0_f64.powf(-0.5 * f64::from(scale_factors[band]));
+        let (start, end) = crate::mpeg1_layer3_long_scalefactor_band_range(band, 44_100).unwrap();
+        let mut noise = 0.0_f64;
+        for line in start..end {
+            let is = quantized[line];
+            let sign = if is < 0 { -1.0 } else { 1.0 };
+            let reconstructed =
+                (is.unsigned_abs() as f64).powf(4.0 / 3.0) * gain * attenuation * sign;
+            let error = f64::from(spectrum[line]) - reconstructed;
+            noise += error * error;
+        }
+        noise
+    }
+
+    #[test]
+    fn allocation_leaves_loose_targets_at_zero() {
+        let spectrum: Vec<f32> = (0..576)
+            .map(|l| 0.3 * (-(l as f32) / 150.0).exp())
+            .collect();
+        let allowed = [f64::INFINITY; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        let scale_factors =
+            allocate_long_block_scalefactors(&spectrum, &allowed, 0.05, false, 44_100).unwrap();
+        assert_eq!(
+            scale_factors,
+            [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+        );
+    }
+
+    #[test]
+    fn allocation_drives_noise_below_a_tight_band_target() {
+        // Only band 0 carries energy; the rest are silent.
+        let mut spectrum = vec![0.0_f32; 576];
+        for line in spectrum.iter_mut().take(4) {
+            *line = 0.5;
+        }
+        let zero = [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        let noise_at_zero = band_noise(&spectrum, &zero, 0, 0.05);
+        assert!(
+            noise_at_zero > 0.0,
+            "quantization must introduce some noise"
+        );
+
+        // Demand band 0's noise be cut to 30%; leave every other band unconstrained.
+        let mut allowed = [f64::INFINITY; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        allowed[0] = noise_at_zero * 0.3;
+        let scale_factors =
+            allocate_long_block_scalefactors(&spectrum, &allowed, 0.05, false, 44_100).unwrap();
+
+        assert!(
+            scale_factors[0] > 0,
+            "the loud band's scale factor must rise"
+        );
+        for &sf in &scale_factors[1..] {
+            assert_eq!(sf, 0, "silent bands must stay at zero");
+        }
+        let noise_final = band_noise(&spectrum, &scale_factors, 0, 0.05);
+        assert!(
+            noise_final <= allowed[0],
+            "allocation did not meet the target: {noise_final} > {}",
+            allowed[0]
+        );
+        assert!(
+            noise_final < noise_at_zero,
+            "amplification must reduce band noise"
+        );
+    }
+
+    #[test]
+    fn allocation_rejects_nonpositive_step() {
+        let spectrum = vec![0.1_f32; 576];
+        let allowed = [1.0_f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        assert!(allocate_long_block_scalefactors(&spectrum, &allowed, 0.0, false, 44_100).is_err());
     }
 }
