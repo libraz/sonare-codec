@@ -397,10 +397,12 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 /// Encodes mono/stereo PCM as MPEG-1 Layer III frames.
 ///
 /// Silent input routes through the compact zero-spectral frame scaffold.
-/// Non-silent input currently uses the same experimental long-block scaffold
-/// with an intentionally coarse quantizer, so production-quality psychoacoustic
-/// modeling, standard Huffman tables, bit reservoir use, and VBR are still
-/// incomplete.
+/// Non-silent input currently uses the experimental long-block scaffold with a
+/// constant-bitrate padding schedule. Mono also uses the bit-reservoir packer;
+/// stereo keeps the compatibility path until its reservoir/analysis interaction
+/// reaches the FFmpeg readiness oracle. The quantizer and table/rate selection
+/// are still intentionally coarse, so production-quality psychoacoustic
+/// modeling, complete standard Huffman coverage, and VBR are still incomplete.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(
@@ -409,11 +411,21 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     }
 
     if pcm.samples.iter().any(|sample| *sample != 0.0) {
-        encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider(
-            pcm,
-            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-            mpeg1_layer3_standard_table_provider(),
-        )
+        if pcm.channels == 1 {
+            encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+                pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                mpeg1_layer3_standard_table_provider(),
+            )
+        } else {
+            encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider(
+                pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                mpeg1_layer3_standard_table_provider(),
+            )
+        }
     } else {
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
             pcm,
@@ -661,6 +673,21 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_cbr_padding_and_table_provider
 /// MPEG-1 main-data backward pointer width: `main_data_begin` is 9 bits.
 const MAX_MAIN_DATA_BEGIN: usize = 511;
 
+/// Maximum `part2_3_length` for one granule: the side-info field is 12 bits.
+const MAX_PART2_3_LENGTH: u16 = 4095;
+
+/// Reports whether any granule's `part2_3_length` overflows its 12-bit field.
+fn layer3_side_info_exceeds_part2_3_limit(side_info: &Layer3SideInfo, header: FrameHeader) -> bool {
+    for granule in 0..header.layer3_granule_count() {
+        for channel in 0..header.channel_count() {
+            if side_info.granules[granule][channel].part2_3_length > MAX_PART2_3_LENGTH {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// One frame's reservoir-aware packing result, retained for the layout pass.
 struct Layer3ReservoirFrame {
     header: FrameHeader,
@@ -705,6 +732,12 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
             continue;
         };
         if main_data.bytes.len() > budget_bytes {
+            continue;
+        }
+        // The reservoir can widen the byte budget past the point where one
+        // granule's part2_3_length overflows its 12-bit side-info field; reject
+        // any step that does, so a finer step never produces an unpackable frame.
+        if layer3_side_info_exceeds_part2_3_limit(&side_info, header) {
             continue;
         }
         // Prefer the smallest fitting step (finest quantization, best quality).
