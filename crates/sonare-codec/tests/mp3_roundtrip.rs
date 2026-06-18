@@ -73,6 +73,54 @@ fn goertzel(samples: &[f32], sample_rate: u32, f: f32) -> f64 {
     s1 * s1 + s2 * s2 - coeff * s1 * s2
 }
 
+#[ignore = "diagnostic: steady-tone reconstruction SNR (exact integer alignment)"]
+#[test]
+fn mp3_roundtrip_tone_snr() {
+    let sample_rate = 44_100;
+    for &f_in in &[500.0_f32, 2_000.0, 6_000.0] {
+        let frames = 22_050;
+        let samples: Vec<f32> = (0..frames)
+            .map(|i| 0.5 * (std::f32::consts::TAU * f_in * (i as f32 / sample_rate as f32)).sin())
+            .collect();
+        let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+        let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MP3 encode");
+        let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+
+        // A steady tone aligns exactly at a single integer lag, so correlation
+        // reflects true reconstruction quality (unlike a chirp).
+        let seg = 8_192;
+        let ref_start = 8_000;
+        let reference = &pcm.samples[ref_start..ref_start + seg];
+        let mut best = (0_usize, f64::NEG_INFINITY);
+        for d in 0..2_000 {
+            let start = ref_start + d;
+            if start + seg > decoded.samples.len() {
+                break;
+            }
+            let c = correlation(reference, &decoded.samples[start..start + seg]);
+            if c > best.1 {
+                best = (d, c);
+            }
+        }
+        let aligned = &decoded.samples[ref_start + best.0..ref_start + best.0 + seg];
+        let noise: f64 = reference
+            .iter()
+            .zip(aligned)
+            .map(|(&r, &a)| {
+                let e = f64::from(r) - f64::from(a);
+                e * e
+            })
+            .sum();
+        let signal: f64 = reference.iter().map(|&r| f64::from(r) * f64::from(r)).sum();
+        let snr = 10.0 * (signal / noise.max(1.0e-30)).log10();
+        eprintln!(
+            "tone snr: f={f_in:>6.0} corr={:.4} ratio={:.3} snr={snr:.1}dB",
+            best.1,
+            rms(aligned) / rms(reference).max(1.0e-12),
+        );
+    }
+}
+
 #[ignore = "diagnostic: probe where decoded tone energy lands"]
 #[test]
 fn mp3_roundtrip_tone_probe() {
