@@ -101,6 +101,38 @@ fn mp3_stereo_roundtrip_reconstructs_both_channels() {
     );
 }
 
+#[test]
+fn mp3_multirate_roundtrip_reconstructs_mono_and_stereo() {
+    // A 1 kHz tone must reconstruct through Symphonia for every supported
+    // MPEG-1 sample rate, in both mono and stereo. Stereo runs each channel
+    // through the real polyphase filterbank (a subband scaffold would fail
+    // this), so it also guards the stereo analysis path.
+    let seg = 8_192;
+    let ref_start = 6_000;
+    for &rate in &[32_000_u32, 44_100, 48_000] {
+        let frames = 22_050;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * (i as f32 / rate as f32)).sin())
+            .collect();
+
+        let mono = AudioBuffer::new(rate, 1, tone.clone()).unwrap();
+        let dec = sonare_codec::decode(&sonare_codec::encode(Format::Mp3, &mono).unwrap()).unwrap();
+        let mc = aligned_channel_corr(&tone, &dec.samples, seg, ref_start);
+        assert!(mc > 0.95, "mono {rate} Hz tone corr too low: {mc:.4}");
+
+        let interleaved: Vec<f32> = tone.iter().flat_map(|&s| [s, s]).collect();
+        let stereo = AudioBuffer::new(rate, 2, interleaved).unwrap();
+        let dec =
+            sonare_codec::decode(&sonare_codec::encode(Format::Mp3, &stereo).unwrap()).unwrap();
+        let dl: Vec<f32> = dec.samples.iter().step_by(2).copied().collect();
+        let dr: Vec<f32> = dec.samples.iter().skip(1).step_by(2).copied().collect();
+        let lc = aligned_channel_corr(&tone, &dl, seg, ref_start);
+        let rc = aligned_channel_corr(&tone, &dr, seg, ref_start);
+        assert!(lc > 0.95, "stereo {rate} Hz left corr too low: {lc:.4}");
+        assert!(rc > 0.95, "stereo {rate} Hz right corr too low: {rc:.4}");
+    }
+}
+
 /// Pearson correlation of two equal-length slices.
 fn correlation(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());
