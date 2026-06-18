@@ -19,16 +19,17 @@
 use crate::bands::BandLayout;
 use crate::mdct::{compute_mdcts, MdctConfig};
 use crate::mode::CeltMode;
+use crate::pitch::{run_prefilter, PostfilterParams, PrefilterState};
 use crate::preemph::celt_preemphasis;
 use crate::quant_bands::amp2_log2;
 
 /// Per-encoder state the front-end carries across frames.
 pub struct FrontendState {
-    /// The overlap-length tail of each channel's pre-emphasised input, reused as
-    /// the window history for the next frame (`cc * overlap`).
-    pub in_mem: Vec<f32>,
     /// The first-order pre-emphasis filter memory, one per input channel (`cc`).
     pub preemph_mem: Vec<f32>,
+    /// The pitch pre-filter state: comb history, the overlap window memory, and
+    /// the previous frame's period/gain/tapset.
+    pub prefilter: PrefilterState,
 }
 
 impl FrontendState {
@@ -36,8 +37,8 @@ impl FrontendState {
     #[must_use]
     pub fn new(cc: usize, overlap: usize) -> Self {
         Self {
-            in_mem: vec![0.0; cc * overlap],
             preemph_mem: vec![0.0; cc],
+            prefilter: PrefilterState::new(cc, overlap),
         }
     }
 }
@@ -55,38 +56,33 @@ pub struct FrontendOut {
     pub x: Vec<f32>,
 }
 
-/// `celt_frame_frontend`: run the encoder front-end for one frame.
-///
-/// `pcm` is interleaved at channel stride `cc` (the input channel count); `c` is
-/// the coded channel count (`1` downmixes a stereo input). `lm` selects the
-/// frame size (`short_mdct_size << lm`), `end` the number of coded bands.
-/// `is_transient` switches to short blocks; `upsample > 1` zero-stuffs the input.
-/// `state` carries the overlap and pre-emphasis memory across calls.
+/// `frontend_preprocess`: phase one of the front-end — pre-emphasis and the
+/// pitch pre-filter. Returns the time-domain analysis buffer (`cc` planes of
+/// `n + overlap`, the overlap prefix being the comb-filtered previous tail) and
+/// the post-filter decision. The transient detector runs on this buffer before
+/// the MDCT, so the two phases are separate entry points.
 #[allow(clippy::too_many_arguments)]
-pub fn celt_frame_frontend(
+pub fn frontend_preprocess(
     mode: &CeltMode,
     pcm: &[f32],
     lm: i32,
-    c: usize,
     cc: usize,
-    end: usize,
-    is_transient: bool,
     upsample: usize,
     clip: bool,
+    tapset: usize,
+    pf_enabled: bool,
+    nb_available_bytes: i32,
     state: &mut FrontendState,
-) -> FrontendOut {
+) -> (Vec<f32>, PostfilterParams) {
     let overlap = mode.overlap;
     let n = mode.short_mdct_size << lm;
-    let m = 1usize << lm;
-    let nb = mode.nb_e_bands;
 
-    // Build each channel's input region: the previous frame's overlap tail,
-    // followed by this frame's pre-emphasised samples.
+    // Pre-emphasise this frame's samples into each channel's frame region; the
+    // overlap prefix is restored from the pre-filter's window memory inside
+    // `run_prefilter`, which then comb-filters the result in place.
     let mut input = vec![0.0f32; cc * (n + overlap)];
     for ch in 0..cc {
         let base = ch * (n + overlap);
-        input[base..base + overlap]
-            .copy_from_slice(&state.in_mem[ch * overlap..(ch + 1) * overlap]);
         celt_preemphasis(
             &pcm[ch..],
             &mut input[base + overlap..base + overlap + n],
@@ -97,10 +93,41 @@ pub fn celt_frame_frontend(
             &mut state.preemph_mem[ch],
             clip,
         );
-        // Carry this frame's tail as the next frame's window history.
-        state.in_mem[ch * overlap..(ch + 1) * overlap]
-            .copy_from_slice(&input[base + n..base + n + overlap]);
     }
+    let pf = run_prefilter(
+        &mut input,
+        n,
+        cc,
+        overlap,
+        mode.short_mdct_size,
+        &mode.window,
+        tapset,
+        pf_enabled,
+        nb_available_bytes,
+        &mut state.prefilter,
+    );
+    (input, pf)
+}
+
+/// `frontend_transform`: phase two of the front-end — the forward MDCT, band
+/// energies, log-domain conversion and per-band normalisation of a pre-processed
+/// time-domain `input` buffer (as produced by [`frontend_preprocess`]).
+/// `is_transient` selects short MDCT blocks.
+#[allow(clippy::too_many_arguments)]
+pub fn frontend_transform(
+    mode: &CeltMode,
+    input: &[f32],
+    lm: i32,
+    c: usize,
+    cc: usize,
+    end: usize,
+    is_transient: bool,
+    upsample: usize,
+) -> FrontendOut {
+    let overlap = mode.overlap;
+    let n = mode.short_mdct_size << lm;
+    let m = 1usize << lm;
+    let nb = mode.nb_e_bands;
 
     // Forward MDCT (short blocks on a transient frame).
     let short_blocks = if is_transient { m } else { 0 };
@@ -114,7 +141,7 @@ pub fn celt_frame_frontend(
         &cfg,
         short_blocks,
         lm as usize,
-        &input,
+        input,
         &mut freq,
         c,
         cc,
@@ -140,6 +167,48 @@ pub fn celt_frame_frontend(
         band_log_e,
         x,
     }
+}
+
+/// `celt_frame_frontend`: run both front-end phases for one frame with a fixed
+/// transient decision. A convenience wrapper over [`frontend_preprocess`] +
+/// [`frontend_transform`] for callers that decide the transient flag elsewhere.
+///
+/// `pcm` is interleaved at channel stride `cc` (the input channel count); `c` is
+/// the coded channel count (`1` downmixes a stereo input). `lm` selects the
+/// frame size (`short_mdct_size << lm`), `end` the number of coded bands.
+/// `is_transient` switches to short blocks; `upsample > 1` zero-stuffs the input.
+/// `tapset` is this frame's post-filter tapset; `pf_enabled` gates the pitch
+/// pre-filter and `nb_available_bytes` drives its enable threshold.
+#[allow(clippy::too_many_arguments)]
+pub fn celt_frame_frontend(
+    mode: &CeltMode,
+    pcm: &[f32],
+    lm: i32,
+    c: usize,
+    cc: usize,
+    end: usize,
+    is_transient: bool,
+    upsample: usize,
+    clip: bool,
+    tapset: usize,
+    pf_enabled: bool,
+    nb_available_bytes: i32,
+    state: &mut FrontendState,
+) -> (FrontendOut, PostfilterParams) {
+    let (input, pf) = frontend_preprocess(
+        mode,
+        pcm,
+        lm,
+        cc,
+        upsample,
+        clip,
+        tapset,
+        pf_enabled,
+        nb_available_bytes,
+        state,
+    );
+    let out = frontend_transform(mode, &input, lm, c, cc, end, is_transient, upsample);
+    (out, pf)
 }
 
 #[cfg(test)]
@@ -214,7 +283,9 @@ mod tests {
         let pcm = make_pcm(n, 1, 5);
 
         let mut st = FrontendState::new(1, mode.overlap);
-        let fe = celt_frame_frontend(&mode, &pcm, p.lm, 1, 1, 21, false, 1, false, &mut st);
+        let (fe, _pf) = celt_frame_frontend(
+            &mode, &pcm, p.lm, 1, 1, 21, false, 1, false, 0, false, 150, &mut st,
+        );
 
         let mut band_log_e = fe.band_log_e.clone();
         let mut x = fe.x.clone();
@@ -230,6 +301,7 @@ mod tests {
             &mut tf_res,
             &mut offsets,
             150,
+            None,
             &mut enc_state,
         );
         let mut dec_state = CeltDecoderState::new(1, nb);
@@ -269,10 +341,40 @@ mod tests {
         let mut fresh = FrontendState::new(1, mode.overlap);
         let mut primed = FrontendState::new(1, mode.overlap);
         let prev = make_pcm(n, 1, 12);
-        let _ = celt_frame_frontend(&mode, &prev, 3, 1, 1, 21, false, 1, false, &mut primed);
+        let _ = celt_frame_frontend(
+            &mode,
+            &prev,
+            3,
+            1,
+            1,
+            21,
+            false,
+            1,
+            false,
+            0,
+            false,
+            150,
+            &mut primed,
+        );
 
-        let a = celt_frame_frontend(&mode, &pcm, 3, 1, 1, 21, false, 1, false, &mut fresh);
-        let b = celt_frame_frontend(&mode, &pcm, 3, 1, 1, 21, false, 1, false, &mut primed);
+        let (a, _) = celt_frame_frontend(
+            &mode, &pcm, 3, 1, 1, 21, false, 1, false, 0, false, 150, &mut fresh,
+        );
+        let (b, _) = celt_frame_frontend(
+            &mode,
+            &pcm,
+            3,
+            1,
+            1,
+            21,
+            false,
+            1,
+            false,
+            0,
+            false,
+            150,
+            &mut primed,
+        );
         let diff: f32 = a.freq.iter().zip(&b.freq).map(|(x, y)| (x - y).abs()).sum();
         assert!(diff > 1e-3, "overlap history had no effect: {diff}");
     }
@@ -283,7 +385,9 @@ mod tests {
         let n = mode.short_mdct_size << 3;
         let pcm = make_pcm(n, 1, 21);
         let mut st = FrontendState::new(1, mode.overlap);
-        let fe = celt_frame_frontend(&mode, &pcm, 3, 1, 1, 21, false, 1, false, &mut st);
+        let (fe, _pf) = celt_frame_frontend(
+            &mode, &pcm, 3, 1, 1, 21, false, 1, false, 0, false, 150, &mut st,
+        );
         // Each coded band of the normalised spectrum has unit energy by construction.
         for b in 0..21 {
             let lo = 8 * mode.e_bands[b] as usize;
@@ -291,5 +395,62 @@ mod tests {
             let e: f32 = fe.x[lo..hi].iter().map(|v| v * v).sum();
             assert!((e - 1.0).abs() < 1e-3, "band {b} energy {e} not unit");
         }
+    }
+
+    /// A harmonically rich, periodic PCM frame (a pure tone would be annihilated
+    /// by the pre-filter's LPC whitening).
+    fn periodic_pcm(n: usize, period: f32) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                let phase = i as f32 / period * std::f32::consts::TAU;
+                let s: f32 = (1..=8).map(|h| (phase * h as f32).sin() / h as f32).sum();
+                3000.0 * s
+            })
+            .collect()
+    }
+
+    #[test]
+    fn frontend_postfilter_engages_and_round_trips_through_the_frame() {
+        // With the pre-filter enabled on a strongly periodic frame the front-end
+        // returns an "on" decision; encoding it with `encode_celt_frame` and
+        // decoding must recover the same pitch / gain index / tapset bit-exactly.
+        let mode = celt_mode_48k();
+        let p = mono_params();
+        let nb = mode.nb_e_bands;
+        let n = mode.short_mdct_size << p.lm;
+        let pcm = periodic_pcm(n, 96.0);
+
+        let mut st = FrontendState::new(1, mode.overlap);
+        let (fe, pf) = celt_frame_frontend(
+            &mode, &pcm, p.lm, 1, 1, 21, false, 1, false, 0, true, 100, &mut st,
+        );
+        assert!(pf.pf_on, "post-filter should engage on a periodic frame");
+
+        let mut band_log_e = fe.band_log_e.clone();
+        let mut x = fe.x.clone();
+        let mut tf_res = vec![0i32; nb];
+        let mut offsets = vec![0i32; nb];
+        let mut enc_state = CeltEncoderState::new(1, nb);
+        let bytes = encode_celt_frame(
+            &mode,
+            &p,
+            &mut band_log_e,
+            &fe.band_e,
+            &mut x,
+            &mut tf_res,
+            &mut offsets,
+            200,
+            Some(&pf),
+            &mut enc_state,
+        );
+        let mut dec_state = CeltDecoderState::new(1, nb);
+        let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
+        let dpf = dec
+            .postfilter
+            .expect("post-filter params should decode back");
+        assert_eq!(dpf.pitch_index, pf.pitch_index, "pitch survived");
+        assert_eq!(dpf.qg, pf.qg, "gain index survived");
+        assert_eq!(dpf.tapset, pf.tapset, "tapset survived");
+        assert!((dpf.gain - pf.gain).abs() < 1e-9, "gain survived");
     }
 }

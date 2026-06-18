@@ -27,6 +27,8 @@
 // the live encoder still ships via the Opus FFI path.
 #![allow(dead_code)]
 
+use crate::range_coder::{RangeDecoder, RangeEncoder};
+
 /// `COMBFILTER_MINPERIOD`: the shortest pitch period the comb filter accepts.
 pub const COMBFILTER_MINPERIOD: usize = 15;
 /// `COMBFILTER_MAXPERIOD`: the longest pitch period (history the buffer must
@@ -525,6 +527,286 @@ pub fn remove_doubling(
     pg
 }
 
+/// The post-filter decision for one frame, as produced by [`run_prefilter`] and
+/// serialised by [`encode_postfilter`].
+pub struct PostfilterParams {
+    /// Whether the post-filter is enabled for this frame.
+    pub pf_on: bool,
+    /// The pitch period in full-rate samples (`COMBFILTER_MINPERIOD ..= MAXPERIOD-2`).
+    pub pitch_index: i32,
+    /// The (quantised) post-filter gain.
+    pub gain: f32,
+    /// The 3-bit quantised gain index (`0..=7`).
+    pub qg: i32,
+    /// The selected tapset (`0..=2`).
+    pub tapset: usize,
+}
+
+/// Per-encoder prefilter state carried across frames: the comb-filter history,
+/// the overlap memory, and the previous frame's period/gain/tapset.
+pub struct PrefilterState {
+    /// Per-channel comb-filter history (`cc * COMBFILTER_MAXPERIOD`).
+    pub prefilter_mem: Vec<f32>,
+    /// Per-channel overlap memory feeding the next frame's window (`cc * overlap`).
+    pub in_mem: Vec<f32>,
+    /// Previous frame's pitch period (full-rate samples).
+    pub prefilter_period: i32,
+    /// Previous frame's post-filter gain.
+    pub prefilter_gain: f32,
+    /// Previous frame's tapset.
+    pub prefilter_tapset: usize,
+}
+
+impl PrefilterState {
+    /// A zeroed state, matching a freshly reset encoder.
+    #[must_use]
+    pub fn new(cc: usize, overlap: usize) -> Self {
+        Self {
+            prefilter_mem: vec![0.0; cc * COMBFILTER_MAXPERIOD],
+            in_mem: vec![0.0; cc * overlap],
+            prefilter_period: 0,
+            prefilter_gain: 0.0,
+            prefilter_tapset: 0,
+        }
+    }
+}
+
+/// `run_prefilter`: estimate the pitch, decide whether to enable the
+/// post-filter, comb-filter the pre-emphasised input in place, and report the
+/// post-filter parameters for the bitstream.
+///
+/// `in_buf` holds `cc` channel planes of `n + overlap` samples; on entry the
+/// frame occupies `[overlap .. overlap + n]` (the overlap prefix is rewritten
+/// here from `state.in_mem`). `window` is the overlap window. `new_tapset` is
+/// this frame's tapset decision, `enabled` gates the whole search, and
+/// `nb_available_bytes` drives the enable threshold. The comb history and
+/// overlap memory in `state` are updated for the next frame.
+///
+/// Hand-ported from libopus `celt/celt_encoder.c` (`run_prefilter`, float build).
+#[allow(clippy::too_many_arguments)]
+pub fn run_prefilter(
+    in_buf: &mut [f32],
+    n: usize,
+    cc: usize,
+    overlap: usize,
+    short_mdct_size: usize,
+    window: &[f32],
+    new_tapset: usize,
+    enabled: bool,
+    nb_available_bytes: i32,
+    state: &mut PrefilterState,
+) -> PostfilterParams {
+    let stride = n + overlap;
+    let mp = COMBFILTER_MAXPERIOD;
+
+    // pre[c] = [comb history | this frame's samples].
+    let mut pre = vec![0.0f32; cc * (n + mp)];
+    for c in 0..cc {
+        let pbase = c * (n + mp);
+        pre[pbase..pbase + mp].copy_from_slice(&state.prefilter_mem[c * mp..c * mp + mp]);
+        let fbase = c * stride + overlap;
+        pre[pbase + mp..pbase + mp + n].copy_from_slice(&in_buf[fbase..fbase + n]);
+    }
+
+    let (pitch_index, mut gain1) = if enabled {
+        let mut pitch_buf = vec![0.0f32; (mp + n) >> 1];
+        let chans: Vec<&[f32]> = (0..cc)
+            .map(|c| &pre[c * (n + mp)..c * (n + mp) + n + mp])
+            .collect();
+        pitch_downsample(&chans, &mut pitch_buf, mp + n, cc);
+        // Skip the last 1.5 octaves: too many short-term false positives.
+        let lag = pitch_search(
+            &pitch_buf[mp >> 1..],
+            &pitch_buf,
+            n,
+            mp - 3 * COMBFILTER_MINPERIOD,
+        );
+        let mut pi = mp as i32 - lag as i32;
+        let g = remove_doubling(
+            &pitch_buf,
+            mp,
+            COMBFILTER_MINPERIOD,
+            n,
+            &mut pi,
+            state.prefilter_period,
+            state.prefilter_gain,
+        );
+        pi = pi.min(mp as i32 - 2);
+        (pi, 0.7 * g)
+    } else {
+        (COMBFILTER_MINPERIOD as i32, 0.0)
+    };
+
+    // Gain threshold for enabling the post-filter, adjusted for rate/continuity.
+    let mut pf_threshold = 0.2f32;
+    if (pitch_index - state.prefilter_period).abs() * 10 > pitch_index {
+        pf_threshold += 0.2;
+    }
+    if nb_available_bytes < 25 {
+        pf_threshold += 0.1;
+    }
+    if nb_available_bytes < 35 {
+        pf_threshold += 0.1;
+    }
+    if state.prefilter_gain > 0.4 {
+        pf_threshold -= 0.1;
+    }
+    if state.prefilter_gain > 0.55 {
+        pf_threshold -= 0.1;
+    }
+    pf_threshold = pf_threshold.max(0.2);
+
+    let (pf_on, qg) = if gain1 < pf_threshold {
+        gain1 = 0.0;
+        (false, 0)
+    } else {
+        // Snap to the previous gain when close, to avoid needless transitions.
+        if (gain1 - state.prefilter_gain).abs() < 0.1 {
+            gain1 = state.prefilter_gain;
+        }
+        let q = ((0.5 + gain1 * 32.0 / 3.0).floor() as i32 - 1).clamp(0, 7);
+        gain1 = 0.09375 * (q + 1) as f32;
+        (true, q)
+    };
+
+    // Apply the comb pre-filter in place; carry the overlap and comb histories.
+    let offset = short_mdct_size - overlap;
+    state.prefilter_period = state.prefilter_period.max(COMBFILTER_MINPERIOD as i32);
+    let pp = state.prefilter_period as usize;
+    let pg = state.prefilter_gain;
+    let pt = state.prefilter_tapset;
+    let t1 = pitch_index as usize;
+    for c in 0..cc {
+        let pbase = c * (n + mp);
+        let fbase = c * stride;
+        // Restore the (previously comb-filtered) overlap prefix from in_mem.
+        in_buf[fbase..fbase + overlap]
+            .copy_from_slice(&state.in_mem[c * overlap..c * overlap + overlap]);
+        let pchan = &pre[pbase..pbase + n + mp];
+        if offset != 0 {
+            comb_filter(
+                &mut in_buf[fbase + overlap..],
+                pchan,
+                mp,
+                pp,
+                pp,
+                offset,
+                -pg,
+                -pg,
+                pt,
+                pt,
+                &[],
+                0,
+            );
+        }
+        comb_filter(
+            &mut in_buf[fbase + overlap + offset..],
+            pchan,
+            mp + offset,
+            pp,
+            t1,
+            n - offset,
+            -pg,
+            -gain1,
+            pt,
+            new_tapset,
+            window,
+            overlap,
+        );
+        // Save this frame's filtered tail for the next frame's window.
+        state.in_mem[c * overlap..c * overlap + overlap]
+            .copy_from_slice(&in_buf[fbase + n..fbase + n + overlap]);
+        // Slide the comb history forward by one frame.
+        if n > mp {
+            state.prefilter_mem[c * mp..c * mp + mp]
+                .copy_from_slice(&pre[pbase + n..pbase + n + mp]);
+        } else {
+            state
+                .prefilter_mem
+                .copy_within(c * mp + n..c * mp + mp, c * mp);
+            state.prefilter_mem[c * mp + mp - n..c * mp + mp]
+                .copy_from_slice(&pre[pbase + mp..pbase + mp + n]);
+        }
+    }
+
+    // Carry the chosen period/gain/tapset to the next frame (libopus stores
+    // these on the encoder state after the post-filter block).
+    state.prefilter_period = pitch_index;
+    state.prefilter_gain = gain1;
+    state.prefilter_tapset = new_tapset;
+
+    PostfilterParams {
+        pf_on,
+        pitch_index,
+        gain: gain1,
+        qg,
+        tapset: new_tapset,
+    }
+}
+
+/// `tapset_icdf`: the inverse CDF for the three post-filter tapsets.
+const TAPSET_ICDF: [u8; 3] = [2, 1, 0];
+
+/// Write the post-filter section of the CELT frame header.
+///
+/// Mirrors the `pf_on` branch of libopus `celt_encode_with_ec`: with the filter
+/// off it writes a single "off" flag when there is room; with it on it writes
+/// the "on" flag, the pitch (octave + in-octave bits), the 3-bit quantised gain,
+/// and the tapset. The section only exists at `start == 0`.
+pub fn encode_postfilter(
+    enc: &mut RangeEncoder,
+    pf: &PostfilterParams,
+    start: usize,
+    total_bits: i32,
+) {
+    if start != 0 {
+        return;
+    }
+    if !pf.pf_on {
+        if enc.ec_tell() + 16 <= total_bits {
+            enc.enc_bit_logp(false, 1);
+        }
+        return;
+    }
+    enc.enc_bit_logp(true, 1);
+    let pitch1 = pf.pitch_index + 1;
+    let octave = 27 - (pitch1 as u32).leading_zeros() as i32;
+    enc.enc_uint(octave as u32, 6);
+    enc.enc_bits((pitch1 - (16 << octave)) as u32, (4 + octave) as u32);
+    enc.enc_bits(pf.qg as u32, 3);
+    enc.enc_icdf(pf.tapset, &TAPSET_ICDF, 2);
+}
+
+/// Read the post-filter section written by [`encode_postfilter`]. Returns the
+/// decoded parameters when the filter is on, or `None` when it is off or the
+/// section is absent (`start != 0` or no room), matching the decoder's gating.
+#[must_use]
+pub fn decode_postfilter(
+    dec: &mut RangeDecoder,
+    start: usize,
+    total_bits: i32,
+) -> Option<PostfilterParams> {
+    if start != 0 || dec.ec_tell() + 16 > total_bits || !dec.dec_bit_logp(1) {
+        return None;
+    }
+    let octave = dec.dec_uint(6) as i32;
+    let pitch_index = (16 << octave) + dec.dec_bits((4 + octave) as u32) as i32 - 1;
+    let qg = dec.dec_bits(3) as i32;
+    // The tapset is only present when there are still bits to spare.
+    let tapset = if dec.ec_tell() + 2 <= total_bits {
+        dec.dec_icdf(&TAPSET_ICDF, 2)
+    } else {
+        0
+    };
+    Some(PostfilterParams {
+        pf_on: true,
+        pitch_index,
+        gain: 0.09375 * (qg + 1) as f32,
+        qg,
+        tapset,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,5 +1071,158 @@ mod tests {
             "octave not corrected: full-rate lag {t0} (want ~30)"
         );
         assert!(pg > 0.5, "pitch gain too low for a pure tone: {pg}");
+    }
+
+    /// Build a `cc`-plane `in` buffer (`cc * (n + overlap)`) whose frame region
+    /// is a harmonically rich tone of full-rate period `period` at PCM scale (a
+    /// pure sine would be annihilated by the LPC whitening; CELT runs on
+    /// broadband, pulse-like signals). The overlap prefix is left at zero.
+    fn periodic_in(n: usize, overlap: usize, cc: usize, period: f32) -> Vec<f32> {
+        let stride = n + overlap;
+        let mut buf = vec![0.0f32; cc * stride];
+        for c in 0..cc {
+            for i in 0..n {
+                let phase = i as f32 / period * std::f32::consts::TAU;
+                // A sawtooth-like sum of harmonics keeps a strong pitch pulse in
+                // the LPC residual.
+                let s: f32 = (1..=8).map(|h| (phase * h as f32).sin() / h as f32).sum();
+                buf[c * stride + overlap + i] = 3000.0 * s;
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn run_prefilter_detects_a_periodic_frame() {
+        // A strongly periodic frame should enable the post-filter with a pitch
+        // near the true period and a valid quantised gain.
+        let n = 480usize;
+        let overlap = 120usize;
+        let short = 120usize;
+        let period = 64.0f32;
+        let window: Vec<f32> = (0..overlap)
+            .map(|i| ((i as f32 + 0.5) / overlap as f32 * std::f32::consts::FRAC_PI_2).sin())
+            .collect();
+        let mut in_buf = periodic_in(n, overlap, 1, period);
+        let mut st = PrefilterState::new(1, overlap);
+        let pf = run_prefilter(
+            &mut in_buf,
+            n,
+            1,
+            overlap,
+            short,
+            &window,
+            0,
+            true,
+            100,
+            &mut st,
+        );
+
+        assert!(pf.pf_on, "post-filter should engage on a periodic frame");
+        // The detected period should be a (sub-)multiple of the true period.
+        let r = (pf.pitch_index as f32 / period).round();
+        assert!(
+            r >= 1.0 && (pf.pitch_index as f32 - r * period).abs() < 8.0,
+            "pitch {} not near a multiple of {period}",
+            pf.pitch_index
+        );
+        assert!((0..=7).contains(&pf.qg), "qg out of range: {}", pf.qg);
+        assert!(
+            (pf.gain - 0.09375 * (pf.qg + 1) as f32).abs() < 1e-6,
+            "gain not the dequantised qg"
+        );
+        // State carried for the next frame.
+        assert_eq!(st.prefilter_period, pf.pitch_index);
+        assert_eq!(st.prefilter_gain, pf.gain);
+    }
+
+    #[test]
+    fn run_prefilter_disables_on_silence_and_is_a_passthrough() {
+        // A silent frame has no pitch: the filter stays off and (gain 0) the
+        // frame passes through unchanged.
+        let n = 480usize;
+        let overlap = 120usize;
+        let short = 120usize;
+        let window = vec![0.0f32; overlap];
+        let mut in_buf = vec![0.0f32; n + overlap];
+        // A deterministic non-zero frame so "unchanged" is meaningful.
+        for i in 0..n {
+            in_buf[overlap + i] = ((i * 7 % 13) as f32 - 6.0) * 0.01;
+        }
+        let original = in_buf.clone();
+        let mut st = PrefilterState::new(1, overlap);
+        let pf = run_prefilter(
+            &mut in_buf,
+            n,
+            1,
+            overlap,
+            short,
+            &window,
+            0,
+            true,
+            100,
+            &mut st,
+        );
+        assert!(
+            !pf.pf_on,
+            "post-filter should be off for an aperiodic frame"
+        );
+        assert_eq!(pf.gain, 0.0);
+        // gain0 (prev) and gain1 are both 0 on the first frame -> copy.
+        assert_eq!(
+            &in_buf[overlap..overlap + n],
+            &original[overlap..overlap + n],
+            "zero-gain prefilter must be a passthrough"
+        );
+    }
+
+    #[test]
+    fn postfilter_params_round_trip_bit_exact() {
+        // Encode a populated post-filter header and decode it back unchanged.
+        let total_bits = 1000i32;
+        for (pitch_index, qg, tapset) in [(80, 5, 0usize), (15, 0, 2), (1000, 7, 1)] {
+            let pf = PostfilterParams {
+                pf_on: true,
+                pitch_index,
+                gain: 0.09375 * (qg + 1) as f32,
+                qg,
+                tapset,
+            };
+            let mut enc = RangeEncoder::new(64);
+            enc.enc_bit_logp(false, 15); // a leading silence flag, as in a real frame
+            encode_postfilter(&mut enc, &pf, 0, total_bits);
+            let bytes = enc.done();
+
+            let mut dec = RangeDecoder::new(&bytes);
+            assert!(!dec.dec_bit_logp(15));
+            let got = decode_postfilter(&mut dec, 0, total_bits).expect("post-filter on");
+            assert_eq!(got.pitch_index, pitch_index, "pitch mismatch");
+            assert_eq!(got.qg, qg, "qg mismatch");
+            assert_eq!(got.tapset, tapset, "tapset mismatch");
+            assert!((got.gain - pf.gain).abs() < 1e-9, "gain mismatch");
+        }
+    }
+
+    #[test]
+    fn postfilter_off_round_trips() {
+        let total_bits = 1000i32;
+        let pf = PostfilterParams {
+            pf_on: false,
+            pitch_index: COMBFILTER_MINPERIOD as i32,
+            gain: 0.0,
+            qg: 0,
+            tapset: 0,
+        };
+        let mut enc = RangeEncoder::new(64);
+        enc.enc_bit_logp(false, 15);
+        encode_postfilter(&mut enc, &pf, 0, total_bits);
+        let bytes = enc.done();
+
+        let mut dec = RangeDecoder::new(&bytes);
+        assert!(!dec.dec_bit_logp(15));
+        assert!(
+            decode_postfilter(&mut dec, 0, total_bits).is_none(),
+            "off header must decode to None"
+        );
     }
 }

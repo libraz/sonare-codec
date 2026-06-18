@@ -28,6 +28,7 @@ use crate::allocation::{
 };
 use crate::bands::anti_collapse;
 use crate::mode::CeltMode;
+use crate::pitch::{decode_postfilter, encode_postfilter, PostfilterParams};
 use crate::quant_all_bands::{quant_all_bands, AllBandsInput};
 use crate::quant_band::Coder;
 use crate::quant_bands::{
@@ -144,6 +145,7 @@ pub fn encode_celt_frame(
     tf_res: &mut [i32],
     offsets: &mut [i32],
     nb_bytes: usize,
+    pf: Option<&PostfilterParams>,
     state: &mut CeltEncoderState,
 ) -> Vec<u8> {
     let nb = mode.nb_e_bands;
@@ -165,10 +167,15 @@ pub fn encode_celt_frame(
 
     // 1. Silence flag (only at the very start of the stream).
     enc.enc_bit_logp(false, 15);
-    // 2. Post-filter "off" flag.
-    if start == 0 && enc.ec_tell() + 16 <= total_bits {
-        enc.enc_bit_logp(false, 1);
-    }
+    // 2. Post-filter section (off when no params supplied).
+    let pf_off = PostfilterParams {
+        pf_on: false,
+        pitch_index: 0,
+        gain: 0.0,
+        qg: 0,
+        tapset: 0,
+    };
+    encode_postfilter(&mut enc, pf.unwrap_or(&pf_off), start, total_bits);
     // 3. Transient flag.
     if lm > 0 && enc.ec_tell() + 3 <= total_bits {
         enc.enc_bit_logp(params.is_transient, 3);
@@ -385,6 +392,8 @@ pub struct DecodedFrame {
     pub is_transient: bool,
     /// The decoded spreading decision.
     pub spread: i32,
+    /// The decoded post-filter parameters, or `None` when the filter is off.
+    pub postfilter: Option<PostfilterParams>,
 }
 
 /// `decode_celt_frame`: the decoder side of [`encode_celt_frame`]; recovers every
@@ -415,10 +424,8 @@ pub fn decode_celt_frame(
     } else {
         false
     };
-    // 2. Post-filter flag (our encoder always writes "off").
-    if start == 0 && dec.ec_tell() + 16 <= total_bits {
-        let _pf = dec.dec_bit_logp(1);
-    }
+    // 2. Post-filter section.
+    let postfilter = decode_postfilter(&mut dec, start, total_bits);
     // 3. Transient flag.
     let is_transient = if lm > 0 && dec.ec_tell() + 3 <= total_bits {
         dec.dec_bit_logp(3)
@@ -618,6 +625,7 @@ pub fn decode_celt_frame(
         seed: new_seed,
         is_transient,
         spread,
+        postfilter,
     }
 }
 
@@ -744,6 +752,7 @@ mod tests {
             &mut tf_res,
             &mut offsets,
             200,
+            None,
             &mut enc_state,
         );
         let mut dec_state = CeltDecoderState::new(p.c, nb);
@@ -785,6 +794,7 @@ mod tests {
             &mut tf_res,
             &mut offsets,
             220,
+            None,
             &mut enc_state,
         );
         let mut dec_state = CeltDecoderState::new(p.c, nb);
@@ -816,6 +826,7 @@ mod tests {
             &mut tf_res,
             &mut offsets,
             320,
+            None,
             &mut enc_state,
         );
         let mut dec_state = CeltDecoderState::new(p.c, nb);
@@ -859,6 +870,7 @@ mod tests {
                 &mut tf_res,
                 &mut offsets,
                 200,
+                None,
                 &mut enc_state,
             );
             let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
@@ -902,6 +914,7 @@ mod tests {
             &mut tf_res,
             &mut offsets,
             60,
+            None,
             &mut enc_state,
         );
         let mut dec_state = CeltDecoderState::new(p.c, nb);

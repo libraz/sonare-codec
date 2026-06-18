@@ -4,6 +4,8 @@
 use opus_decoder::{OpusDecoder as PacketDecoder, OpusError};
 use sc_core::{detect, AudioBuffer, Decoder, Encoder, Error, Format};
 
+use crate::opus_packet::CeltOpusEncoder;
+
 mod allocation;
 mod analysis;
 mod band_split;
@@ -11,9 +13,11 @@ mod bands;
 mod celt_frame;
 mod celt_frontend;
 mod cwrs;
+mod encoder;
 mod laplace;
 mod mdct;
 mod mode;
+mod opus_packet;
 mod pitch;
 mod preemph;
 mod quant_all_bands;
@@ -23,17 +27,25 @@ mod range_coder;
 mod rate;
 mod tf;
 mod theta;
+mod vbr;
 mod vq;
 
 const OGG_CAPTURE: &[u8; 4] = b"OggS";
 const OPUS_HEAD: &[u8; 8] = b"OpusHead";
 const OPUS_TAGS: &[u8; 8] = b"OpusTags";
 const OPUS_SAMPLE_RATE: u32 = 48_000;
-#[cfg(not(target_arch = "wasm32"))]
+/// The CELT frame-size shift the first-party encoder emits (20 ms = 960 samples).
+const OPUS_CELT_LM: i32 = 3;
 const OPUS_FRAME_SIZE: usize = 960;
-#[cfg(not(target_arch = "wasm32"))]
-const OPUS_MAX_PACKET_BYTES: usize = 1_500;
-#[cfg(not(target_arch = "wasm32"))]
+/// Per-channel target bitrate for the first-party fullband CELT encoder.
+const OPUS_BITRATE_PER_CHANNEL: i32 = 64_000;
+/// PCM scale the CELT encoder works in (`CELT_SIG`, i16 full-scale). The public
+/// API takes `[-1, 1]` float, so input is multiplied by this on the way in.
+const CELT_SIG_SCALE: f32 = 32_768.0;
+/// The CELT decoder's algorithmic delay at 48 kHz: the MDCT overlap (120
+/// samples). Signalled as the OpusHead pre-skip so players discard the priming
+/// samples and the decoded output aligns with the input.
+const OPUS_CELT_PRE_SKIP: u16 = 120;
 const OGG_OPUS_SERIAL: u32 = 0x5343_4f50;
 
 #[derive(Default)]
@@ -115,23 +127,17 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     AudioBuffer::new(OPUS_SAMPLE_RATE, u16::from(ogg.channels), samples)
 }
 
-#[cfg(target_arch = "wasm32")]
-pub fn encode(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFeature("Opus encode"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
+/// Encode interleaved `[-1, 1]` float PCM into an Ogg Opus stream using the
+/// first-party, pure-Rust CELT encoder (no C dependency, so this also works on
+/// the wasm target). The stream is CELT-only fullband at 20 ms per frame.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    use opus::{Application, Bitrate, Channels as OpusChannels, Encoder as PacketEncoder};
-
     if pcm.sample_rate != OPUS_SAMPLE_RATE {
         return Err(Error::UnsupportedFeature(
             "Opus encode currently requires 48000 Hz PCM",
         ));
     }
-    let channels = match pcm.channels {
-        1 => OpusChannels::Mono,
-        2 => OpusChannels::Stereo,
+    let channel_count = match pcm.channels {
+        1 | 2 => usize::from(pcm.channels),
         _ => {
             return Err(Error::UnsupportedFeature(
                 "only mono and stereo Opus encode are supported",
@@ -139,31 +145,24 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         }
     };
 
-    let mut encoder = PacketEncoder::new(OPUS_SAMPLE_RATE, channels, Application::Audio)
-        .map_err(map_opus_encode_error)?;
-    encoder
-        .set_bitrate(Bitrate::Auto)
-        .map_err(map_opus_encode_error)?;
-    encoder.set_vbr(true).map_err(map_opus_encode_error)?;
+    let bitrate = OPUS_BITRATE_PER_CHANNEL * channel_count as i32;
+    let mut encoder = CeltOpusEncoder::new(channel_count, OPUS_CELT_LM, bitrate, true);
+    let frame_samples = encoder.frame_size() * channel_count;
 
-    let channel_count = usize::from(pcm.channels);
+    // The CELT encoder works in the i16-scale CELT_SIG domain; lift the public
+    // [-1, 1] float into it (and zero-pad the final partial frame).
     let mut packets = Vec::new();
-    let mut frame = vec![0.0_f32; OPUS_FRAME_SIZE * channel_count];
-    let mut output = vec![0_u8; OPUS_MAX_PACKET_BYTES];
-
-    for source in pcm.samples.chunks(OPUS_FRAME_SIZE * channel_count) {
+    let mut frame = vec![0.0_f32; frame_samples];
+    for source in pcm.samples.chunks(frame_samples) {
         frame.fill(0.0);
-        frame[..source.len()].copy_from_slice(source);
-        let packet_len = encoder
-            .encode_float(&frame, &mut output)
-            .map_err(map_opus_encode_error)?;
-        packets.push(output[..packet_len].to_vec());
+        for (dst, &src) in frame.iter_mut().zip(source) {
+            *dst = src * CELT_SIG_SCALE;
+        }
+        packets.push(encoder.encode_packet(&frame));
     }
     if packets.is_empty() {
-        let packet_len = encoder
-            .encode_float(&frame, &mut output)
-            .map_err(map_opus_encode_error)?;
-        packets.push(output[..packet_len].to_vec());
+        // No input: emit a single silent frame so the stream carries audio.
+        packets.push(encoder.encode_packet(&frame));
     }
 
     Ok(mux_ogg_opus(pcm.channels, packets))
@@ -347,7 +346,6 @@ fn collect_packets(pages: &[OggPage]) -> Result<Vec<Vec<u8>>, Error> {
     Ok(packets)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn mux_ogg_opus(channels: u16, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
     let mut stream = Vec::new();
     let mut sequence = 0_u32;
@@ -357,7 +355,7 @@ fn mux_ogg_opus(channels: u16, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
     head.extend_from_slice(OPUS_HEAD);
     head.push(1);
     head.push(channels);
-    head.extend_from_slice(&0_u16.to_le_bytes());
+    head.extend_from_slice(&OPUS_CELT_PRE_SKIP.to_le_bytes());
     head.extend_from_slice(&OPUS_SAMPLE_RATE.to_le_bytes());
     head.extend_from_slice(&0_i16.to_le_bytes());
     head.push(0);
@@ -392,7 +390,6 @@ fn mux_ogg_opus(channels: u16, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
     stream
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn push_ogg_page(
     stream: &mut Vec<u8>,
     packets: &[Vec<u8>],
@@ -430,7 +427,6 @@ fn push_ogg_page(
     stream.extend_from_slice(&page);
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn ogg_crc(bytes: &[u8]) -> u32 {
     let mut crc = 0_u32;
     for &byte in bytes {
@@ -453,11 +449,6 @@ fn map_opus_error(error: OpusError) -> Error {
         OpusError::BufferTooSmall => Error::InvalidInput("Opus decode buffer is too small"),
         OpusError::InvalidArgument(_) => Error::InvalidInput("invalid Opus decoder argument"),
     }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn map_opus_encode_error(_error: opus::Error) -> Error {
-    Error::InvalidInput("Opus encode failed")
 }
 
 fn looks_like_incomplete_ogg_opus_prefix(input: &[u8]) -> bool {
@@ -539,15 +530,6 @@ mod tests {
         assert!(matches!(err, Error::InvalidInput(_)));
     }
 
-    #[cfg(target_arch = "wasm32")]
-    #[test]
-    fn rejects_unimplemented_encode_as_unsupported_feature() {
-        let pcm = AudioBuffer::new(OPUS_SAMPLE_RATE, 1, vec![0.0; 128]).expect("pcm");
-        let err = encode(&pcm).expect_err("encode");
-        assert!(matches!(err, Error::UnsupportedFeature("Opus encode")));
-    }
-
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn encodes_ogg_opus_stream() {
         let pcm = sine_pcm(OPUS_SAMPLE_RATE, 1, 4800, 440.0);
@@ -563,7 +545,6 @@ mod tests {
         assert!(decoded.samples.iter().any(|sample| sample.abs() > 0.0001));
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn encodes_stereo_ogg_opus_stream() {
         let pcm = sine_pcm(OPUS_SAMPLE_RATE, 2, 4800, 440.0);
@@ -574,7 +555,68 @@ mod tests {
         assert_eq!(decoded.channels, 2);
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn public_roundtrip_reproduces_the_input_signal() {
+        // A clean multi-tone the perceptual coder should track closely. Drive
+        // enough frames to reach steady state past the cold-start frame.
+        let frames = 20;
+        let n = OPUS_FRAME_SIZE * frames;
+        let mut samples = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f32 / OPUS_SAMPLE_RATE as f32;
+            let tau = std::f32::consts::TAU;
+            let value = 0.4 * (tau * 440.0 * t).sin() + 0.2 * (tau * 880.0 * t).sin();
+            samples.push(value);
+        }
+        let pcm = AudioBuffer::new(OPUS_SAMPLE_RATE, 1, samples.clone()).expect("pcm");
+
+        let encoded = encode(&pcm).expect("encode");
+        let decoded = decode(&encoded).expect("decode");
+
+        // The codec adds algorithmic delay, so align by the lag that maximises the
+        // normalised cross-correlation, then assert the signal is reproduced (a
+        // perceptual coder need not be waveform-exact, but a clean tone correlates
+        // strongly). This is oracle-free: we compare our own input to our output.
+        let (lag, corr) = best_alignment(&samples, &decoded.samples, 1200);
+        assert!(
+            corr > 0.7,
+            "roundtrip correlation {corr} at lag {lag} is too low — the encoder is \
+             not reproducing the input"
+        );
+        // The OpusHead pre-skip discards the CELT priming delay, so the decoded
+        // output aligns with the input at (near) zero lag.
+        assert!(
+            lag <= 8,
+            "pre-skip should compensate the codec delay; residual lag {lag}"
+        );
+    }
+
+    /// Find the delay (in samples) that maximises the normalised cross-correlation
+    /// of `output` against a stable mid-signal window of `input`, returning that
+    /// lag and the correlation in `[-1, 1]`.
+    fn best_alignment(input: &[f32], output: &[f32], max_lag: usize) -> (usize, f32) {
+        let w_start = 4_000usize;
+        let w_len = 8_000usize.min(input.len().saturating_sub(w_start));
+        let win = &input[w_start..w_start + w_len];
+        let in_energy: f32 = win.iter().map(|v| v * v).sum();
+
+        let mut best = (0usize, -1.0f32);
+        for lag in 0..max_lag {
+            let start = w_start + lag;
+            if start + w_len > output.len() {
+                break;
+            }
+            let seg = &output[start..start + w_len];
+            let dot: f32 = win.iter().zip(seg).map(|(a, b)| a * b).sum();
+            let out_energy: f32 = seg.iter().map(|v| v * v).sum();
+            let corr = dot / (in_energy * out_energy).sqrt().max(1e-12);
+            if corr > best.1 {
+                best = (lag, corr);
+            }
+        }
+        best
+    }
+
     #[test]
     fn rejects_unsupported_opus_encode_pcm_shape() {
         let pcm = AudioBuffer::new(44_100, 1, vec![0.0; 1024]).expect("pcm");
