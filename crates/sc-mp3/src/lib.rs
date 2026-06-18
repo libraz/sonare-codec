@@ -11436,6 +11436,44 @@ mod tests {
     }
 
     #[test]
+    fn default_nonzero_mono_encode_uses_bit_reservoir() {
+        let frames = 8_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame);
+        for frame in 0..frames {
+            let loud = frame % 2 == 0;
+            for n in 0..samples_per_frame {
+                let t = n as f32;
+                samples.push(if loud {
+                    0.3 * ((t * 0.043).sin()
+                        + (t * 0.131).sin()
+                        + (t * 0.277).sin()
+                        + (t * 0.611).sin())
+                } else {
+                    0.02 * (t * 0.05).sin()
+                });
+            }
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let stream = encode(&pcm).unwrap();
+
+        let mut offset = 0_usize;
+        let mut max_main_data_begin = 0_u32;
+        while offset < stream.len() {
+            let header = FrameHeader::parse(&stream[offset..offset + 4]).unwrap();
+            let mut reader = BitReader::new(&stream[offset + 4..]);
+            max_main_data_begin = max_main_data_begin.max(reader.read_bits(9).unwrap());
+            offset += header.frame_len();
+        }
+
+        assert_eq!(offset, stream.len());
+        assert!(
+            max_main_data_begin > 0,
+            "default nonzero mono MP3 encode never used the bit reservoir"
+        );
+    }
+
+    #[test]
     fn decodes_own_silent_layer3_frames() {
         let pcm = AudioBuffer::new(44_100, 2, vec![0.0; 1153 * 2]).unwrap();
         let mp3 = encode(&pcm).unwrap();
