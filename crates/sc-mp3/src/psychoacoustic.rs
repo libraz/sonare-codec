@@ -359,6 +359,35 @@ pub fn spread_masking_threshold_per_bin(
     Ok(threshold)
 }
 
+/// Estimates the perceptual entropy of a granule, in bits, from its power
+/// spectrum and masking threshold.
+///
+/// Following Johnston, each bin contributes the bits needed to code its signal
+/// down to the masking threshold — `log2(2·round(√(e / thr)) + 1)` — so a bin at
+/// or below its threshold is inaudible and adds (almost) nothing while a bin far
+/// above it adds roughly the log of its excess. Because `energy` and `threshold`
+/// are both FFT-domain powers their ratio is dimensionless, so no cross-domain
+/// calibration is needed. The sum is the standard signal for distributing bits
+/// across granules and for the long/short block-switching decision (a sharp rise
+/// in perceptual entropy marks a transient). Bins with a non-positive threshold
+/// are skipped; the two arrays must match in length.
+pub fn perceptual_entropy(energy: &[f64], threshold: &[f64]) -> Result<f64, Error> {
+    if energy.len() != threshold.len() {
+        return Err(Error::InvalidInput(
+            "psychoacoustic energy and threshold arrays must match in length",
+        ));
+    }
+    let mut bits = 0.0_f64;
+    for (&e, &thr) in energy.iter().zip(threshold.iter()) {
+        if thr <= 0.0 || e <= 0.0 {
+            continue;
+        }
+        let steps = (e / thr).sqrt().round();
+        bits += (2.0 * steps + 1.0).log2();
+    }
+    Ok(bits)
+}
+
 /// Maps each retained half-spectrum bin to its critical-band rate (bark) for an
 /// FFT of length `fft_len` sampled at `sample_rate`.
 pub fn bin_barks(num_bins: usize, sample_rate: u32, fft_len: usize) -> Result<Vec<f64>, Error> {
@@ -846,6 +875,44 @@ mod tests {
     #[test]
     fn per_bin_masking_rejects_mismatched_lengths() {
         assert!(spread_masking_threshold_per_bin(&[1.0, 2.0], &[0.0, 1.0], &[0.5]).is_err());
+    }
+
+    #[test]
+    fn perceptual_entropy_is_zero_when_signal_stays_under_threshold() {
+        // A bin well below its threshold (√(e/thr) rounds to 0) costs 0 bits, and
+        // pure silence costs exactly 0.
+        let threshold = vec![1.0_f64; 32];
+        let masked = vec![0.1_f64; 32]; // √0.1 ≈ 0.32 → round 0 → 0 bits
+        assert!(perceptual_entropy(&masked, &threshold).unwrap() < 1.0e-9);
+        assert!(approx(
+            perceptual_entropy(&vec![0.0; 32], &threshold).unwrap(),
+            0.0,
+            1.0e-12
+        ));
+    }
+
+    #[test]
+    fn perceptual_entropy_grows_with_signal_to_threshold_ratio() {
+        // Raising the signal above the masking threshold raises the bit demand.
+        let threshold = vec![1.0_f64; 32];
+        let quiet = vec![4.0_f64; 32];
+        let loud = vec![400.0_f64; 32];
+        let pe_quiet = perceptual_entropy(&quiet, &threshold).unwrap();
+        let pe_loud = perceptual_entropy(&loud, &threshold).unwrap();
+        assert!(pe_quiet > 0.0);
+        assert!(
+            pe_loud > pe_quiet,
+            "louder signal must demand more bits: {pe_loud} vs {pe_quiet}"
+        );
+        // A single audible bin demands log2(2·round(√(e/thr)) + 1) bits; e/thr = 4
+        // gives round(2) = 2 → log2(5) ≈ 2.32.
+        let one = perceptual_entropy(&[4.0], &[1.0]).unwrap();
+        assert!(approx(one, 5.0_f64.log2(), 1.0e-9));
+    }
+
+    #[test]
+    fn perceptual_entropy_rejects_mismatched_lengths() {
+        assert!(perceptual_entropy(&[1.0, 2.0], &[1.0]).is_err());
     }
 
     #[test]
