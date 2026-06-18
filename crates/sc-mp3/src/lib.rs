@@ -2225,10 +2225,11 @@ pub fn apply_big_value_region_tables_to_granule(
         selection.regions[1].table_select,
         selection.regions[2].table_select,
     ];
-    granule.region0_count = u8::try_from(selection.region0_pairs)
-        .map_err(|_| Error::InvalidInput("MP3 region0 count exceeds side-info range"))?;
-    granule.region1_count = u8::try_from(selection.region1_pairs)
-        .map_err(|_| Error::InvalidInput("MP3 region1 count exceeds side-info range"))?;
+    // `region0_count`/`region1_count` are the scalefactor-band region addresses
+    // (set by `apply_spectral_regions_to_granule`), not pair counts. The pair
+    // split carried by `selection` drives the bit packing and must match the
+    // decoder's sfb-derived boundaries for those addresses; it is not copied
+    // back into the side-info fields here.
     Ok(())
 }
 
@@ -2435,9 +2436,11 @@ pub fn pack_quantized_spectrum_with_table_provider(
     apply_spectral_regions_to_granule(granule, regions)?;
 
     let big_value_pairs = big_value_pairs(quantized, regions)?;
-    let region0_pairs = usize::from(granule.region0_count).min(big_value_pairs.len());
-    let region1_pairs =
-        usize::from(granule.region1_count).min(big_value_pairs.len() - region0_pairs);
+    let (region0_pairs, region1_pairs) = long_block_region_pair_split(
+        granule.region0_count,
+        granule.region1_count,
+        big_value_pairs.len(),
+    );
     let big_value_selection = select_big_value_region_tables_by_bit_cost(
         &big_value_pairs,
         region0_pairs,
@@ -2474,9 +2477,11 @@ pub fn pack_quantized_spectrum_with_scale_factors_and_table_provider(
     apply_spectral_regions_to_granule(granule, regions)?;
 
     let big_value_pairs = big_value_pairs(quantized, regions)?;
-    let region0_pairs = usize::from(granule.region0_count).min(big_value_pairs.len());
-    let region1_pairs =
-        usize::from(granule.region1_count).min(big_value_pairs.len() - region0_pairs);
+    let (region0_pairs, region1_pairs) = long_block_region_pair_split(
+        granule.region0_count,
+        granule.region1_count,
+        big_value_pairs.len(),
+    );
     let big_value_selection = select_big_value_region_tables_by_bit_cost(
         &big_value_pairs,
         region0_pairs,
@@ -2500,6 +2505,38 @@ pub fn pack_quantized_spectrum_with_scale_factors_and_table_provider(
         count1_selection,
     )?;
     pack_main_data_parts_for_granule(granule, scale_factors, big_values, count1)
+}
+
+/// Long-block scalefactor-band line boundaries shared by all MPEG-1 sample
+/// rates. The full per-rate tables diverge only above index 6; the prefix used
+/// to place the big-value region addresses (indices 0..=2) is rate-independent.
+const LONG_SFB_LOW_BOUNDARIES: [usize; 7] = [0, 4, 8, 12, 16, 20, 24];
+
+/// Maps the written `region_address1`/`region_address2` side-info fields to the
+/// big-value region split in pairs, exactly as a spec decoder derives it.
+///
+/// The decoder reads `region0 = [0, sfb[ra1 + 1])`,
+/// `region1 = [sfb[ra1 + 1], sfb[ra1 + ra2 + 2])`, and `region2` the remainder,
+/// all in spectral-line units, then capped at the big-value count. The encoder
+/// must split pairs at the same boundaries so the bitstream stays in sync.
+fn long_block_region_pair_split(
+    region0_count: u8,
+    region1_count: u8,
+    pair_count: usize,
+) -> (usize, usize) {
+    let r1_idx = usize::from(region0_count) + 1;
+    let r2_idx = usize::from(region0_count) + usize::from(region1_count) + 2;
+    let r1_start = LONG_SFB_LOW_BOUNDARIES
+        .get(r1_idx)
+        .copied()
+        .unwrap_or(usize::MAX);
+    let r2_start = LONG_SFB_LOW_BOUNDARIES
+        .get(r2_idx)
+        .copied()
+        .unwrap_or(usize::MAX);
+    let region0 = (r1_start / 2).min(pair_count);
+    let region1 = (r2_start.saturating_sub(r1_start) / 2).min(pair_count - region0);
+    (region0, region1)
 }
 
 /// Splits quantized Layer III spectral coefficients into entropy-coded regions.
@@ -2577,10 +2614,13 @@ pub fn apply_spectral_regions_to_granule(
     }
 
     granule.table_select = [1, 1, 0];
-    granule.region0_count = u8::try_from(regions.big_values.min(7))
-        .map_err(|_| Error::InvalidInput("MP3 region0 count exceeds side-info range"))?;
-    granule.region1_count = u8::try_from(regions.big_values.saturating_sub(7).min(7))
-        .map_err(|_| Error::InvalidInput("MP3 region1 count exceeds side-info range"))?;
+    // Fixed region addresses 0/0 place the region boundaries at the
+    // rate-independent low scalefactor bands (lines 4 and 8). The big-value
+    // packer splits pairs at the matching boundaries via
+    // `long_block_region_pair_split`, keeping the encoder in sync with the
+    // decoder's scalefactor-band interpretation of these fields.
+    granule.region0_count = 0;
+    granule.region1_count = 0;
     granule.count1table_select = regions.count1 > 0;
     Ok(())
 }
@@ -2838,11 +2878,17 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
 /// granule that carries energy, or the ISO reference gain (210) for an all-zero
 /// granule whose gain is acoustically irrelevant.
 fn calibrated_global_gain_for_granule(quantized: &[i32], step: f32) -> u8 {
-    if quantized.iter().all(|&line| line == 0) {
-        210
-    } else {
-        mpeg1_layer3_global_gain_for_step(step)
+    if quantized.iter().all(|&line| line == 0) || !step.is_finite() || step <= 0.0 {
+        return 210;
     }
+    // `mpeg1_layer3_global_gain_for_step` inverts only the quantizer step. The
+    // decoder's hybrid IMDCT carries no 2/N normalization, so its 18-point
+    // inverse reconstructs N/2 = 9 times the encoded magnitude. Lower the gain
+    // by 4*log2(9) to make the full encode/decode chain unity. Rounding once
+    // over the combined expression keeps the residual gain error minimal.
+    let imdct_gain_offset = 4.0 * 9.0_f32.log2();
+    let raw = (210.0 + (16.0 / 3.0) * step.log2() - imdct_gain_offset).round();
+    raw.clamp(0.0, 255.0) as u8
 }
 
 /// Assembles one MPEG-1 Layer III frame from PCM long-block payload scaffolding.
@@ -3589,10 +3635,10 @@ mod tests {
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
         pack_quantized_spectrum_with_table_provider, plan_spectral_regions, quantize_long_block,
-        quantize_pcm_long_block, select_big_value_region_tables,
-        select_big_value_region_tables_by_bit_cost, select_big_value_table,
-        select_big_value_table_by_bit_cost, select_count1_table, select_count1_table_by_bit_cost,
-        select_mpeg1_layer3_long_scale_factor_compress,
+        quantize_pcm_long_block, quantize_pcm_long_block_with_cosine_subband_scaffold,
+        select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
+        select_big_value_table, select_big_value_table_by_bit_cost, select_count1_table,
+        select_count1_table_by_bit_cost, select_mpeg1_layer3_long_scale_factor_compress,
         select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
         select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
@@ -3607,7 +3653,291 @@ mod tests {
         LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
         MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     };
-    use sc_core::{detect, AudioBuffer, Error, Format, HuffmanCode, HuffmanEntry, PackedBits};
+    use sc_core::{
+        detect, quantize_spectrum, AudioBuffer, Error, Format, HuffmanCode, HuffmanEntry,
+        PackedBits,
+    };
+
+    /// Inverse of the `sc-core` (unnormalized) MDCT used by `mdct_long_block`:
+    /// `x[m] = (2/N) sum_k X[k] cos[(pi/N)(m + 0.5 + N/2)(k + 0.5)]`, N = 18.
+    fn ctrl_imdct_36(lines: &[f32]) -> [f32; 36] {
+        let n = LONG_BLOCK_GRANULE_SAMPLES;
+        let mut out = [0.0_f32; 36];
+        for (m, o) in out.iter_mut().enumerate() {
+            let mut acc = 0.0_f64;
+            for (k, &x) in lines.iter().enumerate() {
+                let angle = std::f64::consts::PI / n as f64
+                    * (m as f64 + 0.5 + n as f64 / 2.0)
+                    * (k as f64 + 0.5);
+                acc += f64::from(x) * angle.cos();
+            }
+            *o = (2.0 / n as f64 * acc) as f32;
+        }
+        out
+    }
+
+    fn ctrl_sine_window_36() -> [f32; 36] {
+        let mut w = [0.0_f32; 36];
+        for (i, wi) in w.iter_mut().enumerate() {
+            *wi = (std::f32::consts::PI / 36.0 * (i as f32 + 0.5)).sin();
+        }
+        w
+    }
+
+    /// Decoder-side alias reduction: the exact inverse of `apply_alias_reduction`.
+    fn ctrl_alias_reduce(spectrum: &mut [f32]) {
+        for boundary in 0..(filterbank::SUBBANDS - 1) {
+            let upper_base =
+                boundary * LONG_BLOCK_GRANULE_SAMPLES + (LONG_BLOCK_GRANULE_SAMPLES - 1);
+            let lower_base = (boundary + 1) * LONG_BLOCK_GRANULE_SAMPLES;
+            for (i, &c) in ALIAS_REDUCTION_C.iter().enumerate() {
+                let cs = 1.0 / (1.0 + c * c).sqrt();
+                let ca = c / (1.0 + c * c).sqrt();
+                let upper = upper_base - i;
+                let lower = lower_base + i;
+                let a = spectrum[upper];
+                let b = spectrum[lower];
+                spectrum[upper] = a * cs - b * ca;
+                spectrum[lower] = b * cs + a * ca;
+            }
+        }
+    }
+
+    /// ISO/IEC 11172-3 polyphase synthesis filterbank (decoder), used only as a
+    /// controlled oracle so the full encoder chain can be inverted in-process.
+    struct CtrlSynth {
+        v: Vec<f32>,
+    }
+
+    impl CtrlSynth {
+        fn new() -> Self {
+            Self { v: vec![0.0; 1024] }
+        }
+
+        fn step(&mut self, s: &[f32; filterbank::SUBBANDS]) -> [f32; filterbank::SUBBANDS] {
+            self.v.rotate_right(64);
+            for i in 0..64 {
+                let mut acc = 0.0_f32;
+                for (k, sk) in s.iter().enumerate() {
+                    let angle =
+                        (16.0 + i as f64) * (2.0 * k as f64 + 1.0) * std::f64::consts::PI / 64.0;
+                    acc += angle.cos() as f32 * *sk;
+                }
+                self.v[i] = acc;
+            }
+            let mut u = [0.0_f32; filterbank::WINDOW_LEN];
+            for i in 0..8 {
+                for j in 0..32 {
+                    u[i * 64 + j] = self.v[i * 128 + j];
+                    u[i * 64 + 32 + j] = self.v[i * 128 + 96 + j];
+                }
+            }
+            let mut out = [0.0_f32; filterbank::SUBBANDS];
+            for (j, oj) in out.iter_mut().enumerate() {
+                let mut acc = 0.0_f32;
+                for i in 0..16 {
+                    acc += u[j + 32 * i] * filterbank::SYNTHESIS_WINDOW_D[j + 32 * i];
+                }
+                *oj = acc;
+            }
+            out
+        }
+    }
+
+    fn ctrl_corr(a: &[f32], b: &[f32]) -> f64 {
+        let n = a.len().min(b.len());
+        if n == 0 {
+            return 0.0;
+        }
+        let ma = a[..n].iter().map(|x| f64::from(*x)).sum::<f64>() / n as f64;
+        let mb = b[..n].iter().map(|x| f64::from(*x)).sum::<f64>() / n as f64;
+        let (mut num, mut da, mut db) = (0.0_f64, 0.0_f64, 0.0_f64);
+        for i in 0..n {
+            let x = f64::from(a[i]) - ma;
+            let y = f64::from(b[i]) - mb;
+            num += x * y;
+            da += x * x;
+            db += y * y;
+        }
+        if da == 0.0 || db == 0.0 {
+            0.0
+        } else {
+            num / (da.sqrt() * db.sqrt())
+        }
+    }
+
+    /// Runs the full Layer III long-block encoder chain
+    /// (`layer3_long_block_spectrum`) and inverts it with a controlled
+    /// spec-complete decoder. If the encoder is the exact inverse of the standard
+    /// decoder, this reconstructs the input sweep; a low correlation localizes the
+    /// bug inside our encoder chain rather than in Symphonia's conventions.
+    #[test]
+    fn controlled_full_chain_reconstructs_sweep() {
+        let sample_rate = 44_100_u32;
+        let total = 22_050_usize;
+        let input: Vec<f32> = (0..total)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let f = 300.0 + 5_700.0 * (i as f32 / total as f32);
+                0.5 * (std::f32::consts::TAU * f * t).sin()
+            })
+            .collect();
+        let pcm = AudioBuffer::new(sample_rate, 1, input.clone()).unwrap();
+
+        let granules = total / 576;
+        let win = ctrl_sine_window_36();
+        let mut prev_tail = vec![[0.0_f32; LONG_BLOCK_GRANULE_SAMPLES]; filterbank::SUBBANDS];
+        let mut synth = CtrlSynth::new();
+        let mut out = Vec::<f32>::with_capacity(granules * 576);
+
+        for g in 0..granules {
+            let mut spectrum = layer3_long_block_spectrum(&pcm, 0, g * 576).unwrap();
+            ctrl_alias_reduce(&mut spectrum);
+
+            let mut hops = [[0.0_f32; filterbank::SUBBANDS]; LONG_BLOCK_GRANULE_SAMPLES];
+            for sb in 0..filterbank::SUBBANDS {
+                let lines = &spectrum[sb * 18..sb * 18 + 18];
+                let im = ctrl_imdct_36(lines);
+                let mut cur = [0.0_f32; LONG_BLOCK_GRANULE_SAMPLES];
+                for i in 0..LONG_BLOCK_GRANULE_SAMPLES {
+                    cur[i] = im[i] * win[i] + prev_tail[sb][i];
+                    prev_tail[sb][i] = im[i + 18] * win[i + 18];
+                }
+                apply_frequency_inversion(sb, &mut cur);
+                for h in 0..LONG_BLOCK_GRANULE_SAMPLES {
+                    hops[h][sb] = cur[h];
+                }
+            }
+            for hop in &hops {
+                out.extend_from_slice(&synth.step(hop));
+            }
+        }
+
+        // Lag-scan to absorb the filterbank + overlap reconstruction delay.
+        let seg = 8_192_usize;
+        let ref_start = 6_000_usize;
+        let reference = &input[ref_start..ref_start + seg];
+        let mut best = (0_usize, f64::NEG_INFINITY);
+        for d in 0..2_000_usize {
+            let start = ref_start + d;
+            if start + seg > out.len() {
+                break;
+            }
+            let c = ctrl_corr(reference, &out[start..start + seg]);
+            if c > best.1 {
+                best = (d, c);
+            }
+        }
+        let aligned = &out[ref_start + best.0..ref_start + best.0 + seg];
+        let in_rms = (reference.iter().map(|x| x * x).sum::<f32>() / seg as f32).sqrt();
+        let out_rms = (aligned.iter().map(|x| x * x).sum::<f32>() / seg as f32).sqrt();
+        println!(
+            "controlled full chain: delay={} corr={:.4} ratio={:.4}",
+            best.0,
+            best.1,
+            out_rms / in_rms
+        );
+        assert!(
+            best.1 > 0.9,
+            "encoder chain is not the inverse of the standard decoder: corr={:.4}",
+            best.1
+        );
+    }
+
+    /// Like `controlled_full_chain_reconstructs_sweep`, but routes the spectrum
+    /// through the real quantizer and the calibrated `global_gain` requantization
+    /// (`xr = sign * |is|^(4/3) * 2^((gg-210)/4)`, zero scalefactors) before
+    /// decoding. If this still reconstructs, the spectral *values* the decoder
+    /// should receive are correct, so any end-to-end failure is in the bitstream
+    /// packing/side-info, not the DSP or the gain calibration.
+    #[test]
+    fn controlled_chain_survives_quantization() {
+        let sample_rate = 44_100_u32;
+        let total = 22_050_usize;
+        let input: Vec<f32> = (0..total)
+            .map(|i| {
+                let t = i as f32 / sample_rate as f32;
+                let f = 300.0 + 5_700.0 * (i as f32 / total as f32);
+                0.5 * (std::f32::consts::TAU * f * t).sin()
+            })
+            .collect();
+        let pcm = AudioBuffer::new(sample_rate, 1, input.clone()).unwrap();
+
+        let step = 0.05_f32;
+        let gg = mpeg1_layer3_global_gain_for_step(step);
+        let gain = 2.0_f32.powf((f32::from(gg) - 210.0) / 4.0);
+
+        let granules = total / 576;
+        let win = ctrl_sine_window_36();
+        let mut prev_tail = vec![[0.0_f32; LONG_BLOCK_GRANULE_SAMPLES]; filterbank::SUBBANDS];
+        let mut synth = CtrlSynth::new();
+        let mut out = Vec::<f32>::with_capacity(granules * 576);
+
+        for g in 0..granules {
+            let spectrum = layer3_long_block_spectrum(&pcm, 0, g * 576).unwrap();
+            let is = quantize_spectrum(&spectrum, step, 8191).unwrap();
+            // Calibrated requantization, exactly as a spec decoder would apply it.
+            let mut xr: Vec<f32> = is
+                .iter()
+                .map(|&q| {
+                    let mag = (q.unsigned_abs() as f32).powf(4.0 / 3.0) * gain;
+                    if q < 0 {
+                        -mag
+                    } else {
+                        mag
+                    }
+                })
+                .collect();
+            ctrl_alias_reduce(&mut xr);
+
+            let mut hops = [[0.0_f32; filterbank::SUBBANDS]; LONG_BLOCK_GRANULE_SAMPLES];
+            for sb in 0..filterbank::SUBBANDS {
+                let lines = &xr[sb * 18..sb * 18 + 18];
+                let im = ctrl_imdct_36(lines);
+                let mut cur = [0.0_f32; LONG_BLOCK_GRANULE_SAMPLES];
+                for i in 0..LONG_BLOCK_GRANULE_SAMPLES {
+                    cur[i] = im[i] * win[i] + prev_tail[sb][i];
+                    prev_tail[sb][i] = im[i + 18] * win[i + 18];
+                }
+                apply_frequency_inversion(sb, &mut cur);
+                for h in 0..LONG_BLOCK_GRANULE_SAMPLES {
+                    hops[h][sb] = cur[h];
+                }
+            }
+            for hop in &hops {
+                out.extend_from_slice(&synth.step(hop));
+            }
+        }
+
+        let seg = 8_192_usize;
+        let ref_start = 6_000_usize;
+        let reference = &input[ref_start..ref_start + seg];
+        let mut best = (0_usize, f64::NEG_INFINITY);
+        for d in 0..2_000_usize {
+            let start = ref_start + d;
+            if start + seg > out.len() {
+                break;
+            }
+            let c = ctrl_corr(reference, &out[start..start + seg]);
+            if c > best.1 {
+                best = (d, c);
+            }
+        }
+        let aligned = &out[ref_start + best.0..ref_start + best.0 + seg];
+        let in_rms = (reference.iter().map(|x| x * x).sum::<f32>() / seg as f32).sqrt();
+        let out_rms = (aligned.iter().map(|x| x * x).sum::<f32>() / seg as f32).sqrt();
+        println!(
+            "controlled chain (quantized): delay={} corr={:.4} ratio={:.4}",
+            best.0,
+            best.1,
+            out_rms / in_rms
+        );
+        assert!(
+            best.1 > 0.9,
+            "quantize+requant path lost the signal: corr={:.4}",
+            best.1
+        );
+    }
 
     #[test]
     fn parses_mpeg1_layer3_header() {
@@ -4216,6 +4546,47 @@ mod tests {
     }
 
     #[test]
+    fn quantizes_mono_with_polyphase_filterbank_and_stereo_with_scaffold() {
+        let mono = AudioBuffer::new(
+            44_100,
+            1,
+            (0..2304)
+                .map(|sample| ((sample as f32) * 0.017).sin() * 0.35)
+                .collect(),
+        )
+        .unwrap();
+        let mono_spectrum = layer3_long_block_spectrum(&mono, 0, 576).unwrap();
+        let inverted: Vec<f32> = mono_spectrum.into_iter().map(|line| -line).collect();
+        let expected_mono = quantize_spectrum(&inverted, 0.01, 8191).unwrap();
+
+        assert_eq!(
+            quantize_pcm_long_block(&mono, 0, 576, 0.01).unwrap(),
+            expected_mono
+        );
+
+        let stereo = AudioBuffer::new(
+            44_100,
+            2,
+            (0..2304)
+                .flat_map(|sample| {
+                    [
+                        ((sample as f32) * 0.013).sin() * 0.30,
+                        ((sample as f32) * 0.021).cos() * 0.20,
+                    ]
+                })
+                .collect(),
+        )
+        .unwrap();
+        let scaffold =
+            quantize_pcm_long_block_with_cosine_subband_scaffold(&stereo, 1, 576, 0.01).unwrap();
+
+        assert_eq!(
+            quantize_pcm_long_block(&stereo, 1, 576, 0.01).unwrap(),
+            scaffold
+        );
+    }
+
+    #[test]
     fn plans_layer3_spectral_regions() {
         let all_zero = plan_spectral_regions(&[0; 18]).unwrap();
         assert_eq!(
@@ -4587,8 +4958,10 @@ mod tests {
         let granule = side_info.granules[0][0];
         assert_eq!(granule.big_values, 9);
         assert_eq!(granule.table_select, [1, 1, 0]);
-        assert_eq!(granule.region0_count, 7);
-        assert_eq!(granule.region1_count, 2);
+        // Region addresses are fixed at the rate-independent low scalefactor
+        // bands so the packer's pair split matches the decoder's interpretation.
+        assert_eq!(granule.region0_count, 0);
+        assert_eq!(granule.region1_count, 0);
         assert!(granule.count1table_select);
         assert_ne!(side_info.pack(&header).unwrap(), silent);
 
@@ -5285,11 +5658,14 @@ mod tests {
             symbol: Layer3BigValueMagnitude::new(5, 4),
             code: HuffmanCode::new(0b11, 2).unwrap(),
         }];
+        // The big-value regions split at the fixed scalefactor-band boundaries
+        // into 2 + 2 + remainder pairs, so lay out one homogeneous value per
+        // region to exercise distinct per-region table selection.
         let mut quantized = Vec::new();
-        for _ in 0..7 {
+        for _ in 0..2 {
             quantized.extend_from_slice(&[1, 0]);
         }
-        for _ in 0..7 {
+        for _ in 0..2 {
             quantized.extend_from_slice(&[3, -2]);
         }
         for _ in 0..2 {
@@ -5309,13 +5685,15 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(granule.big_values, 16);
-        assert_eq!(granule.region0_count, 7);
-        assert_eq!(granule.region1_count, 7);
+        assert_eq!(granule.big_values, 6);
+        assert_eq!(granule.region0_count, 0);
+        assert_eq!(granule.region1_count, 0);
         assert_eq!(granule.table_select, [1, 5, 7]);
         assert!(!granule.count1table_select);
-        assert_eq!(granule.part2_3_length, 50);
-        assert_eq!(packed.bit_len, 50);
+        // region0: 2x[1,0] = 2*(1 code + 1 sign); region1: 2x[3,-2] =
+        // 2*(2 code + 2 signs); region2: 2x[5,4] = 2*(2 code + 2 signs).
+        assert_eq!(granule.part2_3_length, 20);
+        assert_eq!(packed.bit_len, 20);
     }
 
     #[test]
@@ -5372,7 +5750,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(granule.big_values, 8);
-        assert_eq!(granule.table_select, [5, 5, 0]);
+        // With the fixed 2 + 2 + remainder split the `[2,0]` pair falls in
+        // region2, so every region needs table 5 (table 1 cannot code it).
+        assert_eq!(granule.table_select, [5, 5, 5]);
         assert_eq!(granule.part2_3_length, 17);
         assert_eq!(packed.bit_len, 17);
     }

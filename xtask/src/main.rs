@@ -90,9 +90,19 @@ const PUBLIC_BINDING_FUNCTIONS: &[&str] = &[
     "encode_wav",
     "encode_flac",
     "encode_mp3",
+    "encode_mp3_with_bitrate",
     "encode_aac",
+    "encode_aac_with_bitrate",
     "encode_m4a",
+    "encode_m4a_with_bitrate",
     "demux_m4a_as_aac_adts",
+    "aac_lc_adts_max_frame_len_for_bitrate",
+    "aac_unsigned_pairs7_unit_magnitude_table",
+    "aac_unsigned_pairs7_table",
+    "aac_unsigned_pairs8_table",
+    "aac_scale_factor_delta_table",
+    "mp3_layer3_main_data_capacity_bytes",
+    "mp3_layer3_main_data_capacity_bits",
 ];
 const PYTHON_ONLY_BINDING_FUNCTIONS: &[&str] = &["encode_vorbis", "encode_opus"];
 
@@ -1459,36 +1469,321 @@ fn verify_production_lossy_encode_readiness() -> Result<(), String> {
         "publish-readiness requires SONARE_FFMPEG=/path/to/ffmpeg for production MP3/AAC oracle acceptance"
             .to_owned()
     })?;
-    let samples = (0..2304)
-        .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
-        .collect::<Vec<_>>();
-    let pcm = sonare_codec::AudioBuffer::new(44_100, 1, samples)
-        .map_err(|err| format!("failed to build readiness PCM: {err}"))?;
+    let readiness_cases = [
+        ("MP3 32kHz mono", sonare_codec::Format::Mp3, 32_000u32, 1u16),
+        (
+            "MP3 44.1kHz mono",
+            sonare_codec::Format::Mp3,
+            44_100u32,
+            1u16,
+        ),
+        ("MP3 48kHz mono", sonare_codec::Format::Mp3, 48_000u32, 1u16),
+        (
+            "MP3 32kHz stereo",
+            sonare_codec::Format::Mp3,
+            32_000u32,
+            2u16,
+        ),
+        (
+            "MP3 44.1kHz stereo",
+            sonare_codec::Format::Mp3,
+            44_100u32,
+            2u16,
+        ),
+        (
+            "MP3 48kHz stereo",
+            sonare_codec::Format::Mp3,
+            48_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 7.35kHz mono",
+            sonare_codec::Format::Aac,
+            7_350u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 8kHz mono",
+            sonare_codec::Format::Aac,
+            8_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 11.025kHz mono",
+            sonare_codec::Format::Aac,
+            11_025u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 12kHz mono",
+            sonare_codec::Format::Aac,
+            12_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 16kHz mono",
+            sonare_codec::Format::Aac,
+            16_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 22.05kHz mono",
+            sonare_codec::Format::Aac,
+            22_050u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 24kHz mono",
+            sonare_codec::Format::Aac,
+            24_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 32kHz mono",
+            sonare_codec::Format::Aac,
+            32_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 44.1kHz mono",
+            sonare_codec::Format::Aac,
+            44_100u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 48kHz mono",
+            sonare_codec::Format::Aac,
+            48_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 64kHz mono",
+            sonare_codec::Format::Aac,
+            64_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 88.2kHz mono",
+            sonare_codec::Format::Aac,
+            88_200u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 96kHz mono",
+            sonare_codec::Format::Aac,
+            96_000u32,
+            1u16,
+        ),
+        (
+            "AAC-LC 7.35kHz stereo",
+            sonare_codec::Format::Aac,
+            7_350u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 8kHz stereo",
+            sonare_codec::Format::Aac,
+            8_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 11.025kHz stereo",
+            sonare_codec::Format::Aac,
+            11_025u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 12kHz stereo",
+            sonare_codec::Format::Aac,
+            12_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 16kHz stereo",
+            sonare_codec::Format::Aac,
+            16_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 22.05kHz stereo",
+            sonare_codec::Format::Aac,
+            22_050u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 24kHz stereo",
+            sonare_codec::Format::Aac,
+            24_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 32kHz stereo",
+            sonare_codec::Format::Aac,
+            32_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 44.1kHz stereo",
+            sonare_codec::Format::Aac,
+            44_100u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 48kHz stereo",
+            sonare_codec::Format::Aac,
+            48_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 64kHz stereo",
+            sonare_codec::Format::Aac,
+            64_000u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 88.2kHz stereo",
+            sonare_codec::Format::Aac,
+            88_200u32,
+            2u16,
+        ),
+        (
+            "AAC-LC 96kHz stereo",
+            sonare_codec::Format::Aac,
+            96_000u32,
+            2u16,
+        ),
+    ];
+    let m4a_readiness_cases = [
+        ("M4A AAC-LC 7.35kHz mono", 7_350u32, 1u16),
+        ("M4A AAC-LC 8kHz mono", 8_000u32, 1u16),
+        ("M4A AAC-LC 11.025kHz mono", 11_025u32, 1u16),
+        ("M4A AAC-LC 12kHz mono", 12_000u32, 1u16),
+        ("M4A AAC-LC 16kHz mono", 16_000u32, 1u16),
+        ("M4A AAC-LC 22.05kHz mono", 22_050u32, 1u16),
+        ("M4A AAC-LC 24kHz mono", 24_000u32, 1u16),
+        ("M4A AAC-LC 32kHz mono", 32_000u32, 1u16),
+        ("M4A AAC-LC 44.1kHz mono", 44_100u32, 1u16),
+        ("M4A AAC-LC 48kHz mono", 48_000u32, 1u16),
+        ("M4A AAC-LC 64kHz mono", 64_000u32, 1u16),
+        ("M4A AAC-LC 88.2kHz mono", 88_200u32, 1u16),
+        ("M4A AAC-LC 96kHz mono", 96_000u32, 1u16),
+        ("M4A AAC-LC 7.35kHz stereo", 7_350u32, 2u16),
+        ("M4A AAC-LC 8kHz stereo", 8_000u32, 2u16),
+        ("M4A AAC-LC 11.025kHz stereo", 11_025u32, 2u16),
+        ("M4A AAC-LC 12kHz stereo", 12_000u32, 2u16),
+        ("M4A AAC-LC 16kHz stereo", 16_000u32, 2u16),
+        ("M4A AAC-LC 22.05kHz stereo", 22_050u32, 2u16),
+        ("M4A AAC-LC 24kHz stereo", 24_000u32, 2u16),
+        ("M4A AAC-LC 32kHz stereo", 32_000u32, 2u16),
+        ("M4A AAC-LC 44.1kHz stereo", 44_100u32, 2u16),
+        ("M4A AAC-LC 48kHz stereo", 48_000u32, 2u16),
+        ("M4A AAC-LC 64kHz stereo", 64_000u32, 2u16),
+        ("M4A AAC-LC 88.2kHz stereo", 88_200u32, 2u16),
+        ("M4A AAC-LC 96kHz stereo", 96_000u32, 2u16),
+    ];
 
     let mut missing = Vec::new();
     let mut encoded_artifacts = Vec::new();
-    for (label, format) in [
-        ("MP3", sonare_codec::Format::Mp3),
-        ("AAC-LC", sonare_codec::Format::Aac),
-    ] {
+    for (label, format, sample_rate, channels) in readiness_cases {
+        let pcm = readiness_pcm(sample_rate, channels)
+            .map_err(|err| format!("failed to build {label} readiness PCM: {err}"))?;
         match sonare_codec::encode_with_mode(format, &pcm, sonare_codec::EncodeMode::ProductionOnly)
         {
-            Ok(encoded) if !encoded.is_empty() => encoded_artifacts.push((label, format, encoded)),
+            Ok(encoded) if !encoded.is_empty() => {
+                encoded_artifacts.push((
+                    label,
+                    ProductionArtifactKind::from_format(format)?,
+                    pcm,
+                    encoded,
+                ));
+            }
+            Ok(_) => missing.push(format!("{label} production encode returned empty bytes")),
+            Err(err) => missing.push(format!("{label} production encode is not ready: {err}")),
+        }
+    }
+    for (label, sample_rate, channels) in m4a_readiness_cases {
+        let pcm = readiness_pcm(sample_rate, channels)
+            .map_err(|err| format!("failed to build {label} readiness PCM: {err}"))?;
+        match sonare_codec::encode_with_mode(
+            sonare_codec::Format::Aac,
+            &pcm,
+            sonare_codec::EncodeMode::ProductionOnly,
+        ) {
+            Ok(adts) if !adts.is_empty() => match sonare_codec::mux_aac_adts_as_m4a(&adts) {
+                Ok(m4a) if !m4a.is_empty() => {
+                    encoded_artifacts.push((label, ProductionArtifactKind::M4a, pcm, m4a));
+                }
+                Ok(_) => missing.push(format!("{label} production mux returned empty bytes")),
+                Err(err) => missing.push(format!("{label} production mux is not ready: {err}")),
+            },
             Ok(_) => missing.push(format!("{label} production encode returned empty bytes")),
             Err(err) => missing.push(format!("{label} production encode is not ready: {err}")),
         }
     }
 
-    if !missing.is_empty() {
-        let diagnostics = compatibility_lossy_encode_diagnostics(&ffmpeg, &pcm)?;
-        Err(format!(
-            "publish-readiness failed:\n  {}\n\nCompatibility scaffold diagnostics:\n  {}\nDo not publish until non-silent MP3/AAC production encode paths pass.",
-            missing.join("\n  "),
-            diagnostics.join("\n  ")
-        ))
+    let production_oracle = if encoded_artifacts.is_empty() {
+        Ok(())
     } else {
-        verify_production_lossy_oracle_acceptance(ffmpeg, &pcm, &encoded_artifacts)
+        verify_production_lossy_oracle_acceptance(ffmpeg.clone(), &encoded_artifacts)
+    };
+
+    if !missing.is_empty() || production_oracle.is_err() {
+        let diagnostic_pcm = readiness_pcm(44_100, 1)
+            .map_err(|err| format!("failed to build diagnostic readiness PCM: {err}"))?;
+        let diagnostics = compatibility_lossy_encode_diagnostics(&ffmpeg, &diagnostic_pcm)?;
+        let mut failures = missing;
+        if let Err(err) = production_oracle {
+            failures.push(err);
+        }
+        return Err(format!(
+            "publish-readiness failed:\n  {}\n\nCompatibility scaffold diagnostics:\n  {}\nDo not publish until all remaining non-silent lossy production encode paths pass.",
+            failures.join("\n  "),
+            diagnostics.join("\n  ")
+        ));
     }
+
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ProductionArtifactKind {
+    Mp3,
+    Aac,
+    M4a,
+}
+
+impl ProductionArtifactKind {
+    fn from_format(format: sonare_codec::Format) -> Result<Self, String> {
+        match format {
+            sonare_codec::Format::Mp3 => Ok(Self::Mp3),
+            sonare_codec::Format::Aac => Ok(Self::Aac),
+            _ => Err(format!(
+                "unexpected production lossy format for oracle: {format:?}"
+            )),
+        }
+    }
+
+    fn extension(self) -> &'static str {
+        match self {
+            Self::Mp3 => "mp3",
+            Self::Aac => "aac",
+            Self::M4a => "m4a",
+        }
+    }
+}
+
+fn readiness_pcm(
+    sample_rate: u32,
+    channels: u16,
+) -> Result<sonare_codec::AudioBuffer, sonare_codec::Error> {
+    let mut samples = Vec::with_capacity(2304 * usize::from(channels));
+    for frame in 0..2304 {
+        for channel in 0..channels {
+            let phase = if channel == 0 { 0.01 } else { 0.013 };
+            samples.push(((frame as f32) * phase).sin() * 0.25);
+        }
+    }
+    sonare_codec::AudioBuffer::new(sample_rate, channels, samples)
 }
 
 fn compatibility_lossy_encode_diagnostics(
@@ -1514,7 +1809,7 @@ fn compatibility_lossy_encode_diagnostics(
             compatibility_lossy_encode_diagnostic(ffmpeg, expected_pcm, &out_dir, label, format);
         diagnostics.push(match diagnostic {
             Ok(quality) => format!(
-                "{label} compatibility scaffold is still not production-gated: decoded_rms={:.4}, best_correlation={:.3}",
+                "{label} compatibility scaffold passes current oracle: decoded_rms={:.4}, best_correlation={:.3}",
                 quality.decoded_rms, quality.best_correlation
             ),
             Err(err) => format!("{label} compatibility scaffold cannot be promoted: {err}"),
@@ -1621,14 +1916,14 @@ fn experimental_aac_lc_nonzero_encode_diagnostic(
                     .to_owned()
             })?;
     let channel_config = sonare_codec::AacLongBlockConfig::new(
-        120,
+        180,
         u8::try_from(offsets.len() - 1)
             .map_err(|_| "AAC-LC scale-factor band count exceeds max_sfb range".to_owned())?,
     );
     let flat_scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
     let channel = sonare_codec::AacScaleFactorChannel::new(channel_config, &flat_scale_factors);
-    let scale_factor_table = sonare_codec::aac_scale_factor_delta_zero_table();
-    let spectral_tables = sonare_codec::experimental_unit_magnitude_spectral_tables();
+    let scale_factor_table = sonare_codec::aac_scale_factor_delta_table();
+    let spectral_tables = sonare_codec::aac_unsigned_pairs7_unit_magnitude_spectral_tables();
     let encoded = sonare_codec::encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
             sonare_codec::AdtsConfig::aac_lc(expected_pcm.sample_rate, 1),
             channel,
@@ -1656,8 +1951,12 @@ fn experimental_aac_lc_nonzero_encode_diagnostic(
 
 fn verify_production_lossy_oracle_acceptance(
     ffmpeg: OsString,
-    expected_pcm: &sonare_codec::AudioBuffer,
-    artifacts: &[(&str, sonare_codec::Format, Vec<u8>)],
+    artifacts: &[(
+        &str,
+        ProductionArtifactKind,
+        sonare_codec::AudioBuffer,
+        Vec<u8>,
+    )],
 ) -> Result<(), String> {
     let out_dir = env::temp_dir().join(format!(
         "sonare-codec-production-readiness-{}-{}",
@@ -1669,16 +1968,8 @@ fn verify_production_lossy_oracle_acceptance(
     fs::create_dir_all(&out_dir)
         .map_err(|err| format!("failed to create {}: {err}", out_dir.display()))?;
 
-    for (label, format, bytes) in artifacts {
-        let extension = match format {
-            sonare_codec::Format::Mp3 => "mp3",
-            sonare_codec::Format::Aac => "aac",
-            _ => {
-                return Err(format!(
-                    "unexpected production lossy format for oracle: {format:?}"
-                ))
-            }
-        };
+    for (label, kind, expected_pcm, bytes) in artifacts {
+        let extension = kind.extension();
         let path = out_dir.join(format!(
             "{}.{}",
             label.to_ascii_lowercase().replace('-', ""),
@@ -2353,12 +2644,43 @@ try {
     path.join(tmp, "package/pkg/sonare_codec_wasm_bg.js"),
     "utf8",
   );
+  const expectedExports = [
+    "detect_format",
+    "decode_audio",
+    "decode_wav",
+    "decode_flac",
+    "decode_mp3",
+    "decode_vorbis",
+    "decode_opus",
+    "decode_aac",
+    "decode_m4a",
+    "encode_audio",
+    "encode_audio_production",
+    "encode_wav",
+    "encode_flac",
+    "encode_mp3",
+    "encode_mp3_with_bitrate",
+    "encode_aac",
+    "encode_aac_with_bitrate",
+    "encode_m4a",
+    "encode_m4a_with_bitrate",
+    "demux_m4a_as_aac_adts",
+    "aac_lc_adts_max_frame_len_for_bitrate",
+    "aac_unsigned_pairs7_unit_magnitude_table",
+    "aac_unsigned_pairs7_table",
+    "aac_unsigned_pairs8_table",
+    "aac_scale_factor_delta_table",
+    "mp3_layer3_main_data_capacity_bytes",
+    "mp3_layer3_main_data_capacity_bits",
+  ];
   for (const [label, source] of [
     ["generated wasm entrypoint", generatedEntry],
     ["generated wasm glue", generatedGlue],
   ]) {
-    if (!source.includes("encode_audio_production")) {
-      throw new Error(`${label} is missing encode_audio_production`);
+    for (const exportName of expectedExports) {
+      if (!source.includes(exportName)) {
+        throw new Error(`${label} is missing ${exportName}`);
+      }
     }
   }
 } finally {
@@ -2496,16 +2818,72 @@ with tempfile.TemporaryDirectory(prefix="sonare-codec-wheel-") as target:
     sys.path.insert(0, target)
     import sonare_codec
 
+    def max_adts_frame_len(stream):
+        max_len = 0
+        offset = 0
+        while offset + 7 <= len(stream):
+            frame_len = ((stream[offset + 3] & 0x03) << 11) | (stream[offset + 4] << 3) | (stream[offset + 5] >> 5)
+            max_len = max(max_len, frame_len)
+            offset += frame_len
+        if offset != len(stream):
+            sys.exit("Python wheel AAC bitrate helper returned malformed ADTS")
+        return max_len
+
+    if sonare_codec.aac_lc_adts_max_frame_len_for_bitrate(44100, 10000) != 30:
+        sys.exit("Python wheel AAC bitrate budget helper returned an unexpected frame length")
+    aac_10k = sonare_codec.encode_aac_with_bitrate(44100, 1, [0.0] * 2048, 10000)
+    if not isinstance(aac_10k, bytes) or not aac_10k.startswith(b"\xff\xf1") or max_adts_frame_len(aac_10k) > 30:
+        sys.exit("Python wheel AAC bitrate encode helper returned unexpected bytes")
+    m4a_10k = sonare_codec.encode_m4a_with_bitrate(44100, 1, [0.0] * 2048, 10000)
+    if not isinstance(m4a_10k, bytes) or b"ftyp" not in m4a_10k[:16]:
+        sys.exit("Python wheel M4A bitrate encode helper returned unexpected bytes")
+    if sonare_codec.demux_m4a_as_aac_adts(m4a_10k) != aac_10k:
+        sys.exit("Python wheel M4A bitrate encode helper did not mux the expected ADTS")
+    if sonare_codec.aac_unsigned_pairs7_unit_magnitude_table() != [0, 0, 0, 1, 0, 1, 5, 3, 1, 0, 4, 3, 1, 1, 12, 4]:
+        sys.exit("Python wheel AAC codebook 7 helper returned unexpected entries")
+    pairs7_table = sonare_codec.aac_unsigned_pairs7_table()
+    if len(pairs7_table) != 256 or pairs7_table[:4] != [0, 0, 0, 1] or pairs7_table[36:40] != [1, 1, 12, 4] or pairs7_table[-4:] != [7, 7, 4095, 12]:
+        sys.exit("Python wheel AAC full codebook 7 helper returned unexpected entries")
+    pairs8_table = sonare_codec.aac_unsigned_pairs8_table()
+    if len(pairs8_table) != 256 or pairs8_table[:4] != [0, 0, 14, 5] or pairs8_table[36:40] != [1, 1, 0, 3] or pairs8_table[-4:] != [7, 7, 1023, 10]:
+        sys.exit("Python wheel AAC full codebook 8 helper returned unexpected entries")
+    scale_factor_table = sonare_codec.aac_scale_factor_delta_table()
+    if len(scale_factor_table) != 363 or scale_factor_table[:3] != [-60, 262120, 18] or scale_factor_table[180:183] != [0, 0, 1] or scale_factor_table[-3:] != [60, 524275, 19]:
+        sys.exit("Python wheel AAC scale-factor delta helper returned unexpected entries")
+    if sonare_codec.mp3_layer3_main_data_capacity_bytes(44100, 1, 128, False, False) != 396:
+        sys.exit("Python wheel MP3 capacity byte helper returned an unexpected value")
+    if sonare_codec.mp3_layer3_main_data_capacity_bits(44100, 1, 128, False, False) != 3168:
+        sys.exit("Python wheel MP3 capacity bit helper returned an unexpected value")
+    mp3_96k = sonare_codec.encode_mp3_with_bitrate(44100, 1, [0.0] * 1152, 96, False, False)
+    if not isinstance(mp3_96k, bytes) or not mp3_96k.startswith(b"\xff\xfb") or len(mp3_96k) != 313:
+        sys.exit("Python wheel MP3 bitrate encode helper returned unexpected bytes")
+
     silent = sonare_codec.encode_audio_production("mp3", 44100, 1, [0.0] * 1152)
     if not isinstance(silent, bytes) or not silent:
         sys.exit("Python wheel encode_audio_production did not return MP3 bytes")
     try:
-        sonare_codec.encode_audio_production("mp3", 44100, 1, [0.25] + [0.0] * 1151)
+        production_mp3 = sonare_codec.encode_audio_production("mp3", 44100, 1, [0.25] + [0.0] * 1151)
     except ValueError as exc:
-        if "production non-silent lossy encode" not in str(exc):
-            sys.exit("Python wheel encode_audio_production rejected with unexpected error: " + str(exc))
+        sys.exit("Python wheel encode_audio_production rejected non-silent MP3: " + str(exc))
     else:
-        sys.exit("Python wheel encode_audio_production accepted non-silent MP3")
+        if not isinstance(production_mp3, bytes) or not production_mp3.startswith(b"\xff\xfb"):
+            sys.exit("Python wheel encode_audio_production did not return non-silent MP3 bytes")
+    try:
+        production_mp3_stereo = sonare_codec.encode_audio_production("mp3", 44100, 2, [0.25, 0.0] + [0.0] * 2302)
+    except ValueError as exc:
+        sys.exit("Python wheel encode_audio_production rejected non-silent stereo MP3: " + str(exc))
+    else:
+        if not isinstance(production_mp3_stereo, bytes) or not production_mp3_stereo.startswith(b"\xff\xfb"):
+            sys.exit("Python wheel encode_audio_production did not return non-silent stereo MP3 bytes")
+    try:
+        production_m4a = sonare_codec.encode_audio_production("m4a", 44100, 1, [0.25] + [0.0] * 2047)
+    except ValueError as exc:
+        sys.exit("Python wheel encode_audio_production rejected non-silent M4A: " + str(exc))
+    else:
+        if not isinstance(production_m4a, bytes) or b"ftyp" not in production_m4a[:16]:
+            sys.exit("Python wheel encode_audio_production did not return non-silent M4A bytes")
+        if sonare_codec.detect_format(production_m4a) != "m4a":
+            sys.exit("Python wheel detect_format did not identify production M4A")
     opus = sonare_codec.encode_audio("opus", 48000, 1, [0.0] * 4800)
     if not isinstance(opus, bytes) or not opus.startswith(b"OggS"):
         sys.exit("Python wheel Opus encode did not return Ogg bytes")
@@ -2862,15 +3240,14 @@ mod tests {
 
         assert_eq!(diagnostics.len(), 4);
         assert!(
-            diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic
-                    .contains("MP3 compatibility scaffold cannot be promoted")),
+            diagnostics.iter().any(|diagnostic| diagnostic
+                .contains("MP3 compatibility scaffold passes current oracle")
+                || diagnostic.contains("MP3 compatibility scaffold cannot be promoted")),
             "{diagnostics:?}"
         );
         assert!(
             diagnostics.iter().any(|diagnostic| diagnostic
-                .contains("AAC-LC compatibility scaffold cannot be promoted")),
+                .contains("AAC-LC compatibility scaffold passes current oracle")),
             "{diagnostics:?}"
         );
         assert!(
@@ -2881,13 +3258,13 @@ mod tests {
         );
         assert!(
             diagnostics.iter().any(|diagnostic| diagnostic
-                .contains("AAC-LC experimental nonzero scaffold is not publish-ready")),
+                .contains("AAC-LC experimental nonzero scaffold is still not production-gated")),
             "{diagnostics:?}"
         );
         assert!(
             diagnostics
                 .iter()
-                .any(|diagnostic| diagnostic.contains("decoded PCM is effectively silent")),
+                .any(|diagnostic| diagnostic.contains("best_correlation")),
             "{diagnostics:?}"
         );
     }

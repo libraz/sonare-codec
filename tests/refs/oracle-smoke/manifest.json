@@ -67,7 +67,7 @@
       "name": "mp3-non-silent-scaffold.mp3",
       "format": "mp3",
       "bytes": 834,
-      "fnv1a64": "6cc67c2d987f6297",
+      "fnv1a64": "4629a362cf570c38",
       "decode": {
         "sample_rate": 44100,
         "channels": 1,
@@ -79,7 +79,7 @@
       "name": "mp3-non-silent-standard-scaffold.mp3",
       "format": "mp3",
       "bytes": 834,
-      "fnv1a64": "6cc67c2d987f6297",
+      "fnv1a64": "4629a362cf570c38",
       "decode": {
         "sample_rate": 44100,
         "channels": 1,
@@ -90,8 +90,8 @@
     {
       "name": "aac-non-silent-scaffold.aac",
       "format": "aac",
-      "bytes": 26,
-      "fnv1a64": "1c43db76342093bb",
+      "bytes": 32,
+      "fnv1a64": "8f681b610cd90fd9",
       "decode": {
         "sample_rate": 44100,
         "channels": 1,

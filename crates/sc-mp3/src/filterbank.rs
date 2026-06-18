@@ -277,4 +277,137 @@ mod tests {
         let s = analysis_hop(&[0.0_f32; WINDOW_LEN]);
         assert!(s.iter().all(|v| *v == 0.0));
     }
+
+    /// ISO/IEC 11172-3 polyphase synthesis filterbank (decoder side), used here
+    /// only as a self-contained oracle to verify the analysis pair reconstructs.
+    struct SynthesisState {
+        v: Vec<f32>, // 1024-sample FIFO
+    }
+
+    impl SynthesisState {
+        fn new() -> Self {
+            Self { v: vec![0.0; 1024] }
+        }
+
+        /// Synthesis matrix `N[i][k] = cos((16 + i)(2k + 1) PI / 64)`.
+        fn matrix() -> &'static [[f32; SUBBANDS]; 64] {
+            static CACHE: OnceLock<[[f32; SUBBANDS]; 64]> = OnceLock::new();
+            CACHE.get_or_init(|| {
+                let mut n = [[0.0_f32; SUBBANDS]; 64];
+                for (i, row) in n.iter_mut().enumerate() {
+                    for (k, cell) in row.iter_mut().enumerate() {
+                        let angle =
+                            (16.0 + i as f64) * (2.0 * k as f64 + 1.0) * core::f64::consts::PI
+                                / 64.0;
+                        *cell = angle.cos() as f32;
+                    }
+                }
+                n
+            })
+        }
+
+        /// Consumes 32 subband samples and emits 32 reconstructed PCM samples.
+        fn step(&mut self, s: &[f32; SUBBANDS]) -> [f32; SUBBANDS] {
+            // 1. Shift FIFO down by 64.
+            self.v.rotate_right(64);
+            // 2. Matrixing into the freshest 64 slots.
+            let n = Self::matrix();
+            for (row, vi) in n.iter().zip(self.v.iter_mut()) {
+                let mut acc = 0.0_f32;
+                for (nk, sk) in row.iter().zip(s.iter()) {
+                    acc += *nk * *sk;
+                }
+                *vi = acc;
+            }
+            // 3. Build the 512-sample U vector.
+            let mut u = [0.0_f32; WINDOW_LEN];
+            for i in 0..8 {
+                for j in 0..32 {
+                    u[i * 64 + j] = self.v[i * 128 + j];
+                    u[i * 64 + 32 + j] = self.v[i * 128 + 96 + j];
+                }
+            }
+            // 4. Window with D[i].
+            // 5. Sum every 32nd windowed sample.
+            let mut out = [0.0_f32; SUBBANDS];
+            for (j, oj) in out.iter_mut().enumerate() {
+                let mut acc = 0.0_f32;
+                for i in 0..16 {
+                    acc += u[j + 32 * i] * SYNTHESIS_WINDOW_D[j + 32 * i];
+                }
+                *oj = acc;
+            }
+            out
+        }
+    }
+
+    fn correlation(a: &[f32], b: &[f32]) -> f32 {
+        let n = a.len().min(b.len());
+        let (a, b) = (&a[..n], &b[..n]);
+        let ma = a.iter().sum::<f32>() / n as f32;
+        let mb = b.iter().sum::<f32>() / n as f32;
+        let mut num = 0.0;
+        let mut da = 0.0;
+        let mut db = 0.0;
+        for i in 0..n {
+            let x = a[i] - ma;
+            let y = b[i] - mb;
+            num += x * y;
+            da += x * x;
+            db += y * y;
+        }
+        if da == 0.0 || db == 0.0 {
+            return 0.0;
+        }
+        num / (da.sqrt() * db.sqrt())
+    }
+
+    #[test]
+    fn polyphase_pair_reconstructs_a_sweep() {
+        // A non-stationary sweep is the case the end-to-end path images wrongly.
+        let total = 8192_usize;
+        let mut input = vec![0.0_f32; total];
+        for (i, x) in input.iter_mut().enumerate() {
+            let t = i as f32 / 44100.0;
+            let f = 400.0 + 6000.0 * (i as f32 / total as f32);
+            *x = (2.0 * core::f32::consts::PI * f * t).sin();
+        }
+
+        let mut synth = SynthesisState::new();
+        let mut output = vec![0.0_f32; total];
+        let hops = total / 32;
+        let mut window = [0.0_f32; WINDOW_LEN];
+        for h in 0..hops {
+            let newest = h * 32 + 31;
+            for (offset, slot) in window.iter_mut().enumerate() {
+                *slot = if newest >= offset {
+                    input[newest - offset]
+                } else {
+                    0.0
+                };
+            }
+            let s = analysis_hop(&window);
+            let pcm = synth.step(&s);
+            for (k, v) in pcm.iter().enumerate() {
+                output[h * 32 + k] = *v;
+            }
+        }
+
+        // The cosine-modulated pair has a 481-sample reconstruction delay.
+        let delay = 481_usize;
+        let cmp = total - delay - 64;
+        let aligned_in = &input[..cmp];
+        let aligned_out = &output[delay..delay + cmp];
+        let corr = correlation(aligned_in, aligned_out);
+        let in_rms = (aligned_in.iter().map(|x| x * x).sum::<f32>() / cmp as f32).sqrt();
+        let out_rms = (aligned_out.iter().map(|x| x * x).sum::<f32>() / cmp as f32).sqrt();
+        println!(
+            "polyphase pair: corr={corr:.4} in_rms={in_rms:.4} out_rms={out_rms:.4} ratio={:.4}",
+            out_rms / in_rms
+        );
+        assert!(
+            corr > 0.9,
+            "polyphase analysis/synthesis pair should reconstruct a sweep, corr={corr}"
+        );
+    }
 }

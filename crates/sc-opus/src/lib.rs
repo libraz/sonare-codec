@@ -4,8 +4,26 @@
 use opus_decoder::{OpusDecoder as PacketDecoder, OpusError};
 use sc_core::{detect, AudioBuffer, Decoder, Encoder, Error, Format};
 
+mod allocation;
+mod analysis;
+mod band_split;
+mod bands;
+mod celt_frame;
+mod celt_frontend;
+mod cwrs;
 mod laplace;
+mod mdct;
+mod mode;
+mod pitch;
+mod preemph;
+mod quant_all_bands;
+mod quant_band;
+mod quant_bands;
 mod range_coder;
+mod rate;
+mod tf;
+mod theta;
+mod vq;
 
 const OGG_CAPTURE: &[u8; 4] = b"OggS";
 const OPUS_HEAD: &[u8; 8] = b"OpusHead";

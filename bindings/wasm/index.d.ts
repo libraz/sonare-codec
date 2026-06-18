@@ -71,10 +71,26 @@ export function encode_mp3(
   samples: Float32Array
 ): Uint8Array;
 
+export function encode_mp3_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  padding: boolean,
+  crc_protected: boolean
+): Uint8Array;
+
 export function encode_aac(
   sample_rate: number,
   channels: number,
   samples: Float32Array
+): Uint8Array;
+
+export function encode_aac_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
 ): Uint8Array;
 
 export function encode_m4a(
@@ -83,4 +99,52 @@ export function encode_m4a(
   samples: Float32Array
 ): Uint8Array;
 
+export function encode_m4a_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
 export function demux_m4a_as_aac_adts(input: Uint8Array): Uint8Array;
+
+export function aac_lc_adts_max_frame_len_for_bitrate(
+  sample_rate: number,
+  target_bitrate_bps: number
+): number;
+
+/**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_unsigned_pairs7_unit_magnitude_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_unsigned_pairs7_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [x, y, bits, len, ...].
+ */
+export function aac_unsigned_pairs8_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [delta, bits, len, ...].
+ */
+export function aac_scale_factor_delta_table(): Int32Array;
+
+export function mp3_layer3_main_data_capacity_bytes(
+  sample_rate: number,
+  channels: number,
+  bitrate_kbps: number,
+  padding: boolean,
+  crc_protected: boolean
+): number;
+
+export function mp3_layer3_main_data_capacity_bits(
+  sample_rate: number,
+  channels: number,
+  bitrate_kbps: number,
+  padding: boolean,
+  crc_protected: boolean
+): number;

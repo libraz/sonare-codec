@@ -48,12 +48,64 @@ def encode_flac(sample_rate: int, channels: int, samples: Sequence[float]) -> by
 
 def encode_mp3(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
+def encode_mp3_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    bitrate_kbps: int,
+    padding: bool,
+    crc_protected: bool,
+) -> bytes: ...
+
 def encode_vorbis(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
 def encode_opus(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
 def encode_aac(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
+def encode_aac_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    target_bitrate_bps: int,
+) -> bytes: ...
+
 def encode_m4a(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
+def encode_m4a_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    target_bitrate_bps: int,
+) -> bytes: ...
+
 def demux_m4a_as_aac_adts(input: BytesLike) -> bytes: ...
+
+def aac_lc_adts_max_frame_len_for_bitrate(
+    sample_rate: int,
+    target_bitrate_bps: int,
+) -> int: ...
+
+def aac_unsigned_pairs7_unit_magnitude_table() -> list[int]: ...
+
+def aac_unsigned_pairs7_table() -> list[int]: ...
+
+def aac_unsigned_pairs8_table() -> list[int]: ...
+
+def aac_scale_factor_delta_table() -> list[int]: ...
+
+def mp3_layer3_main_data_capacity_bytes(
+    sample_rate: int,
+    channels: int,
+    bitrate_kbps: int,
+    padding: bool,
+    crc_protected: bool,
+) -> int: ...
+
+def mp3_layer3_main_data_capacity_bits(
+    sample_rate: int,
+    channels: int,
+    bitrate_kbps: int,
+    padding: bool,
+    crc_protected: bool,
+) -> int: ...

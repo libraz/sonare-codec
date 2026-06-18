@@ -11,12 +11,13 @@ The current implementation is an early scaffold:
 - `sc-wav`: WAV decode/encode for PCM-oriented bootstrapping
 - `sc-flac`: FLAC decode/encode workbench and encoder implementation
 - `sc-aac`/`sc-mp4`: AAC ADTS framing, section/spectral payload scaffolding,
-  and minimal ADTS-to-M4A mux helpers for the future AAC encoder
-- `sc-mp3`: MP3 Layer III header/side-info/frame assembly and an initial silent
-  PCM encoder path
+  and minimal ADTS-to-M4A mux helpers for the AAC encoder
+- `sc-mp3`: MP3 Layer III header/side-info/frame assembly, main-data capacity
+  helpers, and limited PCM encoder paths
 - `sc-vorbis`: Ogg Vorbis decode plus Ogg Vorbis encode through libvorbis
 - `sc-opus`: Ogg Opus decode plus native Ogg Opus encode for mono/stereo
-  mapping-family-0 streams
+  mapping-family-0 streams, with Rust CELT range/energy/PVQ/theta primitives
+  under development
 - `sonare-codec`: umbrella crate with `decode(input)` and
   `encode(format, pcm)` dispatch, `encode_with_mode` production-only guardrails,
   plus experimental AAC/MP3 encoder helper re-exports behind their feature flags
@@ -31,12 +32,14 @@ The current implementation is an early scaffold:
 planned public surface. Unified `decode(input)` is backed by Symphonia for
 supported formats, with a narrow AAC fallback for sonare-generated silent ADTS.
 WAV and FLAC currently encode real audio. AAC-LC and MP3 have silent compact
-paths plus experimental non-silent long-block scaffolds. Non-silent production
-AAC/MP3 production encode paths remain incomplete while implementation lands
-phase by phase. Vorbis and Opus encode are available for native Rust/Python
-builds behind their feature flags. `encode_with_mode(format, pcm, EncodeMode::ProductionOnly)`
-rejects the documented non-silent MP3/AAC experimental scaffolds while allowing
-the currently production-grade paths. The `vorbis` feature provides Ogg Vorbis
+paths plus limited non-silent long-block production candidates that are gated by
+local decoder-oracle readiness checks; broader standard-codebook,
+psychoacoustic, and rate-control work remains incomplete while implementation
+lands phase by phase. Vorbis and Opus encode are available for native
+Rust/Python builds behind their feature flags.
+`encode_with_mode(format, pcm, EncodeMode::ProductionOnly)` rejects lossy inputs
+outside the current mono/stereo MP3 MPEG-1 sample-rate and mono/stereo AAC-LC
+ADTS/M4A production candidate paths. The `vorbis` feature provides Ogg Vorbis
 decode/encode for native builds, and the `opus` feature provides Ogg Opus
 decode for mono/stereo mapping-family-0 streams through the Rust, Python, and
 WASM surfaces plus native Rust/Python encode. Shared PCM
@@ -91,11 +94,14 @@ two-channel input, and verbatim subframes as a fallback.
 
 AAC currently supports ADTS framing, minimal ADTS-to-M4A muxing, encoding
 silent mono/stereo PCM as AAC-LC ADTS frames, and routing non-silent mono/stereo
-PCM through an experimental long-block scaffold. The local AAC decoder only
+PCM through long-block scaffold helpers. The local AAC decoder only
 recognizes sonare-generated silent AAC-LC ADTS, including the minimal M4A
 container emitted by the local muxer, as a round-trip fallback; general AAC
-decode is delegated to Symphonia. Non-silent production AAC-LC encode is still
-pending, but long-block MDCT analysis, scalar quantization, section planning,
+decode is delegated to Symphonia. Limited non-silent AAC-LC production
+candidate streams are available as ADTS and M4A for mono/stereo PCM at the
+supported AAC-LC sample rates and are checked by the local FFmpeg-backed
+readiness oracle, but
+long-block MDCT analysis, scalar quantization, section planning,
 section metadata packing, spectral pair extraction, and table-driven section
 spectral payload packing are in place. Magnitude-keyed spectral
 codewords can also append sign bits for non-zero coefficients before section
@@ -131,28 +137,33 @@ allowing non-zero long-block payload scaffolds to be selected without falling
 directly back to the all-zero public scaffold. The step search evaluates all
 candidates rather than depending on candidate order, and can report the
 selected step together with ADTS frame length and frame capacity for the future
-rate-control path. A minimal experimental scale-factor delta table provider is
-also available so the same non-zero helper path can exercise scale-factor DPCM
-packing without each caller building its own test table.
-The auto-step non-zero AAC helper path is still experimental and is not yet the
-default `encode()` output; the public non-silent AAC scaffold remains the
-externally accepted zero-spectrum shape until standard codebooks replace the
-local experimental tables.
+rate-control path. A standard AAC scale-factor delta table provider is also
+available so non-zero helper paths can pack scale-factor DPCM without callers
+building local test tables.
+The auto-step non-zero AAC helper path remains experimental; production
+candidate output uses bitrate-budgeted stream selection and is still limited
+until the remaining standard spectral codebooks replace the local experimental
+tables. The standard unsigned-pairs codebook 7/8 tables are exposed as
+`aac_unsigned_pairs7_table` and `aac_unsigned_pairs8_table`, with the older
+unit-magnitude helper retained for diagnostics, and re-exported by the umbrella
+crate so callers can verify the production-shaped spectral packing surface.
 The minimal MP4 helper can demux the M4A layout produced by the local muxer back
-to ADTS through the public `demux_m4a_as_aac_adts` helper for that silent
-round-trip fallback.
+to ADTS through the public `demux_m4a_as_aac_adts` helper.
 Complete standard codebook tables, full standard bit-cost search/rate control,
-psychoacoustically correct scale-factor selection, and production `encode()`
-integration remain pending.
+psychoacoustically correct scale-factor selection, and broader production
+`encode()` coverage remain pending.
 
 ## MP3 status
 
 MP3 currently supports MPEG audio header parsing, Layer III side-info packing,
-frame assembly, and encoding silent mono/stereo PCM at MPEG-1 sample rates
-32/44.1/48 kHz into 128 kbps Layer III frames. The local MP3 decoder only
+frame assembly, Layer III main-data capacity reporting, and encoding PCM at
+MPEG-1 sample rates 32/44.1/48 kHz into 128 kbps Layer III frames. The local
+MP3 decoder only
 recognizes sonare-generated silent Layer III frames as a round-trip fallback;
-general MP3 decode is delegated to Symphonia. Non-silent MP3 psychoacoustic
-analysis, Huffman coding, and bit reservoir use are still pending; the
+general MP3 decode is delegated to Symphonia. Limited non-silent mono/stereo MP3
+production candidate streams are checked by the local FFmpeg-backed readiness
+oracle. Full MP3 psychoacoustic analysis, broader Huffman-table coverage, and
+bit reservoir use are still pending; the
 long-block MDCT analysis and scalar quantization primitives are present but not
 yet connected to Huffman payload coding; interleaved PCM can now be extracted
 into zero-padded analysis blocks and classified into Layer III entropy regions
@@ -202,8 +213,12 @@ standard table provider with frame-level quantizer step search, so accepted
 non-zero long-block payload scaffolds can be emitted instead of falling back to
 the all-zero scaffold. The step search now evaluates all candidates rather than
 depending on candidate order, and can report the selected step together with
-payload bit length and frame capacity for the future rate-control path. The
-umbrella crate re-exports the MP3 scaffold helpers and related
+payload bit length and frame capacity for the future rate-control path.
+`layer3_header_for_capacity`, `layer3_main_data_capacity_bytes`, and
+`layer3_main_data_capacity_bits` expose the per-frame Layer III payload budget
+for callers and wrapper crates, and the bitrate-selected stream helper derives
+the MPEG header and per-frame capacity from a caller-selected Layer III bitrate.
+The umbrella crate re-exports the MP3 scaffold helpers and related
 side-info/table-selection types behind the `mp3` feature.
 Complete standard big-values table implementation beyond table 1, full standard
 bit-cost search/rate control, psychoacoustic scale-factor selection, and full
@@ -217,9 +232,13 @@ decode helpers, and
 API. `format` accepts `wav`, `flac`, `mp3`, `vorbis`, `opus`, `aac`, `m4a`, or
 `mp4`; unsupported encoder paths currently return `UnsupportedFormat` or
 `UnsupportedFeature`. Legacy `decode_wav`, `decode_flac`, `encode_wav`, and
-`encode_flac` helpers remain available. WASM and Python also expose `StreamDecoder`,
-which buffers chunked input and returns PCM once the accumulated bytes form a
-complete stream.
+`encode_flac` helpers remain available. WASM and Python also expose
+`StreamDecoder`, which buffers chunked input and returns PCM once the
+accumulated bytes form a complete stream. Small lossy diagnostic helpers are
+available on both package surfaces for AAC-LC ADTS bitrate frame budgets, the
+AAC unsigned-pairs codebook 7/8 tables, and MP3 Layer III
+main-data capacity. WASM and Python also expose caller-selected AAC/M4A and MP3
+bitrate encode helpers for the current lossy scaffolds.
 
 ## License and clean-room policy
 
@@ -295,8 +314,8 @@ fail if any planned crates.io, npm, or PyPI package name is already registered.
 
 `publish-preflight` is the mandatory first-publish gate. It runs the package
 preflight checks with registry name availability required, then runs
-`publish-readiness`. It fails until non-silent MP3 and AAC-LC production encode
-paths are implemented and accepted.
+`publish-readiness` so the current MP3/AAC-LC production candidate outputs are
+decoded and checked before publish.
 
 `size-report` reads existing Rust `.crate`, npm tarball, WASM, and Python wheel
 artifacts and reports their sizes. Run it after `package-preflight` when
@@ -331,11 +350,10 @@ when running `package-preflight`.
 from the workspace package list. It does not publish anything.
 
 `publish-readiness` is the final local release blocker. It requires non-silent
-MP3 and AAC-LC `EncodeMode::ProductionOnly` encode paths to succeed, so it
-fails until those production encoders replace the current experimental
-scaffolds. It also requires `SONARE_FFMPEG=/path/to/ffmpeg`; the production
-MP3/AAC outputs are decoded with a local black-box decoder oracle to f32 PCM,
-and effectively silent or uncorrelated output is rejected.
+MP3 and AAC-LC ADTS/M4A `EncodeMode::ProductionOnly` encode paths to succeed
+and requires `SONARE_FFMPEG=/path/to/ffmpeg`; the production MP3/AAC/M4A
+outputs are decoded with a local black-box decoder oracle to f32 PCM, and
+effectively silent or uncorrelated output is rejected.
 
 `oracle-smoke` is an optional local-only black-box decoder acceptance check. Set
 `SONARE_FFMPEG=/path/to/ffmpeg` to run it; without that environment variable it

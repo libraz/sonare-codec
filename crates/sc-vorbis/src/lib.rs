@@ -6,10 +6,12 @@ use std::num::{NonZeroU32, NonZeroU8};
 use sc_core::{detect, AudioBuffer, Decoder, Encoder, Error, Format};
 use vorbis_rs::{VorbisEncoderBuilder, VorbisError};
 
+mod codebook;
 mod floor1;
 mod lpc;
 mod mdct;
 mod oggpack;
+mod residue;
 mod window;
 
 #[derive(Default)]

@@ -21,7 +21,7 @@ pub use sc_mp3::{
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
     experimental_unit_magnitude_table_provider, layer3_header_for_capacity,
-    layer3_main_data_capacity_bits, layer3_main_data_capacity_bytes,
+    layer3_main_data_capacity_bits, layer3_main_data_capacity_bytes, mdct_long_block,
     mpeg1_layer3_global_gain_for_step, mpeg1_layer3_standard_big_value_table_provider,
     mpeg1_layer3_standard_table_provider, pack_big_value_pairs_with_region_tables_and_provider,
     pack_layer3_main_data_payloads, pack_mpeg1_layer3_long_quantized_spectrum_for_granule,
@@ -50,8 +50,9 @@ pub use sc_mp3::{
 #[cfg(feature = "aac")]
 pub use sc_aac::{
     aac_lc_adts_max_frame_len_for_bitrate, aac_lc_long_window_scale_factor_band_offsets,
-    aac_scale_factor_delta_zero_table, aac_unsigned_pairs7_unit_magnitude_spectral_tables,
-    aac_unsigned_pairs7_unit_magnitude_table, encode_pcm_mono_long_block_adts_by_bit_cost,
+    aac_scale_factor_delta_table, aac_scale_factor_delta_zero_table, aac_unsigned_pairs7_table,
+    aac_unsigned_pairs7_unit_magnitude_spectral_tables, aac_unsigned_pairs7_unit_magnitude_table,
+    aac_unsigned_pairs8_table, encode_pcm_mono_long_block_adts_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_auto_step_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_offsets_and_auto_step_by_bit_cost,
@@ -489,7 +490,7 @@ pub fn encode_aac_adts_with_bitrate(
     let channel_config = AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
     let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
     let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
-    let scale_factor_table = aac_scale_factor_delta_zero_table();
+    let scale_factor_table = aac_scale_factor_delta_table();
     let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
 
     match pcm.channels {
@@ -500,7 +501,7 @@ pub fn encode_aac_adts_with_bitrate(
             offsets,
             AAC_LC_PCM_STEP_CANDIDATES,
             target_bitrate_bps,
-            scale_factor_table,
+            &scale_factor_table,
             spectral_tables,
         ),
         2 => encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
@@ -511,7 +512,7 @@ pub fn encode_aac_adts_with_bitrate(
             offsets,
             AAC_LC_PCM_STEP_CANDIDATES,
             target_bitrate_bps,
-            scale_factor_table,
+            &scale_factor_table,
             spectral_tables,
         ),
         _ => Err(Error::InvalidInput(
@@ -1185,6 +1186,44 @@ mod tests {
 
     #[test]
     #[cfg(feature = "aac")]
+    fn exposes_aac_unsigned_pairs7_table() {
+        let table = super::aac_unsigned_pairs7_table();
+
+        assert_eq!(table.len(), 64);
+        assert_eq!(table[0].symbol, super::AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, super::HuffmanCode::new(0, 1).unwrap());
+        assert_eq!(table[63].symbol, super::AacSpectralMagnitudePair::new(7, 7));
+        assert_eq!(table[63].code, super::HuffmanCode::new(0xfff, 12).unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
+    fn exposes_aac_unsigned_pairs8_table() {
+        let table = super::aac_unsigned_pairs8_table();
+
+        assert_eq!(table.len(), 64);
+        assert_eq!(table[0].symbol, super::AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, super::HuffmanCode::new(0x00e, 5).unwrap());
+        assert_eq!(table[9].symbol, super::AacSpectralMagnitudePair::new(1, 1));
+        assert_eq!(table[9].code, super::HuffmanCode::new(0, 3).unwrap());
+        assert_eq!(table[63].symbol, super::AacSpectralMagnitudePair::new(7, 7));
+        assert_eq!(table[63].code, super::HuffmanCode::new(0x3ff, 10).unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
+    fn exposes_aac_scale_factor_delta_table() {
+        let table = super::aac_scale_factor_delta_table();
+
+        assert_eq!(table.len(), 121);
+        assert_eq!(table[0].symbol, super::AacScaleFactorDelta::new(-60));
+        assert_eq!(table[60].symbol, super::AacScaleFactorDelta::new(0));
+        assert_eq!(table[60].code, super::HuffmanCode::new(0, 1).unwrap());
+        assert_eq!(table[120].symbol, super::AacScaleFactorDelta::new(60));
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
     fn exposes_aac_codebook7_section_planning() {
         let sections = super::plan_sections_by_bit_cost(
             &[1, -1, 0, 0],
@@ -1199,7 +1238,7 @@ mod tests {
                 super::AacSection {
                     start: 0,
                     end: 2,
-                    codebook: super::AacCodebook::UnsignedPairs7,
+                    codebook: super::AacCodebook::UnsignedPairs8,
                 },
                 super::AacSection {
                     start: 2,

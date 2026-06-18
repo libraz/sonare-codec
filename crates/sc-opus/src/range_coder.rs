@@ -26,7 +26,26 @@ fn ec_ilog(v: u32) -> u32 {
     EC_CODE_BITS - v.leading_zeros()
 }
 
+/// Rounding table for the sub-bit fraction in `ec_tell_frac`.
+const EC_TELL_FRAC_CORRECTION: [u32; 8] = [35733, 38967, 42495, 46340, 50535, 55109, 60097, 65535];
+
+/// `ec_tell_frac`: bits used/consumed so far in eighth-of-a-bit (`BITRES = 3`)
+/// resolution, shared by the encoder and decoder (both expose `nbits_total`
+/// and `rng`). Bit-exact with libopus `entcode.c`.
+fn ec_tell_frac_impl(nbits_total: i32, rng: u32) -> u32 {
+    let nbits = (nbits_total as u32) << 3;
+    let l = ec_ilog(rng);
+    let r = rng >> (l - 16);
+    let mut b = (r >> 12) - 8;
+    if r > EC_TELL_FRAC_CORRECTION[b as usize] {
+        b += 1;
+    }
+    let l = (l << 3) + b;
+    nbits - l
+}
+
 /// Range encoder, equivalent to libopus `ec_enc`.
+#[derive(Clone)]
 pub struct RangeEncoder {
     buf: Vec<u8>,
     storage: u32,
@@ -72,6 +91,31 @@ impl RangeEncoder {
     #[must_use]
     pub fn range_bytes(&self) -> u32 {
         self.offs
+    }
+
+    /// `ec_tell`: bits used so far (rounded up to the next whole bit).
+    #[must_use]
+    pub fn ec_tell(&self) -> i32 {
+        self.nbits_total - ec_ilog(self.rng) as i32
+    }
+
+    /// `ec_tell_frac`: bits used so far in eighth-of-a-bit resolution.
+    #[must_use]
+    pub fn ec_tell_frac(&self) -> u32 {
+        ec_tell_frac_impl(self.nbits_total, self.rng)
+    }
+
+    /// The current range register (libopus `enc->rng`); CELT carries this across
+    /// frames as the PVQ noise seed.
+    #[must_use]
+    pub fn rng(&self) -> u32 {
+        self.rng
+    }
+
+    /// Total buffer capacity expressed in bits (`storage * 8`).
+    #[must_use]
+    pub fn storage_bits(&self) -> u32 {
+        self.storage * 8
     }
 
     fn write_byte(&mut self, value: u32) -> bool {
@@ -310,6 +354,37 @@ impl<'a> RangeDecoder<'a> {
         this
     }
 
+    /// `ec_tell`: bits consumed so far (rounded up to the next whole bit).
+    #[must_use]
+    pub fn ec_tell(&self) -> i32 {
+        self.nbits_total - ec_ilog(self.rng) as i32
+    }
+
+    /// `ec_tell_frac`: bits consumed so far in eighth-of-a-bit resolution.
+    #[must_use]
+    pub fn ec_tell_frac(&self) -> u32 {
+        ec_tell_frac_impl(self.nbits_total, self.rng)
+    }
+
+    /// The current range register (libopus `dec->rng`); CELT carries this across
+    /// frames as the PVQ noise seed, mirroring the encoder.
+    #[must_use]
+    pub fn rng(&self) -> u32 {
+        self.rng
+    }
+
+    /// Total capacity of the backing buffer in bytes (`ec_dec.storage`).
+    #[must_use]
+    pub fn storage(&self) -> u32 {
+        self.storage
+    }
+
+    /// Total buffer capacity expressed in bits (`storage * 8`).
+    #[must_use]
+    pub fn storage_bits(&self) -> u32 {
+        self.storage * 8
+    }
+
     fn read_byte(&mut self) -> i32 {
         if self.offs < self.storage {
             let b = self.buf[self.offs as usize];
@@ -485,6 +560,40 @@ mod tests {
             let (fl, fh) = MODEL[got];
             dec.dec_update(fl, fh, FT);
             assert_eq!(got, s);
+        }
+    }
+
+    #[test]
+    fn ec_tell_frac_fresh_encoder_is_one_bit() {
+        // A fresh encoder has used exactly one bit: 8 eighths.
+        let enc = RangeEncoder::new(64);
+        assert_eq!(enc.ec_tell_frac(), 8);
+        assert_eq!(enc.ec_tell(), 1);
+    }
+
+    #[test]
+    fn ec_tell_frac_matches_between_encoder_and_decoder() {
+        // The fractional tell is symmetric: at every step the decoder has
+        // consumed exactly as many eighth-bits as the encoder produced.
+        let symbols = [0usize, 2, 3, 1, 0, 3, 2, 1, 2, 3];
+        let mut enc = RangeEncoder::new(64);
+        let mut enc_tells = Vec::new();
+        for &s in &symbols {
+            let (fl, fh) = MODEL[s];
+            enc.encode(fl, fh, FT);
+            enc_tells.push(enc.ec_tell_frac());
+            // ec_tell is the ceiling of ec_tell_frac in whole bits.
+            assert_eq!(enc.ec_tell(), ((enc.ec_tell_frac() + 7) >> 3) as i32);
+        }
+        let bytes = enc.done();
+
+        let mut dec = RangeDecoder::new(&bytes);
+        for (&s, &expected) in symbols.iter().zip(&enc_tells) {
+            let fs = dec.decode(FT);
+            let (fl, fh) = MODEL[symbol_for(fs)];
+            dec.dec_update(fl, fh, FT);
+            assert_eq!(dec.ec_tell_frac(), expected);
+            let _ = s;
         }
     }
 
