@@ -500,6 +500,34 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
     )
 }
 
+/// Encodes PCM using a caller-selected Layer III bitrate and CBR padding schedule.
+///
+/// MPEG-1 Layer III CBR at rates such as 44.1kHz needs some frames to carry one
+/// padding slot so the average frame length reaches the requested bitrate. This
+/// helper derives each frame header from an integer slot accumulator instead of
+/// forcing callers to precompute per-frame padding.
+pub fn encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    encode_mpeg1_layer3_pcm_frames_with_header_cbr_padding_and_table_provider(
+        base_header,
+        pcm,
+        candidates,
+        provider,
+    )
+}
+
 /// Encodes PCM with an explicit MPEG-1 Layer III header through the frame scaffold.
 pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors(
     header: FrameHeader,
@@ -585,6 +613,41 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table
         out.extend_from_slice(
             &assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider(
                 header,
+                pcm,
+                start_frame,
+                step,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with per-frame CBR padding derived from the header bitrate.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_cbr_padding_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut padding = Layer3PaddingSchedule::new(header)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count + frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        let frame_header = padding.next_header();
+        let step = select_mpeg1_layer3_pcm_frame_step_with_table_provider(
+            frame_header,
+            pcm,
+            start_frame,
+            candidates,
+            provider,
+        )?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider(
+                frame_header,
                 pcm,
                 start_frame,
                 step,
@@ -869,6 +932,51 @@ pub fn layer3_main_data_capacity_bits(header: FrameHeader) -> Result<usize, Erro
     layer3_main_data_capacity_bytes(header)?
         .checked_mul(8)
         .ok_or(Error::InvalidInput("MP3 frame capacity overflows"))
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Layer3PaddingSchedule {
+    header: FrameHeader,
+    slot_remainder: u64,
+    sample_rate: u64,
+    accumulator: u64,
+}
+
+impl Layer3PaddingSchedule {
+    fn new(mut header: FrameHeader) -> Result<Self, Error> {
+        if header.layer != Layer::Layer3 {
+            return Err(Error::UnsupportedFeature(
+                "MP3 padding schedule requires Layer III",
+            ));
+        }
+        header.padding = false;
+        let coefficient = if header.version == MpegVersion::Mpeg1 {
+            144_u64
+        } else {
+            72_u64
+        };
+        let sample_rate = u64::from(header.sample_rate);
+        let slots = coefficient
+            .checked_mul(u64::from(header.bitrate_kbps))
+            .and_then(|value| value.checked_mul(1000))
+            .ok_or(Error::InvalidInput("MP3 frame length overflow"))?;
+        Ok(Self {
+            header,
+            slot_remainder: slots % sample_rate,
+            sample_rate,
+            accumulator: 0,
+        })
+    }
+
+    fn next_header(&mut self) -> FrameHeader {
+        let mut header = self.header;
+        self.accumulator += self.slot_remainder;
+        if self.accumulator >= self.sample_rate {
+            self.accumulator -= self.sample_rate;
+            header.padding = true;
+        }
+        header
+    }
 }
 
 pub fn assemble_layer3_frame(
@@ -8034,6 +8142,7 @@ mod tests {
         big_value_pairs, count1_quads, crc16_mpeg_audio, decode, encode,
         encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors,
@@ -11013,6 +11122,55 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn encodes_pcm_frames_with_cbr_bitrate_padding_schedule() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..(1152 * 3))
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let unpadded_header = layer3_header_for_capacity(44_100, 1, 128, false, false).unwrap();
+        let padded_header = layer3_header_for_capacity(44_100, 1, 128, true, false).unwrap();
+
+        let cbr = encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+        let fixed = encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            false,
+            provider,
+        )
+        .unwrap();
+
+        let first = FrameHeader::parse(&cbr[..4]).unwrap();
+        let second_offset = first.frame_len();
+        let second = FrameHeader::parse(&cbr[second_offset..second_offset + 4]).unwrap();
+        let third_offset = second_offset + second.frame_len();
+        let third = FrameHeader::parse(&cbr[third_offset..third_offset + 4]).unwrap();
+
+        assert_eq!(first, unpadded_header);
+        assert_eq!(second, padded_header);
+        assert_eq!(third, padded_header);
+        assert_eq!(
+            cbr.len(),
+            unpadded_header.frame_len() + 2 * padded_header.frame_len()
+        );
+        assert_eq!(fixed.len(), 3 * unpadded_header.frame_len());
+        assert!(cbr.len() > fixed.len());
     }
 
     #[test]
