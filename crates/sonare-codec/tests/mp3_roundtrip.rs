@@ -34,6 +34,73 @@ fn rms(samples: &[f32]) -> f64 {
     (sum / samples.len() as f64).sqrt()
 }
 
+/// Best-lag correlation of a reference channel against a decoded channel,
+/// scanning a window of lags to absorb the codec delay. Returns the correlation.
+fn aligned_channel_corr(reference: &[f32], decoded: &[f32], seg: usize, ref_start: usize) -> f64 {
+    let reference = &reference[ref_start..ref_start + seg];
+    let mut best = f64::NEG_INFINITY;
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded[start..start + seg]);
+        if c > best {
+            best = c;
+        }
+    }
+    best
+}
+
+#[test]
+fn mp3_stereo_roundtrip_reconstructs_both_channels() {
+    let sample_rate = 44_100;
+    let frames = 22_050;
+    // Two distinct sweeps so a channel swap or cross-talk would be visible.
+    let left: Vec<f32> = (0..frames)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let f = 300.0 + 5_000.0 * (i as f32 / frames as f32);
+            0.5 * (std::f32::consts::TAU * f * t).sin()
+        })
+        .collect();
+    // A steady tone on the right channel: distinct from the left sweep so a swap
+    // or cross-talk is visible, and it aligns exactly (no chirp penalty).
+    let right: Vec<f32> = (0..frames)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 1_500.0 * (i as f32 / sample_rate as f32)).sin())
+        .collect();
+    let interleaved: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MP3 encode");
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2, "expected stereo reconstruction");
+
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+
+    let seg = 8_192;
+    let ref_start = 6_000;
+    let lc = aligned_channel_corr(&left, &dec_left, seg, ref_start);
+    let rc = aligned_channel_corr(&right, &dec_right, seg, ref_start);
+    // Cross-correlation should be low: left input must not match the right channel.
+    let cross = aligned_channel_corr(&left, &dec_right, seg, ref_start);
+    eprintln!("stereo roundtrip: left_corr={lc:.4} right_corr={rc:.4} cross(L vs Rdec)={cross:.4}");
+
+    assert!(lc > 0.6, "left channel correlation too low: {lc:.4}");
+    assert!(rc > 0.6, "right channel correlation too low: {rc:.4}");
+    // Channel separation: each decoded channel must match its own input far
+    // better than the other channel's input (proves no swap or cross-talk).
+    assert!(
+        lc > cross + 0.3,
+        "channels not separated (L corr {lc:.4} vs cross {cross:.4})"
+    );
+}
+
 /// Pearson correlation of two equal-length slices.
 fn correlation(a: &[f32], b: &[f32]) -> f64 {
     let n = a.len().min(b.len());

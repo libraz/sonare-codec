@@ -1135,27 +1135,12 @@ pub fn quantize_pcm_long_block(
     start_frame: usize,
     step: f32,
 ) -> Result<Vec<i32>, Error> {
-    if pcm.channels == 1 {
-        let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
-        let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
-        return quantize_spectrum(&inverted, step, 8191);
-    }
-
-    quantize_pcm_long_block_with_cosine_subband_scaffold(pcm, channel, start_frame, step)
-}
-
-fn quantize_pcm_long_block_with_cosine_subband_scaffold(
-    pcm: &AudioBuffer,
-    channel: usize,
-    start_frame: usize,
-    step: f32,
-) -> Result<Vec<i32>, Error> {
-    let mut quantized = Vec::with_capacity(576);
-    for subband in 0_usize..32 {
-        let block = layer3_analysis_subband_block(pcm, channel, start_frame, subband)?;
-        quantized.extend(quantize_long_block(&block, step)?);
-    }
-    Ok(quantized)
+    // Both mono and each stereo channel run through the real polyphase + hybrid
+    // MDCT analysis (the channel index selects the PCM lane), so stereo
+    // reconstructs through a real decoder the same way mono does.
+    let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
+    let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
+    quantize_spectrum(&inverted, step, 8191)
 }
 
 /// Computes the `global_gain` that inverts a given quantizer `step`.
@@ -3635,10 +3620,10 @@ mod tests {
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
         pack_quantized_spectrum_with_table_provider, plan_spectral_regions, quantize_long_block,
-        quantize_pcm_long_block, quantize_pcm_long_block_with_cosine_subband_scaffold,
-        select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
-        select_big_value_table, select_big_value_table_by_bit_cost, select_count1_table,
-        select_count1_table_by_bit_cost, select_mpeg1_layer3_long_scale_factor_compress,
+        quantize_pcm_long_block, select_big_value_region_tables,
+        select_big_value_region_tables_by_bit_cost, select_big_value_table,
+        select_big_value_table_by_bit_cost, select_count1_table, select_count1_table_by_bit_cost,
+        select_mpeg1_layer3_long_scale_factor_compress,
         select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
         select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
@@ -4590,7 +4575,7 @@ mod tests {
     }
 
     #[test]
-    fn quantizes_mono_with_polyphase_filterbank_and_stereo_with_scaffold() {
+    fn quantizes_mono_and_stereo_with_polyphase_filterbank() {
         let mono = AudioBuffer::new(
             44_100,
             1,
@@ -4608,6 +4593,8 @@ mod tests {
             expected_mono
         );
 
+        // Each stereo channel runs through the same real polyphase + hybrid MDCT
+        // analysis as mono, selected by the channel index.
         let stereo = AudioBuffer::new(
             44_100,
             2,
@@ -4621,12 +4608,19 @@ mod tests {
                 .collect(),
         )
         .unwrap();
-        let scaffold =
-            quantize_pcm_long_block_with_cosine_subband_scaffold(&stereo, 1, 576, 0.01).unwrap();
-
-        assert_eq!(
+        for channel in 0..2 {
+            let spectrum = layer3_long_block_spectrum(&stereo, channel, 576).unwrap();
+            let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
+            let expected = quantize_spectrum(&inverted, 0.01, 8191).unwrap();
+            assert_eq!(
+                quantize_pcm_long_block(&stereo, channel, 576, 0.01).unwrap(),
+                expected
+            );
+        }
+        // The two channels carry distinct signals, so their spectra differ.
+        assert_ne!(
+            quantize_pcm_long_block(&stereo, 0, 576, 0.01).unwrap(),
             quantize_pcm_long_block(&stereo, 1, 576, 0.01).unwrap(),
-            scaffold
         );
     }
 
