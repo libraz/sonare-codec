@@ -12,25 +12,32 @@ pub use sc_mp3::{
     assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors,
     assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
-    experimental_unit_magnitude_table_provider, mpeg1_layer3_standard_big_value_table_provider,
+    experimental_unit_magnitude_table_provider, layer3_header_for_capacity,
+    layer3_main_data_capacity_bits, layer3_main_data_capacity_bytes,
+    mpeg1_layer3_global_gain_for_step, mpeg1_layer3_standard_big_value_table_provider,
     mpeg1_layer3_standard_table_provider, pack_big_value_pairs_with_region_tables_and_provider,
     pack_layer3_main_data_payloads, pack_mpeg1_layer3_long_quantized_spectrum_for_granule,
     pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_and_table_provider,
     pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_for_granule,
     pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider,
     pack_mpeg1_layer3_long_scale_factors, pack_mpeg1_layer3_long_scale_factors_for_granule,
-    pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_and_table_provider,
-    pack_mpeg1_layer3_pcm_long_block_with_selected_scale_factors_for_granule,
+    pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider,
+    pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
     select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
     select_big_value_table_by_bit_cost, select_count1_table_by_bit_cost,
     select_mpeg1_layer3_long_scale_factor_compress,
     select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
+    select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
     select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
+    select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
     select_mpeg1_layer3_pcm_frame_step_with_table_provider, ChannelMode, FrameHeader, Layer,
     Layer3BigValueMagnitude, Layer3BigValuePair, Layer3BigValueRegionTableSelection,
     Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad, Layer3Count1Quad,
@@ -42,11 +49,14 @@ pub use sc_mp3::{
 
 #[cfg(feature = "aac")]
 pub use sc_aac::{
-    aac_lc_long_window_scale_factor_band_offsets, aac_scale_factor_delta_zero_table,
-    encode_pcm_mono_long_block_adts_by_bit_cost,
+    aac_lc_adts_max_frame_len_for_bitrate, aac_lc_long_window_scale_factor_band_offsets,
+    aac_scale_factor_delta_zero_table, aac_unsigned_pairs7_unit_magnitude_spectral_tables,
+    aac_unsigned_pairs7_unit_magnitude_table, encode_pcm_mono_long_block_adts_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_auto_step_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_offsets_and_auto_step_by_bit_cost,
+    encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost,
+    encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_scale_factors,
     encode_pcm_mono_long_block_adts_stream_with_scale_factors_by_bit_cost,
@@ -59,10 +69,14 @@ pub use sc_aac::{
     encode_pcm_stereo_long_block_adts_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_auto_step_by_bit_cost,
+    encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost,
+    encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
+    encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_scale_factors,
     encode_pcm_stereo_long_block_adts_stream_with_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_selected_scale_factors,
     encode_pcm_stereo_long_block_adts_stream_with_selected_scale_factors_by_bit_cost,
+    encode_pcm_stereo_long_block_adts_with_offsets_and_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_with_scale_factors,
     encode_pcm_stereo_long_block_adts_with_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_with_selected_scale_factors,
@@ -82,17 +96,26 @@ pub use sc_aac::{
     pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost, plan_sections_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_with_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_offsets_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_by_bit_cost,
-    select_aac_lc_stereo_pcm_frame_step_details_by_bit_cost, select_codebook_by_bit_cost,
-    select_scale_factors_for_quantized_bands, AacCodebook, AacLongBlockConfig,
-    AacPcmFrameStepSelection, AacPcmLongBlockConfig, AacPcmStepSearchConfig, AacProfile,
-    AacQuantizedChannel, AacQuantizedSpectrum, AacScaleFactorChannel, AacScaleFactorDelta,
-    AacScaleFactorSequence, AacSection, AacSpectralMagnitudePair, AacSpectralMagnitudeTables,
-    AacSpectralPair, AacSpectralTables, AdtsConfig,
+    select_aac_lc_stereo_pcm_frame_step_details_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_with_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost,
+    select_codebook_by_bit_cost, select_scale_factors_for_quantized_bands, AacCodebook,
+    AacLongBlockConfig, AacPcmFrameStepSelection, AacPcmLongBlockConfig, AacPcmStepSearchConfig,
+    AacProfile, AacQuantizedChannel, AacQuantizedSpectrum, AacScaleFactorChannel,
+    AacScaleFactorDelta, AacScaleFactorSequence, AacSection, AacSpectralMagnitudePair,
+    AacSpectralMagnitudeTables, AacSpectralPair, AacSpectralTables, AdtsConfig,
     AAC_LC_48K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS, AAC_LC_PCM_STEP_CANDIDATES,
     AAC_SCALE_FACTOR_DELTA_ZERO_TABLE,
 };
@@ -158,16 +181,16 @@ pub fn encode(format: Format, pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 /// Encodes interleaved PCM while applying a caller-selected stability policy.
 ///
 /// `ProductionOnly` accepts the currently production-grade paths and rejects
-/// non-silent MP3/AAC output that still relies on experimental scaffold logic.
+/// non-silent lossy output that still relies on unsupported scaffold logic.
 pub fn encode_with_mode(
     format: Format,
     pcm: &AudioBuffer,
     mode: EncodeMode,
 ) -> Result<Vec<u8>, Error> {
-    if mode == EncodeMode::ProductionOnly && is_experimental_non_silent_encode(format, pcm) {
-        return Err(Error::UnsupportedFeature(
-            "production non-silent lossy encode",
-        ));
+    if mode == EncodeMode::ProductionOnly {
+        if let Some(reason) = production_encode_rejection_reason(format, pcm) {
+            return Err(Error::UnsupportedFeature(reason));
+        }
     }
 
     match format {
@@ -180,8 +203,35 @@ pub fn encode_with_mode(
     }
 }
 
-fn is_experimental_non_silent_encode(format: Format, pcm: &AudioBuffer) -> bool {
-    matches!(format, Format::Mp3 | Format::Aac) && !is_silent_pcm(pcm)
+fn production_encode_rejection_reason(format: Format, pcm: &AudioBuffer) -> Option<&'static str> {
+    if is_silent_pcm(pcm) {
+        return None;
+    }
+
+    match format {
+        Format::Mp3 if !is_mp3_non_silent_production_candidate(pcm) => {
+            Some("production MP3 encode currently supports mono/stereo MPEG-1 sample rates only")
+        }
+        Format::Aac if !is_aac_non_silent_production_candidate(pcm) => Some(
+            "production AAC-LC encode currently supports mono/stereo 7.35/8/11.025/12/16/22.05/24/32/44.1/48/64/88.2/96kHz only",
+        ),
+        _ => None,
+    }
+}
+
+fn is_mp3_non_silent_production_candidate(pcm: &AudioBuffer) -> bool {
+    matches!(pcm.channels, 1 | 2) && matches!(pcm.sample_rate, 32_000 | 44_100 | 48_000)
+}
+
+#[cfg(feature = "aac")]
+fn is_aac_non_silent_production_candidate(pcm: &AudioBuffer) -> bool {
+    matches!(pcm.channels, 1 | 2)
+        && sc_aac::aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate).is_some()
+}
+
+#[cfg(not(feature = "aac"))]
+fn is_aac_non_silent_production_candidate(_pcm: &AudioBuffer) -> bool {
+    false
 }
 
 fn is_silent_pcm(pcm: &AudioBuffer) -> bool {
@@ -427,6 +477,50 @@ pub fn encode_aac(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 }
 
 #[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    let channels = u8::try_from(pcm.channels)
+        .map_err(|_| Error::InvalidInput("AAC channel count is unsupported"))?;
+    let adts = AdtsConfig::aac_lc(pcm.sample_rate, channels);
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
+        .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
+    let channel_config = AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
+    let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
+    let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
+    let scale_factor_table = aac_scale_factor_delta_zero_table();
+    let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+
+    match pcm.channels {
+        1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            offsets,
+            AAC_LC_PCM_STEP_CANDIDATES,
+            target_bitrate_bps,
+            scale_factor_table,
+            spectral_tables,
+        ),
+        2 => encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+            adts,
+            channel,
+            channel,
+            pcm,
+            offsets,
+            AAC_LC_PCM_STEP_CANDIDATES,
+            target_bitrate_bps,
+            scale_factor_table,
+            spectral_tables,
+        ),
+        _ => Err(Error::InvalidInput(
+            "AAC bitrate encode requires mono or stereo PCM",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
 pub fn frame_aac_adts(config: AdtsConfig, access_unit: &[u8]) -> Result<Vec<u8>, Error> {
     sc_aac::frame_adts(config, access_unit)
 }
@@ -512,8 +606,8 @@ fn encode_aac_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 #[cfg(test)]
 mod tests {
     use super::{
-        decode, detect, encode, encode_wav, encode_with_mode, AudioBuffer, EncodeMode, Error,
-        Format, StreamDecoder,
+        decode, encode, encode_wav, encode_with_mode, AudioBuffer, EncodeMode, Error, Format,
+        StreamDecoder,
     };
 
     #[cfg(feature = "opus")]
@@ -599,12 +693,12 @@ mod tests {
         let encoded = encode(Format::Opus, &pcm).expect("opus encode");
 
         assert_eq!(&encoded[..4], b"OggS");
-        assert_eq!(detect(&encoded), Some(Format::Opus));
+        assert_eq!(super::detect(&encoded), Some(Format::Opus));
         assert_eq!(encode_opus(&pcm).expect("encode_opus"), encoded);
         let production = encode_with_mode(Format::Opus, &pcm, EncodeMode::ProductionOnly)
             .expect("production opus");
         assert_eq!(&production[..4], b"OggS");
-        assert_eq!(detect(&production), Some(Format::Opus));
+        assert_eq!(super::detect(&production), Some(Format::Opus));
     }
 
     #[test]
@@ -613,11 +707,11 @@ mod tests {
         let pcm = AudioBuffer::new(48_000, 1, vec![0.0; 4800]).unwrap();
         let encoded = encode(Format::Vorbis, &pcm).expect("vorbis encode");
         assert_eq!(&encoded[..4], b"OggS");
-        assert_eq!(detect(&encoded), Some(Format::Vorbis));
+        assert_eq!(super::detect(&encoded), Some(Format::Vorbis));
         let production = encode_with_mode(Format::Vorbis, &pcm, EncodeMode::ProductionOnly)
             .expect("production vorbis");
         assert_eq!(&production[..4], b"OggS");
-        assert_eq!(detect(&production), Some(Format::Vorbis));
+        assert_eq!(super::detect(&production), Some(Format::Vorbis));
     }
 
     #[test]
@@ -726,37 +820,46 @@ mod tests {
     #[test]
     #[cfg(feature = "mp3")]
     fn dispatches_non_silent_mp3_encode_as_layer3_scaffold() {
-        let pcm = AudioBuffer::new(
-            44_100,
-            1,
-            (0..2048)
-                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
-                .collect(),
-        )
-        .unwrap();
+        for (sample_rate, channels) in [
+            (32_000, 1),
+            (44_100, 1),
+            (48_000, 1),
+            (32_000, 2),
+            (44_100, 2),
+            (48_000, 2),
+        ] {
+            let mut samples = Vec::new();
+            for frame in 0..2048 {
+                for channel in 0..channels {
+                    let phase = if channel == 0 { 0.01 } else { 0.013 };
+                    samples.push(((frame as f32) * phase).sin() * 0.25);
+                }
+            }
+            let pcm = AudioBuffer::new(sample_rate, channels, samples).unwrap();
 
-        let mp3 = encode(Format::Mp3, &pcm).unwrap();
-        let err = encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap_err();
-        let zero_payload =
-            super::encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
-                &pcm,
-                f32::MAX,
-                super::Layer3EntropyTableProvider::default(),
-            )
-            .unwrap();
-        let decoded = decode(&mp3).unwrap();
+            let mp3 = encode(Format::Mp3, &pcm).unwrap();
+            let production =
+                encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap();
+            let zero_payload = super::encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
+                    &pcm,
+                    f32::MAX,
+                    super::Layer3EntropyTableProvider::default(),
+                )
+                .unwrap();
+            let decoded = decode(&mp3).unwrap();
 
-        assert!(matches!(
-            err,
-            Error::UnsupportedFeature("production non-silent lossy encode")
-        ));
-        assert_eq!(&mp3[..2], &[0xff, 0xfb]);
-        assert_eq!(super::detect(&mp3), Some(Format::Mp3));
-        assert!(mp3.len() > 4);
-        assert_ne!(mp3, zero_payload);
-        assert_eq!(decoded.sample_rate, 44_100);
-        assert_eq!(decoded.channels, 1);
-        assert_eq!(decoded.samples.len(), 2304);
+            assert_eq!(&mp3[..2], &[0xff, 0xfb]);
+            assert_eq!(
+                production, mp3,
+                "sample_rate={sample_rate} channels={channels}"
+            );
+            assert_eq!(super::detect(&mp3), Some(Format::Mp3));
+            assert!(mp3.len() > 4);
+            assert_ne!(mp3, zero_payload);
+            assert_eq!(decoded.sample_rate, sample_rate);
+            assert_eq!(decoded.channels, channels);
+            assert_eq!(decoded.samples.len(), 2304 * usize::from(channels));
+        }
     }
 
     #[test]
@@ -773,6 +876,138 @@ mod tests {
             .unwrap();
 
         assert_eq!(scaffold, encode(Format::Mp3, &pcm).unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "mp3")]
+    fn exposes_mp3_pcm_payload_budget_helper() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..1152)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let header = super::FrameHeader {
+            version: super::MpegVersion::Mpeg1,
+            layer: super::Layer::Layer3,
+            protection_absent: true,
+            bitrate_kbps: 128,
+            sample_rate: 44_100,
+            padding: false,
+            channel_mode: super::ChannelMode::SingleChannel,
+        };
+        let provider = super::mpeg1_layer3_standard_table_provider();
+        let unconstrained = super::select_mpeg1_layer3_pcm_frame_step_details_with_table_provider(
+            header,
+            &pcm,
+            0,
+            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            provider,
+        )
+        .unwrap();
+
+        let step =
+            super::select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                0,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                unconstrained.payload_bit_len,
+                provider,
+            )
+            .unwrap();
+        let details =
+            super::select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                0,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                unconstrained.payload_bit_len,
+                provider,
+            )
+            .unwrap();
+        let budgeted =
+            super::encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider(
+                &pcm,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                unconstrained.payload_bit_len,
+                provider,
+            )
+            .unwrap();
+        let selected =
+            super::encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
+                &pcm, step, provider,
+            )
+            .unwrap();
+
+        assert_eq!(step, unconstrained.step);
+        assert_eq!(details.step, step);
+        assert_eq!(details.frame_capacity_bits, unconstrained.payload_bit_len);
+        assert!(details.payload_bit_len <= unconstrained.payload_bit_len);
+        assert_eq!(super::layer3_main_data_capacity_bits(header).unwrap(), 3168);
+        assert_eq!(super::layer3_main_data_capacity_bytes(header).unwrap(), 396);
+        assert_eq!(
+            super::layer3_main_data_capacity_bytes(
+                super::layer3_header_for_capacity(44_100, 2, 128, false, false).unwrap()
+            )
+            .unwrap(),
+            381
+        );
+        assert_eq!(budgeted, selected);
+        assert!(
+            super::select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider(
+                header,
+                &pcm,
+                0,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                0,
+                provider,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "mp3")]
+    fn exposes_mp3_pcm_bitrate_helper() {
+        let pcm = AudioBuffer::new(
+            44_100,
+            1,
+            (0..1152)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let provider = super::mpeg1_layer3_standard_table_provider();
+        let header = super::layer3_header_for_capacity(44_100, 1, 96, false, false).unwrap();
+
+        let encoded = super::encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+            &pcm,
+            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            96,
+            false,
+            false,
+            provider,
+        )
+        .unwrap();
+        let parsed = super::FrameHeader::parse(&encoded[..4]).unwrap();
+
+        assert_eq!(parsed, header);
+        assert_eq!(parsed.bitrate_kbps, 96);
+        assert_eq!(encoded.len(), header.frame_len());
+        assert!(
+            super::encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
+                &pcm,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                123,
+                false,
+                false,
+                provider,
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -848,6 +1083,135 @@ mod tests {
 
     #[test]
     #[cfg(feature = "aac")]
+    fn exposes_aac_pcm_bitrate_budget_stream_helper() {
+        fn max_adts_frame_len(stream: &[u8]) -> usize {
+            let mut max_len = 0;
+            let mut offset = 0;
+            while offset + 7 <= stream.len() {
+                let frame_len = (((stream[offset + 3] & 0x03) as usize) << 11)
+                    | ((stream[offset + 4] as usize) << 3)
+                    | ((stream[offset + 5] as usize) >> 5);
+                assert!(frame_len >= 7);
+                assert!(offset + frame_len <= stream.len());
+                max_len = max_len.max(frame_len);
+                offset += frame_len;
+            }
+            assert_eq!(offset, stream.len());
+            max_len
+        }
+
+        let mono = AudioBuffer::new(
+            44_100,
+            1,
+            (0..2048)
+                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
+                .collect(),
+        )
+        .unwrap();
+        let mut stereo_samples = Vec::new();
+        for sample in 0..2048 {
+            stereo_samples.push(((sample as f32) * 0.01).sin() * 0.25);
+            stereo_samples.push(((sample as f32) * 0.013).cos() * 0.20);
+        }
+        let stereo = AudioBuffer::new(44_100, 2, stereo_samples).unwrap();
+        let offsets = super::aac_lc_long_window_scale_factor_band_offsets(44_100).unwrap();
+        let channel_config = super::AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
+        let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
+        let channel = super::AacScaleFactorChannel::new(channel_config, &scale_factors);
+        let scale_factor_table = super::aac_scale_factor_delta_zero_table();
+        let spectral_tables = super::aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+
+        let mono_target_bitrate = 10_000;
+        let mono_budget =
+            super::aac_lc_adts_max_frame_len_for_bitrate(44_100, mono_target_bitrate).unwrap();
+        let mono_adts =
+            super::encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 1),
+                channel,
+                &mono,
+                offsets,
+                super::AAC_LC_PCM_STEP_CANDIDATES,
+                mono_target_bitrate,
+                scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+
+        let stereo_target_bitrate = 14_000;
+        let stereo_budget =
+            super::aac_lc_adts_max_frame_len_for_bitrate(44_100, stereo_target_bitrate).unwrap();
+        let stereo_adts =
+            super::encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 2),
+                channel,
+                channel,
+                &stereo,
+                offsets,
+                super::AAC_LC_PCM_STEP_CANDIDATES,
+                stereo_target_bitrate,
+                scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_adts_high_level =
+            super::encode_aac_adts_with_bitrate(&mono, mono_target_bitrate).unwrap();
+        let stereo_adts_high_level =
+            super::encode_aac_adts_with_bitrate(&stereo, stereo_target_bitrate).unwrap();
+
+        assert_eq!(&mono_adts[..2], &[0xff, 0xf1]);
+        assert_eq!(&stereo_adts[..2], &[0xff, 0xf1]);
+        assert_eq!(mono_adts_high_level, mono_adts);
+        assert_eq!(stereo_adts_high_level, stereo_adts);
+        assert!(max_adts_frame_len(&mono_adts) <= mono_budget);
+        assert!(max_adts_frame_len(&stereo_adts) <= stereo_budget);
+        assert!(super::aac_lc_adts_max_frame_len_for_bitrate(44_100, 1).is_err());
+        assert!(super::encode_aac_adts_with_bitrate(&mono, 1).is_err());
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
+    fn exposes_aac_unsigned_pairs7_unit_magnitude_table() {
+        let table = super::aac_unsigned_pairs7_unit_magnitude_table();
+        assert_eq!(table.len(), 4);
+        assert_eq!(table[0].symbol, super::AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, super::HuffmanCode::new(0b0, 1).unwrap());
+        assert_eq!(table[1].symbol, super::AacSpectralMagnitudePair::new(0, 1));
+        assert_eq!(table[1].code, super::HuffmanCode::new(0b101, 3).unwrap());
+        assert_eq!(table[2].symbol, super::AacSpectralMagnitudePair::new(1, 0));
+        assert_eq!(table[2].code, super::HuffmanCode::new(0b100, 3).unwrap());
+        assert_eq!(table[3].symbol, super::AacSpectralMagnitudePair::new(1, 1));
+        assert_eq!(table[3].code, super::HuffmanCode::new(0b1100, 4).unwrap());
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
+    fn exposes_aac_codebook7_section_planning() {
+        let sections = super::plan_sections_by_bit_cost(
+            &[1, -1, 0, 0],
+            2,
+            super::AacSpectralMagnitudeTables::default(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            sections,
+            vec![
+                super::AacSection {
+                    start: 0,
+                    end: 2,
+                    codebook: super::AacCodebook::UnsignedPairs7,
+                },
+                super::AacSection {
+                    start: 2,
+                    end: 4,
+                    codebook: super::AacCodebook::Zero,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "aac")]
     fn dispatches_silent_aac_encode_as_adts() {
         let pcm = AudioBuffer::new(44_100, 1, vec![0.0; 1024]).unwrap();
 
@@ -876,34 +1240,54 @@ mod tests {
     #[test]
     #[cfg(feature = "aac")]
     fn dispatches_non_silent_aac_encode_as_adts_scaffold() {
-        let pcm = AudioBuffer::new(
-            44_100,
-            1,
-            (0..2048)
-                .map(|sample| ((sample as f32) * 0.01).sin() * 0.25)
-                .collect(),
-        )
-        .unwrap();
+        for (sample_rate, channels) in [
+            (7_350, 1),
+            (8_000, 1),
+            (11_025, 1),
+            (12_000, 1),
+            (16_000, 1),
+            (22_050, 1),
+            (24_000, 1),
+            (32_000, 1),
+            (44_100, 1),
+            (48_000, 1),
+            (64_000, 1),
+            (88_200, 1),
+            (96_000, 1),
+            (7_350, 2),
+            (8_000, 2),
+            (11_025, 2),
+            (12_000, 2),
+            (16_000, 2),
+            (22_050, 2),
+            (24_000, 2),
+            (32_000, 2),
+            (44_100, 2),
+            (48_000, 2),
+            (64_000, 2),
+            (88_200, 2),
+            (96_000, 2),
+        ] {
+            let mut samples = Vec::new();
+            for frame in 0..2048 {
+                for channel in 0..channels {
+                    let phase = if channel == 0 { 0.01 } else { 0.013 };
+                    samples.push(((frame as f32) * phase).sin() * 0.25);
+                }
+            }
+            let pcm = AudioBuffer::new(sample_rate, channels, samples).unwrap();
 
-        let adts = encode(Format::Aac, &pcm).unwrap();
-        let err = encode_with_mode(Format::Aac, &pcm, EncodeMode::ProductionOnly).unwrap_err();
-        let decoded = decode(&adts).unwrap();
-        let m4a = super::mux_aac_adts_as_m4a(&adts).unwrap();
-        let decoded_m4a = decode(&m4a).unwrap();
+            let adts = encode(Format::Aac, &pcm).unwrap();
+            let production =
+                encode_with_mode(Format::Aac, &pcm, EncodeMode::ProductionOnly).unwrap();
+            let m4a = super::mux_aac_adts_as_m4a(&adts).unwrap();
 
-        assert!(matches!(
-            err,
-            Error::UnsupportedFeature("production non-silent lossy encode")
-        ));
-        assert_eq!(&adts[..2], &[0xff, 0xf1]);
-        assert_eq!(super::detect(&adts), Some(Format::Aac));
-        assert!(adts.len() > 7);
-        assert_eq!(decoded.sample_rate, 44_100);
-        assert_eq!(decoded.channels, 1);
-        assert_eq!(decoded.samples.len(), 2048);
-        assert!(decoded.samples.iter().all(|sample| *sample == 0.0));
-        assert_eq!(decoded_m4a.sample_rate, decoded.sample_rate);
-        assert_eq!(decoded_m4a.channels, decoded.channels);
-        assert_eq!(decoded_m4a.samples.len(), decoded.samples.len());
+            assert_eq!(&adts[..2], &[0xff, 0xf1]);
+            assert_eq!(&production[..2], &[0xff, 0xf1]);
+            assert_eq!(production, adts);
+            assert_eq!(super::detect(&adts), Some(Format::Aac));
+            assert!(adts.len() > 7);
+            assert!(m4a.len() > adts.len());
+        }
     }
 }
