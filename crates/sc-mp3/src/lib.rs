@@ -11,6 +11,64 @@ use sc_core::{
 mod filterbank;
 
 pub const MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT: usize = 21;
+
+/// Number of boundary entries in an MPEG-1 Layer III long-block scale-factor
+/// band index. The 23 boundaries delimit 22 spectral bands; scale factors are
+/// transmitted for the first 21 (the highest band carries none).
+pub const MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES: usize = 23;
+
+/// MPEG-1 Layer III long-block scale-factor band boundaries at 44.1 kHz
+/// (ISO/IEC 11172-3 Annex B, `sfBandIndex`). Entry `b` is the first spectral
+/// line of band `b`; the final entry (576) terminates the last band.
+const MPEG1_LAYER3_LONG_SFB_44100: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] = [
+    0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418,
+    576,
+];
+
+/// MPEG-1 Layer III long-block scale-factor band boundaries at 48 kHz.
+const MPEG1_LAYER3_LONG_SFB_48000: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] = [
+    0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384,
+    576,
+];
+
+/// MPEG-1 Layer III long-block scale-factor band boundaries at 32 kHz.
+const MPEG1_LAYER3_LONG_SFB_32000: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] = [
+    0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 54, 66, 82, 102, 126, 156, 194, 240, 296, 364, 448, 550,
+    576,
+];
+
+/// Returns the MPEG-1 Layer III long-block scale-factor band index for the
+/// given sample rate (ISO/IEC 11172-3 Annex B). Only the three MPEG-1 rates
+/// are defined; other rates are rejected.
+pub fn mpeg1_layer3_long_scalefactor_band_index(
+    sample_rate: u32,
+) -> Result<&'static [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES], Error> {
+    match sample_rate {
+        44_100 => Ok(&MPEG1_LAYER3_LONG_SFB_44100),
+        48_000 => Ok(&MPEG1_LAYER3_LONG_SFB_48000),
+        32_000 => Ok(&MPEG1_LAYER3_LONG_SFB_32000),
+        _ => Err(Error::InvalidInput(
+            "MP3 long-block scale-factor band index undefined for sample rate",
+        )),
+    }
+}
+
+/// Returns the `[start, end)` spectral-line range of one long-block transmitted
+/// scale-factor band (`band` in `0..MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT`) at
+/// the given sample rate.
+pub fn mpeg1_layer3_long_scalefactor_band_range(
+    band: usize,
+    sample_rate: u32,
+) -> Result<(usize, usize), Error> {
+    if band >= MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+        return Err(Error::InvalidInput(
+            "MP3 long-block scale-factor band index out of range",
+        ));
+    }
+    let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate)?;
+    Ok((usize::from(index[band]), usize::from(index[band + 1])))
+}
+
 pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     0.0005,
     0.001,
@@ -8357,6 +8415,7 @@ mod tests {
         experimental_unit_magnitude_table_provider, layer3_analysis_subband_block,
         layer3_header_for_capacity, layer3_long_block_spectrum, layer3_main_data_capacity_bits,
         layer3_main_data_capacity_bytes, mdct_long_block, mpeg1_layer3_global_gain_for_step,
+        mpeg1_layer3_long_scalefactor_band_index, mpeg1_layer3_long_scalefactor_band_range,
         mpeg1_layer3_standard_big_value_table_provider, mpeg1_layer3_standard_table_provider,
         pack_big_value_pairs_with_linbits, pack_big_value_pairs_with_region_tables_and_provider,
         pack_big_value_pairs_with_sign_bits, pack_big_value_pairs_with_table,
@@ -8390,8 +8449,8 @@ mod tests {
         Layer3EntropyTableProvider, Layer3EntropyTables, Layer3GranuleChannelInfo,
         Layer3PcmFrameStepSelection, Layer3ScaleFactorCompress, Layer3SideInfo,
         Layer3SpectralRegions, Layer3WindowSwitching, MpegVersion, ALIAS_REDUCTION_C,
-        LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
-        MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES,
+        MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     };
     use sc_core::{
         detect, quantize_spectrum, AudioBuffer, BitReader, Error, Format, HuffmanCode,
@@ -11628,5 +11687,50 @@ mod tests {
             );
             previous_snr = snr;
         }
+    }
+
+    #[test]
+    fn long_scalefactor_band_index_is_well_formed() {
+        for rate in [32_000_u32, 44_100, 48_000] {
+            let index = mpeg1_layer3_long_scalefactor_band_index(rate).unwrap();
+            assert_eq!(index[0], 0, "{rate}: first boundary must be line 0");
+            assert_eq!(
+                index[MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES - 1],
+                576,
+                "{rate}: long block spans 576 lines"
+            );
+            for pair in index.windows(2) {
+                assert!(
+                    pair[1] > pair[0],
+                    "{rate}: boundaries must increase strictly ({} !> {})",
+                    pair[1],
+                    pair[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn long_scalefactor_band_index_rejects_unknown_rate() {
+        assert!(mpeg1_layer3_long_scalefactor_band_index(22_050).is_err());
+    }
+
+    #[test]
+    fn long_scalefactor_band_range_tiles_transmitted_bands() {
+        // The 21 transmitted bands cover a contiguous prefix; the residual
+        // highest band (no transmitted scale factor) carries the remainder.
+        let (first_start, _) = mpeg1_layer3_long_scalefactor_band_range(0, 44_100).unwrap();
+        assert_eq!(first_start, 0);
+        let mut cursor = 0_usize;
+        for band in 0..MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+            let (start, end) = mpeg1_layer3_long_scalefactor_band_range(band, 44_100).unwrap();
+            assert_eq!(start, cursor, "band {band} is not contiguous");
+            assert!(end > start, "band {band} is empty");
+            cursor = end;
+        }
+        // 44.1 kHz: transmitted bands end at line 418; lines 418..576 are the
+        // residual band that carries no transmitted scale factor.
+        assert_eq!(cursor, 418);
+        assert!(mpeg1_layer3_long_scalefactor_band_range(21, 44_100).is_err());
     }
 }
