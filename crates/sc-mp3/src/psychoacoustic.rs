@@ -8,9 +8,10 @@
 //! Terhardt absolute threshold of hearing, and the Schroeder spreading function
 //! — which are evaluated at runtime for the FFT bin frequencies.
 //!
-//! The transforms intentionally favor clarity over speed (a direct DFT), matching
-//! the rest of the crate; a factorized FFT can replace [`power_spectrum`] later
-//! without changing the surrounding model.
+//! The half-spectrum transform uses an iterative radix-2 Cooley–Tukey FFT for
+//! power-of-two lengths (the Layer III psychoacoustic FFT is 1024 points) and
+//! falls back to a direct DFT otherwise. The direct DFT is retained as a
+//! reference and cross-checked against the FFT in the tests.
 
 use sc_core::Error;
 
@@ -57,12 +58,72 @@ impl ComplexBin {
     }
 }
 
-/// Computes the lower half-spectrum (`0..=N/2`) of a real signal via a direct
-/// DFT, returning one [`ComplexBin`] per retained bin.
+/// Returns whether `n` is a positive power of two.
+fn is_power_of_two(n: usize) -> bool {
+    n != 0 && (n & (n - 1)) == 0
+}
+
+/// In-place iterative radix-2 Cooley–Tukey FFT over the full complex spectrum.
 ///
-/// Only the non-redundant bins of a real input are returned (`N/2 + 1` of them);
-/// the remaining bins are conjugate mirrors. The signal must be non-empty.
-pub fn forward_dft_half(signal: &[f64]) -> Result<Vec<ComplexBin>, Error> {
+/// `re` and `im` carry the real and imaginary parts of `N` samples, where `N`
+/// (their shared length) is a power of two; on return they hold the forward
+/// transform `X[k] = Σ x[t]·e^(−i2πkt/N)`. Twiddle factors are advanced by
+/// complex multiplication within each stage to avoid a trig call per butterfly.
+fn radix2_fft_in_place(re: &mut [f64], im: &mut [f64]) {
+    let n = re.len();
+    if n < 2 {
+        return;
+    }
+
+    // Decimation-in-time bit-reversal permutation of the input order.
+    let mut j = 0usize;
+    for i in 1..n {
+        let mut bit = n >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j |= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+
+    // Butterfly stages over spans of length 2, 4, … N.
+    let mut span = 2usize;
+    while span <= n {
+        let angle = -std::f64::consts::TAU / span as f64;
+        let (step_cos, step_sin) = (angle.cos(), angle.sin());
+        let half = span / 2;
+        let mut base = 0usize;
+        while base < n {
+            let mut w_cos = 1.0_f64;
+            let mut w_sin = 0.0_f64;
+            for k in 0..half {
+                let a = base + k;
+                let b = a + half;
+                let t_re = w_cos * re[b] - w_sin * im[b];
+                let t_im = w_cos * im[b] + w_sin * re[b];
+                re[b] = re[a] - t_re;
+                im[b] = im[a] - t_im;
+                re[a] += t_re;
+                im[a] += t_im;
+                let next_cos = w_cos * step_cos - w_sin * step_sin;
+                let next_sin = w_cos * step_sin + w_sin * step_cos;
+                w_cos = next_cos;
+                w_sin = next_sin;
+            }
+            base += span;
+        }
+        span <<= 1;
+    }
+}
+
+/// Computes the lower half-spectrum (`0..=N/2`) of a real signal via a direct
+/// DFT, returning one [`ComplexBin`] per retained bin. Retained as the reference
+/// transform; [`forward_dft_half`] uses it only for non-power-of-two lengths.
+fn forward_dft_half_naive(signal: &[f64]) -> Result<Vec<ComplexBin>, Error> {
     let n = signal.len();
     if n == 0 {
         return Err(Error::InvalidInput(
@@ -83,6 +144,35 @@ pub fn forward_dft_half(signal: &[f64]) -> Result<Vec<ComplexBin>, Error> {
         out.push(ComplexBin { re, im });
     }
     Ok(out)
+}
+
+/// Computes the lower half-spectrum (`0..=N/2`) of a real signal, returning one
+/// [`ComplexBin`] per retained bin.
+///
+/// Only the non-redundant bins of a real input are returned (`N/2 + 1` of them);
+/// the remaining bins are conjugate mirrors. A radix-2 FFT is used when the
+/// length is a power of two and a direct DFT otherwise. The signal must be
+/// non-empty.
+pub fn forward_dft_half(signal: &[f64]) -> Result<Vec<ComplexBin>, Error> {
+    let n = signal.len();
+    if n == 0 {
+        return Err(Error::InvalidInput(
+            "psychoacoustic DFT input must be non-empty",
+        ));
+    }
+    if !is_power_of_two(n) {
+        return forward_dft_half_naive(signal);
+    }
+    let mut re = signal.to_vec();
+    let mut im = vec![0.0_f64; n];
+    radix2_fft_in_place(&mut re, &mut im);
+    let bins = n / 2 + 1;
+    Ok(re
+        .into_iter()
+        .zip(im)
+        .take(bins)
+        .map(|(re, im)| ComplexBin { re, im })
+        .collect())
 }
 
 /// Returns the per-bin energy (squared magnitude) of the half-spectrum of a real
@@ -472,6 +562,56 @@ mod tests {
     fn forward_dft_rejects_empty_input() {
         assert!(forward_dft_half(&[]).is_err());
         assert!(power_spectrum(&[]).is_err());
+    }
+
+    #[test]
+    fn fft_matches_the_naive_dft_on_a_multitone_signal() {
+        // The radix-2 FFT (power-of-two path) must agree with the reference DFT
+        // bin for bin. Use a deterministic multi-tone-plus-ramp signal at the
+        // psychoacoustic FFT length so leakage exercises every bin.
+        let n = 1024usize;
+        let signal: Vec<f64> = (0..n)
+            .map(|t| {
+                let x = t as f64;
+                0.7 * (std::f64::consts::TAU * 30.0 * x / n as f64).sin()
+                    + 0.4 * (std::f64::consts::TAU * 137.5 * x / n as f64).cos()
+                    + 0.05 * (x / n as f64)
+            })
+            .collect();
+        let fast = forward_dft_half(&signal).unwrap();
+        let reference = forward_dft_half_naive(&signal).unwrap();
+        assert_eq!(fast.len(), reference.len());
+        for (f, r) in fast.iter().zip(reference.iter()) {
+            assert!(approx(f.re, r.re, 1.0e-7), "re mismatch: {f:?} vs {r:?}");
+            assert!(approx(f.im, r.im, 1.0e-7), "im mismatch: {f:?} vs {r:?}");
+        }
+    }
+
+    #[test]
+    fn fft_and_naive_paths_agree_for_a_non_power_of_two_length() {
+        // Length 96 is not a power of two, so forward_dft_half falls back to the
+        // naive DFT; the two entry points must return identical results.
+        let n = 96usize;
+        let signal: Vec<f64> = (0..n)
+            .map(|t| (std::f64::consts::TAU * 7.0 * t as f64 / n as f64).cos())
+            .collect();
+        let viafront = forward_dft_half(&signal).unwrap();
+        let reference = forward_dft_half_naive(&signal).unwrap();
+        assert_eq!(viafront.len(), reference.len());
+        for (a, b) in viafront.iter().zip(reference.iter()) {
+            assert!(approx(a.re, b.re, 1.0e-9));
+            assert!(approx(a.im, b.im, 1.0e-9));
+        }
+    }
+
+    #[test]
+    fn power_of_two_predicate_is_correct() {
+        for &p in &[1usize, 2, 4, 8, 16, 1024, 4096] {
+            assert!(is_power_of_two(p));
+        }
+        for &q in &[0usize, 3, 6, 96, 1000, 1023] {
+            assert!(!is_power_of_two(q));
+        }
     }
 
     #[test]
