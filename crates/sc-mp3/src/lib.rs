@@ -7869,6 +7869,48 @@ pub fn assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_pro
     assemble_layer3_frame(header, &side_info, &main_data.bytes)
 }
 
+/// Assembles one self-contained MPEG-1 Layer III frame using perceptual
+/// scale-factor allocation (provider lookup).
+///
+/// Each granule/channel is packed with
+/// [`pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider`],
+/// so the quantization noise is shaped per scale-factor band. The frame is
+/// self-contained (`main_data_begin = 0`); the caller must pick a `step` and
+/// header bitrate whose main data fits one slot.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factors_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    provider,
+                )?;
+            payloads.push(payload);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    assemble_layer3_frame(header, &side_info, &main_data.bytes)
+}
+
 fn pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
     header: FrameHeader,
     pcm: &AudioBuffer,
