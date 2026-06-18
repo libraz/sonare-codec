@@ -1513,6 +1513,73 @@ pub fn quantize_pcm_long_block(
     quantize_spectrum(&inverted, step, 8191)
 }
 
+/// Per-band scale-factor gain applied to a long-block line before rounding.
+///
+/// The decoder attenuates band `sfb` by `2^(-0.5·(1+scalefac_scale)·sf)`
+/// (ISO/IEC 11172-3 §2.4.3.4). The chain's power-law quantizer raises the
+/// magnitude to the 3/4 power, so the encoder must pre-amplify the pre-rounded
+/// quantizer value by `2^(0.375·(1+scalefac_scale)·sf)` for the decoder's
+/// requantization to reconstruct the line exactly.
+fn long_block_scalefactor_quantizer_gain(scale_factor: u8, scalefac_scale: bool) -> f32 {
+    let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
+    2.0_f32.powf(0.75 * multiplier * f32::from(scale_factor))
+}
+
+/// Quantizes a long-block spectrum (576 lines) with per-band scale-factor
+/// noise shaping.
+///
+/// Each line is quantized with the ISO power law `is = nint(|xr|^0.75 / step)`
+/// and pre-amplified by its band's scale-factor gain
+/// ([`long_block_scalefactor_quantizer_gain`]) so the decoder's per-band
+/// attenuation reconstructs `xr`. Lines in the residual highest band (no
+/// transmitted scale factor) and any trailing lines are quantized flat. The
+/// caller is responsible for any sign convention; this quantizes the spectrum
+/// as supplied.
+pub fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+    spectrum: &[f32],
+    step: f32,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<Vec<i32>, Error> {
+    if !step.is_finite() || step <= 0.0 {
+        return Err(Error::InvalidInput("quantization step must be positive"));
+    }
+    let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate)?;
+
+    let mut out = Vec::with_capacity(spectrum.len());
+    for (line, &coeff) in spectrum.iter().enumerate() {
+        if !coeff.is_finite() {
+            return Err(Error::InvalidInput("spectral coefficient must be finite"));
+        }
+        // Locate the transmitted scale-factor band for this line; the residual
+        // band beyond index[21] (and any padding past 576) shapes flat.
+        let gain = match index[1..=MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+            .iter()
+            .position(|&boundary| line < usize::from(boundary))
+        {
+            Some(band) => {
+                long_block_scalefactor_quantizer_gain(scale_factors[band], scalefac_scale)
+            }
+            None => 1.0,
+        };
+
+        let magnitude = (coeff.abs().powf(0.75) / step * gain).round();
+        if magnitude > 8191.0 {
+            return Err(Error::InvalidInput(
+                "quantized spectral coefficient exceeds bound",
+            ));
+        }
+        let quantized = magnitude as i32;
+        out.push(if coeff.is_sign_negative() {
+            -quantized
+        } else {
+            quantized
+        });
+    }
+    Ok(out)
+}
+
 /// Computes the `global_gain` that inverts a given quantizer `step`.
 ///
 /// The decoder requantizes a long-block line as
@@ -8434,10 +8501,10 @@ mod tests {
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
         pack_quantized_spectrum_with_table_provider, plan_spectral_regions, quantize_long_block,
-        quantize_pcm_long_block, select_big_value_region_tables,
-        select_big_value_region_tables_by_bit_cost, select_big_value_table,
-        select_big_value_table_by_bit_cost, select_count1_table, select_count1_table_by_bit_cost,
-        select_mpeg1_layer3_long_scale_factor_compress,
+        quantize_mpeg1_layer3_long_spectrum_with_scalefactors, quantize_pcm_long_block,
+        select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
+        select_big_value_table, select_big_value_table_by_bit_cost, select_count1_table,
+        select_count1_table_by_bit_cost, select_mpeg1_layer3_long_scale_factor_compress,
         select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
         select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
@@ -11687,6 +11754,97 @@ mod tests {
             );
             previous_snr = snr;
         }
+    }
+
+    /// ISO/IEC 11172-3 §2.4.3.4 long-block requantization including per-band
+    /// scale-factor attenuation `2^(-0.5·(1+scalefac_scale)·sf[sfb])`.
+    fn requantize_long_line_with_scalefactors(
+        is: i32,
+        line: usize,
+        global_gain: u8,
+        scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+        scalefac_scale: bool,
+        sample_rate: u32,
+    ) -> f32 {
+        let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate).unwrap();
+        // scalefac_multiplier = 0.5·(1 + scalefac_scale) per ISO §2.4.3.4.
+        let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
+        let attenuation = match index[1..=MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+            .iter()
+            .position(|&boundary| line < usize::from(boundary))
+        {
+            Some(band) => 2.0_f32.powf(-multiplier * f32::from(scale_factors[band])),
+            None => 1.0,
+        };
+        requantize_long_line(is, global_gain) * attenuation
+    }
+
+    #[test]
+    fn scalefactor_quantizer_inverts_through_requantization() {
+        // A decaying multitone spectrum: uniform scale-factor amplification must
+        // reconstruct it (the encoder gain and decoder attenuation cancel) and
+        // never lower the SNR versus zero scale factors, because amplifying the
+        // pre-rounded magnitude buys finer effective quantization.
+        let spectrum: Vec<f32> = (0..576)
+            .map(|line| {
+                let decay = (-(line as f32) / 200.0).exp();
+                0.4 * decay * ((line as f32) * 0.21).sin()
+            })
+            .collect();
+        let step = 0.05_f32;
+        let global_gain = mpeg1_layer3_global_gain_for_step(step);
+
+        let snr_for = |scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]| {
+            let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+                &spectrum,
+                step,
+                scale_factors,
+                false,
+                44_100,
+            )
+            .unwrap();
+            let mut signal = 0.0_f64;
+            let mut noise = 0.0_f64;
+            for (line, (&xr, &is)) in spectrum.iter().zip(quantized.iter()).enumerate() {
+                let reconstructed = f64::from(requantize_long_line_with_scalefactors(
+                    is,
+                    line,
+                    global_gain,
+                    scale_factors,
+                    false,
+                    44_100,
+                ));
+                let reference = f64::from(xr);
+                signal += reference * reference;
+                let error = reconstructed - reference;
+                noise += error * error;
+            }
+            10.0 * (signal / noise.max(1.0e-30)).log10()
+        };
+
+        let zero = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        let amplified = [3_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        let snr_zero = snr_for(&zero);
+        let snr_amplified = snr_for(&amplified);
+
+        assert!(
+            snr_zero > 20.0,
+            "baseline reconstruction SNR too low: {snr_zero} dB"
+        );
+        assert!(
+            snr_amplified >= snr_zero - 0.5,
+            "scale-factor amplification regressed SNR: {snr_amplified} dB vs {snr_zero} dB"
+        );
+    }
+
+    #[test]
+    fn scalefactor_quantizer_rejects_nonpositive_step() {
+        let spectrum = vec![0.1_f32; 576];
+        let zero = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        assert!(quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+            &spectrum, 0.0, &zero, false, 44_100
+        )
+        .is_err());
     }
 
     #[test]
