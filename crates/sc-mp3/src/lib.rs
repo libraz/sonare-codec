@@ -1129,15 +1129,16 @@ pub fn layer3_long_block_spectrum(
 }
 
 /// Extracts one PCM channel and quantizes one Layer III long granule.
+///
+/// Both mono and each stereo channel run through the real polyphase + hybrid
+/// MDCT analysis (the channel index selects the PCM lane), so stereo
+/// reconstructs through a real decoder the same way mono does.
 pub fn quantize_pcm_long_block(
     pcm: &AudioBuffer,
     channel: usize,
     start_frame: usize,
     step: f32,
 ) -> Result<Vec<i32>, Error> {
-    // Both mono and each stereo channel run through the real polyphase + hybrid
-    // MDCT analysis (the channel index selects the PCM lane), so stereo
-    // reconstructs through a real decoder the same way mono does.
     let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
     let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
     quantize_spectrum(&inverted, step, 8191)
@@ -1284,7 +1285,8 @@ impl<'a> Layer3EntropyTableProvider<'a> {
             7 => self.big_value_table_7,
             10 => self.big_value_table_10,
             13 => self.big_value_table_13,
-            16 => self.big_value_table_16,
+            // Tables 16..=23 share the table-16 codeword tree (different linbits).
+            16..=23 => self.big_value_table_16,
             _ => return Err(Error::UnsupportedFeature("MP3 big-values Huffman table")),
         };
         if selection.table_select != 0 && table.is_empty() {
@@ -1782,19 +1784,4426 @@ const MPEG1_LAYER3_COUNT1_TABLE_33: &[HuffmanEntry<Layer3Count1MagnitudeQuad>] =
     },
 ];
 
+// MPEG-1 Layer III big-values Huffman code tables (ISO/IEC 11172-3 Annex B
+// Table 3-B.7). These are normative ISO constants; the codeword/length pairs
+// here were derived by walking the decode tree of the public-domain (Unlicense)
+// PDMP3 decoder — the same neutral, non-copyleft source as the analysis window.
+// Clean-room applies only to copyleft *encoders* (LAME et al.), which were not
+// consulted. Tables 16..=23 share table 16's codewords with different linbits.
+const MPEG1_LAYER3_BIG_VALUE_TABLE_5: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b1, len: 1 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b010,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000110,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode {
+            bits: 0b001,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000100,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000100,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000111,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000101,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000111,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00000001,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000110,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000001,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000001,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00000000,
+            len: 8,
+        },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_7: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b1, len: 1 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b010,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001010,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010000,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000001010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0011,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000111,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001010,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00000011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001011,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00100,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010001,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00001000,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000000100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001100,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0001011,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00010010,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000001111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000001011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000000010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000111,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0000110,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00001001,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000001110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000000011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000000001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00000110,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00000100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000000101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000000011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000000010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000000000,
+            len: 10,
+        },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_10: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b1, len: 1 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b010,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001010,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010111,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000100011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000011110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000001100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000010001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0011,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001000,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001100,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010010,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000010101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000111,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001011,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b001001,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001111,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010101,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000100000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000101000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000010011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000000110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001110,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0001101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00010110,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000100010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000101110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000010111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000010010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000000111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00010100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00010011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000100001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000101111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000011011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000010110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000001001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000000011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000011111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000010110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000101001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000011010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00000010101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00000010100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000000101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00001110,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00001101,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000001010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000001011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000010000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000000110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00000000101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000001001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00001000,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000000111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000001000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000000100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00000000100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00000000010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000000,
+            len: 11,
+        },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_13: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b1, len: 1 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0101,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001110,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0010101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00100010,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000110011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000101110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001000111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000101010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000110100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00001000100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000110100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000001000011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000101100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000101011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000010011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0100,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001100,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0010011,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00011111,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00011010,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000101100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000100001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000011111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000011000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000100000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000011000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000011111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000100011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000000010110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000000001110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001111,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b001101,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0010111,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00100100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000111011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000110001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0001001101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001000001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000011101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000101000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000011110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000101000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000011011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000100001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000101010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000010000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0010110,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0010100,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00100101,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000111101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000111000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0001001111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0001001001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001000000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000101011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00001001100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000111000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000100101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000011010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000011111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000011001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000001110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00100011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0010000,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000111100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000111001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0001100001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0001001011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001110010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001011011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000110110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00001001001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000110111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000000101001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000000110000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000000110101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000010111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000011000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000111010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00011011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000110010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001100000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0001001100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0001000110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001011101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001010100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00001001101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00000111010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000001001111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000011101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000001001010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000000110001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000000101001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000010001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000101111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000101101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001001110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001001010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00001110011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00001011110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001011010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001001111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00001000101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000001010011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000001000111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000000110010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000000111011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000000100110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000000100100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000001111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001001000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000100010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000111000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00001011111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00001011100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00001010101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000001011011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000001011010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000001010110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000001001001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000001001101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000001000001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000000110011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000000101100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000101011,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000101010,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000101011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00010100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000011110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000101100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000110111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00001001110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001001000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000001010111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000001001110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000000111101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000000101110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000000110110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000000100101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000000011110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000000000010100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000000000010000,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000110101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000011001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000101001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000100101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00000101100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00000111011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00000110110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000001010001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000001000010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000001001100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000000111001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000000110110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000000100101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000000010010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000100111,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000000000001011,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000100011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0000100001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000011111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00000111001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00000101010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000001010010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000001001000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000001010000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000000101111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000000111010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000000110111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000000010101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000000010110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000000011010,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000100110,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000000010110,
+            len: 17,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00000110101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0000011001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000010111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00000100110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000001000110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000000111100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000000110011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000000100100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000000110111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000000011010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000000100010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000000010111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000000000011011,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000000001110,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000000000001001,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000000111,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00000100010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00000100000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00000011100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000000100111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000000110001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000001001011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000000011110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000000110100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00000000110000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00000000101000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000000000110100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000000000011100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000000000010010,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000000000010001,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000001001,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000000101,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000000101101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00000010101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000000100010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000001000000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000000111000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000000110010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00000000110001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000101101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00000000011111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00000000010011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000000001100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000000000001111,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000000000001010,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000000000111,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000000110,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000000011,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000000110000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000000010111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000000010100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000000100111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000000100100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000000100011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000000000110101,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000010101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00000000010000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00000000000010111,
+            len: 17,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000000000001101,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000000000001010,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000000000000110,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000000000000001,
+            len: 17,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000000100,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000000010,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000000010000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000000001111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0000000010001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00000000011011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00000000011001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00000000010100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000000000011101,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00000000001011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000000000010001,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000000000001100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000000000010000,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000000000001000,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000000000000000001,
+            len: 19,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000000000000000001,
+            len: 18,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000000000000000000,
+            len: 19,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000000000001,
+            len: 16,
+        },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_16: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b1, len: 1 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0101,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001110,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00101100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode {
+            bits: 0b001001010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000111111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0001101110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001011101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00010101100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00010010101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00010001010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000011110010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000011100001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000011000011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000101111000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000010001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0100,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001100,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0010100,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00100011,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000111110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000110101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000101111,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0001010011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0001001011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0001000100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001110111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000011001001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00001101011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000011001111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00001001,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001111,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b001101,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0010111,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00100110,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode {
+            bits: 0b001000011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000111010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0001100111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001011010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00010100001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0001001000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00001111111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001110101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00001101110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000011010001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000011001110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000010000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00101101,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0010101,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00100111,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b001000101,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode {
+            bits: 0b001000000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0001110010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0001100011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0001010111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00010011110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00010001100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000011111100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000011010100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000011000111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000110000011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000101101101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000011010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001001011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00100100,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode {
+            bits: 0b001000100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode {
+            bits: 0b001000001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0001110011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0001100101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00010110011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00010100100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00010011011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000100001000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000011110110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000011100010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000110001011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000101111110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000101101010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 15 },
+        code: HuffmanCode {
+            bits: 0b000001001,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode {
+            bits: 0b001000010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00011110,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000111011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000111000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0001100110,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00010111001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00010101101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000100001001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00010001110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000011111101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000011101000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000110010000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000110000100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000101111010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000110111101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000010000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001101111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000110110,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000110100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001100100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010111000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00010110010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00010100000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00010000101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000100000001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000011110100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000011100100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000011011001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000110000001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000101101110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00001011001011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 6, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000001010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001100010,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000110000,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001011011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0001011000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010100101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00010011101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00010010100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000100000101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 8 },
+        code: HuffmanCode {
+            bits: 0b000011111000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000110010111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000110001101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000101110100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000101111100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000001101111001,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000001101110100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 7, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000001000,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0001010101,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0001010100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001010001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010011111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010011100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00010001111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000100000100,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000011111001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000110101011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000110010001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000110001000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 11 },
+        code: HuffmanCode {
+            bits: 0b0000101111111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00001011010111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00001011001001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00001011000100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 8, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000111,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00010011010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0001001100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001001001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010001101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00010000011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000100000000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000011110101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000110101010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000110010110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000110001010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000110000000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001011011111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 12 },
+        code: HuffmanCode {
+            bits: 0b0000101100111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00001011000110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000101100000,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 9, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000001011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00010001011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00010000001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0001000011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00001111101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000011110111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000011101001,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 6 },
+        code: HuffmanCode {
+            bits: 0b000011100101,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 7 },
+        code: HuffmanCode {
+            bits: 0b000011011011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000110001001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00001011100111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00001011100001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001011010000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000001101110101,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000001101110010,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000110110111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 10, y: 15 },
+        code: HuffmanCode {
+            bits: 0b0000000100,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000011110011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00001111000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00001110110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00001110011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000011100011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 5 },
+        code: HuffmanCode {
+            bits: 0b000011011111,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000110001100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001011101010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00001011100110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00001011100000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00001011010001,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001011001000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00001011000010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 13 },
+        code: HuffmanCode {
+            bits: 0b0000011011111,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000110110100,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 11, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000011001010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000011100000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000011011110,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000011011010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000011011000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000110000101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000110000010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000101111101,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 8 },
+        code: HuffmanCode {
+            bits: 0b0000101101100,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000001101111000,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000110111011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00001011000011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000110111000,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000110110101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 14 },
+        code: HuffmanCode {
+            bits: 0b0000011011000000,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 12, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00001011101011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 1 },
+        code: HuffmanCode {
+            bits: 0b000011010011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000011010010,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000011010000,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 4 },
+        code: HuffmanCode {
+            bits: 0b0000101110010,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000101111011,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 6 },
+        code: HuffmanCode {
+            bits: 0b00001011011110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001011010011,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00001011001010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 9 },
+        code: HuffmanCode {
+            bits: 0b0000011011000111,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 10 },
+        code: HuffmanCode {
+            bits: 0b000001101110011,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000001101101101,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 12 },
+        code: HuffmanCode {
+            bits: 0b000001101101100,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000110110000011,
+            len: 17,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 14 },
+        code: HuffmanCode {
+            bits: 0b000001101100001,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 13, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0000101111001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0000101110001,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00001100110,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000010111011,
+            len: 12,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 4 },
+        code: HuffmanCode {
+            bits: 0b00001011010110,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 5 },
+        code: HuffmanCode {
+            bits: 0b00001011010010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000101100110,
+            len: 13,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 7 },
+        code: HuffmanCode {
+            bits: 0b00001011000111,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00001011000101,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 9 },
+        code: HuffmanCode {
+            bits: 0b000001101100010,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 10 },
+        code: HuffmanCode {
+            bits: 0b0000011011000110,
+            len: 16,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 11 },
+        code: HuffmanCode {
+            bits: 0b000001101100111,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000110110000010,
+            len: 17,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 13 },
+        code: HuffmanCode {
+            bits: 0b000001101100110,
+            len: 15,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000110110010,
+            len: 14,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 14, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000000000,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000001100,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00001010,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00000111,
+            len: 8,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000001011,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 4 },
+        code: HuffmanCode {
+            bits: 0b000001010,
+            len: 9,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 5 },
+        code: HuffmanCode {
+            bits: 0b0000010001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 6 },
+        code: HuffmanCode {
+            bits: 0b0000001011,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 7 },
+        code: HuffmanCode {
+            bits: 0b0000001001,
+            len: 10,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 8 },
+        code: HuffmanCode {
+            bits: 0b00000001101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 9 },
+        code: HuffmanCode {
+            bits: 0b00000001100,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 10 },
+        code: HuffmanCode {
+            bits: 0b00000001010,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 11 },
+        code: HuffmanCode {
+            bits: 0b00000000111,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 12 },
+        code: HuffmanCode {
+            bits: 0b00000000101,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 13 },
+        code: HuffmanCode {
+            bits: 0b00000000011,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 14 },
+        code: HuffmanCode {
+            bits: 0b00000000001,
+            len: 11,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 15, y: 15 },
+        code: HuffmanCode {
+            bits: 0b00000011,
+            len: 8,
+        },
+    },
+];
+
 /// Returns the implemented MPEG-1 Layer III standard Huffman tables.
 ///
-/// This provider currently exposes big-values tables 1/2 and count1 tables 32/33.
-/// Larger big-values and escape tables are filled in incrementally as the
-/// clean-room encoder grows.
+/// This provider currently exposes big-values tables 1/2/5/7/10/13 plus the
+/// table-16 codeword tree used by escape-class tables 16..=23, and count1
+/// tables 32/33. The remaining standard big-values tables are filled in
+/// incrementally as the clean-room encoder grows.
 #[must_use]
 pub fn mpeg1_layer3_standard_table_provider() -> Layer3EntropyTableProvider<'static> {
     Layer3EntropyTableProvider {
         big_value_table_1: MPEG1_LAYER3_BIG_VALUE_TABLE_1,
         big_value_table_2: MPEG1_LAYER3_BIG_VALUE_TABLE_2,
+        big_value_table_5: MPEG1_LAYER3_BIG_VALUE_TABLE_5,
+        big_value_table_7: MPEG1_LAYER3_BIG_VALUE_TABLE_7,
+        big_value_table_10: MPEG1_LAYER3_BIG_VALUE_TABLE_10,
+        big_value_table_13: MPEG1_LAYER3_BIG_VALUE_TABLE_13,
+        big_value_table_16: MPEG1_LAYER3_BIG_VALUE_TABLE_16,
         count1_table_0: MPEG1_LAYER3_COUNT1_TABLE_32,
         count1_table_1: MPEG1_LAYER3_COUNT1_TABLE_33,
-        ..Default::default()
     }
 }
 
@@ -2045,6 +6454,35 @@ pub fn big_value_pairs(
         .collect()
 }
 
+/// Maps an escape-class magnitude to the ISO `table_select` (16..=23) whose
+/// fixed `linbits` covers it.
+///
+/// Big-values tables 16 through 23 share the table-16 Huffman codeword tree and
+/// differ only in their fixed `linbits` widths (1, 2, 3, 4, 6, 8, 10, 13 in
+/// ISO/IEC 11172-3 Annex B). The decoder derives `linbits` from `table_select`,
+/// so the encoder must emit the table whose fixed width matches — not a free
+/// `linbits` paired with `table_select` 16. This picks the smallest such table
+/// that still represents `max_magnitude`.
+fn escape_table_select_for_magnitude(max_magnitude: u16) -> Result<(u8, u8), Error> {
+    const ESCAPE_TABLES: [(u8, u8); 8] = [
+        (16, 1),
+        (17, 2),
+        (18, 3),
+        (19, 4),
+        (20, 6),
+        (21, 8),
+        (22, 10),
+        (23, 13),
+    ];
+    let required = linbits_for_big_value_magnitude(max_magnitude)?;
+    ESCAPE_TABLES
+        .into_iter()
+        .find(|&(_, linbits)| linbits >= required)
+        .ok_or(Error::InvalidInput(
+            "MP3 big-values magnitude exceeds table range",
+        ))
+}
+
 /// Selects the smallest implemented Layer III big-values table class.
 pub fn select_big_value_table(
     pairs: &[Layer3BigValuePair],
@@ -2058,7 +6496,7 @@ pub fn select_big_value_table(
         4..=5 => (7, 0),
         6..=7 => (10, 0),
         8..=15 => (13, 0),
-        _ => (16, linbits_for_big_value_magnitude(max_magnitude)?),
+        _ => escape_table_select_for_magnitude(max_magnitude)?,
     };
 
     Ok(Layer3BigValueTableSelection {
@@ -2082,6 +6520,7 @@ pub fn select_big_value_table_by_bit_cost(
         });
     }
 
+    let (escape_table_select, escape_linbits) = escape_table_select_for_magnitude(max_magnitude)?;
     let candidates = [
         (1, 0, provider.big_value_table_1),
         (2, 0, provider.big_value_table_2),
@@ -2090,8 +6529,8 @@ pub fn select_big_value_table_by_bit_cost(
         (10, 0, provider.big_value_table_10),
         (13, 0, provider.big_value_table_13),
         (
-            16,
-            linbits_for_big_value_magnitude(max_magnitude)?,
+            escape_table_select,
+            escape_linbits,
             provider.big_value_table_16,
         ),
     ];
@@ -3038,9 +7477,12 @@ pub fn pack_big_value_pairs_with_linbits(
         );
         let code = lookup_huffman_code(table, &table_magnitude)?;
         writer.write_bits(code.bits, code.len)?;
+        // ISO/IEC 11172-3 emits each value's escape linbits immediately before
+        // its sign, interleaved per value: linbits_x, sign_x, linbits_y, sign_y.
+        // Grouping all linbits before all signs desyncs the decoder.
         write_mp3_linbits(&mut writer, x_magnitude, linbits)?;
-        write_mp3_linbits(&mut writer, y_magnitude, linbits)?;
         write_mp3_sign_bit(&mut writer, pair.x)?;
+        write_mp3_linbits(&mut writer, y_magnitude, linbits)?;
         write_mp3_sign_bit(&mut writer, pair.y)?;
     }
     let bit_len = writer.bit_len();
@@ -4720,10 +9162,13 @@ mod tests {
                 max_magnitude: 3,
             }
         );
+        // Tables 16..=23 share table 16's codewords but carry fixed linbits
+        // widths; the decoder reads linbits from table_select, so magnitude 18
+        // (needs linbits 2) must emit table 17, not table 16 with a free width.
         assert_eq!(
             select_big_value_table(&[Layer3BigValuePair::new(18, -15)]).unwrap(),
             Layer3BigValueTableSelection {
-                table_select: 16,
+                table_select: 17,
                 linbits: 2,
                 max_magnitude: 18,
             }
@@ -4731,7 +9176,7 @@ mod tests {
         assert_eq!(
             select_big_value_table(&[Layer3BigValuePair::new(8191, 0)]).unwrap(),
             Layer3BigValueTableSelection {
-                table_select: 16,
+                table_select: 23,
                 linbits: 13,
                 max_magnitude: 8191,
             }
@@ -6079,10 +10524,13 @@ mod tests {
             Layer3BigValuePair::new(-1, 16),
         ];
 
+        // Escape linbits and signs interleave per value: code, linbits_x,
+        // sign_x, linbits_y, sign_y. Pair (18,-15): `10` `0011` `0` `0000` `1`;
+        // pair (-1,16): `111` `1` `0001` `0`.
         assert_eq!(
             pack_big_value_pairs_with_linbits(&pairs, &table, 4).unwrap(),
             PackedBits {
-                bytes: vec![0b1000_1100, 0b0001_1110, 0b0011_0000],
+                bytes: vec![0b1000_1100, 0b0001_1111, 0b0001_0000],
                 bit_len: 21,
             }
         );
