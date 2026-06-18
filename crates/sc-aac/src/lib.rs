@@ -107,6 +107,23 @@ pub fn aac_lc_adts_max_frame_len_for_bitrate(
     Ok(frame_len)
 }
 
+/// Returns the conservative bitrate budget used by the AAC-LC production candidate.
+///
+/// The current encoder is still a limited long-block scaffold; this default is
+/// intentionally generous so production `encode()` can exercise the same
+/// budget-aware selected-scale-factor path as caller-driven bitrate helpers
+/// without lowering the existing FFmpeg readiness gate.
+pub fn aac_lc_default_production_bitrate_bps(channels: u8) -> Result<u32, Error> {
+    if channels == 0 || channels > 2 {
+        return Err(Error::InvalidInput(
+            "AAC production bitrate requires mono or stereo channels",
+        ));
+    }
+    128_000_u32
+        .checked_mul(u32::from(channels))
+        .ok_or(Error::InvalidInput("AAC production bitrate overflows"))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AacPcmFrameStepSelection {
     pub step: f32,
@@ -403,15 +420,14 @@ fn encode_pcm_long_block_scaffold(config: AdtsConfig, pcm: &AudioBuffer) -> Resu
                 u8::try_from(offsets.len() - 1)
                     .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
             );
-            let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
-            let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
             let scale_factor_table = aac_scale_factor_delta_table();
-            return encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
+            return encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
                 config,
-                channel,
+                channel_config,
                 pcm,
                 offsets,
                 AAC_LC_PCM_STEP_CANDIDATES,
+                aac_lc_default_production_bitrate_bps(config.channels)?,
                 &scale_factor_table,
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             );
@@ -424,16 +440,15 @@ fn encode_pcm_long_block_scaffold(config: AdtsConfig, pcm: &AudioBuffer) -> Resu
                 u8::try_from(offsets.len() - 1)
                     .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
             );
-            let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
-            let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
             let scale_factor_table = aac_scale_factor_delta_table();
-            return encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
+            return encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
                 config,
-                channel,
-                channel,
+                channel_config,
+                channel_config,
                 pcm,
                 offsets,
                 AAC_LC_PCM_STEP_CANDIDATES,
+                aac_lc_default_production_bitrate_bps(config.channels)?,
                 &scale_factor_table,
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             );
@@ -549,8 +564,11 @@ pub enum AacCodebook {
     Zero,
     SignedPairs1,
     SignedPairs5,
+    SignedPairs6,
     UnsignedPairs7,
     UnsignedPairs8,
+    UnsignedPairs9,
+    UnsignedPairs10,
     Escape,
 }
 
@@ -561,8 +579,11 @@ impl AacCodebook {
             Self::Zero => 0,
             Self::SignedPairs1 => 1,
             Self::SignedPairs5 => 5,
+            Self::SignedPairs6 => 6,
             Self::UnsignedPairs7 => 7,
             Self::UnsignedPairs8 => 8,
+            Self::UnsignedPairs9 => 9,
+            Self::UnsignedPairs10 => 10,
             Self::Escape => 11,
         }
     }
@@ -573,6 +594,13 @@ pub struct AacSection {
     pub start: usize,
     pub end: usize,
     pub codebook: AacCodebook,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AacQuadSection {
+    pub start: usize,
+    pub end: usize,
+    pub codebook_id: u8,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -632,10 +660,66 @@ impl TryFrom<AacSpectralPair> for AacSpectralMagnitudePair {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AacSpectralQuad {
+    pub v: i16,
+    pub w: i16,
+    pub x: i16,
+    pub y: i16,
+}
+
+impl AacSpectralQuad {
+    #[must_use]
+    pub fn new(v: i16, w: i16, x: i16, y: i16) -> Self {
+        Self { v, w, x, y }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct AacSpectralMagnitudeQuad {
+    pub v: u16,
+    pub w: u16,
+    pub x: u16,
+    pub y: u16,
+}
+
+impl AacSpectralMagnitudeQuad {
+    #[must_use]
+    pub fn new(v: u16, w: u16, x: u16, y: u16) -> Self {
+        Self { v, w, x, y }
+    }
+}
+
+impl TryFrom<AacSpectralQuad> for AacSpectralMagnitudeQuad {
+    type Error = Error;
+
+    fn try_from(quad: AacSpectralQuad) -> Result<Self, Self::Error> {
+        Ok(Self::new(
+            quad.v
+                .checked_abs()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or(Error::InvalidInput("AAC spectral quad v overflows"))?,
+            quad.w
+                .checked_abs()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or(Error::InvalidInput("AAC spectral quad w overflows"))?,
+            quad.x
+                .checked_abs()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or(Error::InvalidInput("AAC spectral quad x overflows"))?,
+            quad.y
+                .checked_abs()
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or(Error::InvalidInput("AAC spectral quad y overflows"))?,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AacSpectralTables<'a> {
     pub signed_pairs1: &'a [HuffmanEntry<AacSpectralPair>],
     pub signed_pairs5: &'a [HuffmanEntry<AacSpectralPair>],
+    pub signed_pairs6: &'a [HuffmanEntry<AacSpectralPair>],
     pub escape: &'a [HuffmanEntry<AacSpectralPair>],
 }
 
@@ -648,11 +732,13 @@ impl<'a> AacSpectralTables<'a> {
             AacCodebook::Zero => Ok(&[]),
             AacCodebook::SignedPairs1 => non_empty_table(self.signed_pairs1, "AAC codebook 1"),
             AacCodebook::SignedPairs5 => non_empty_table(self.signed_pairs5, "AAC codebook 5"),
-            AacCodebook::UnsignedPairs7 | AacCodebook::UnsignedPairs8 => {
-                Err(Error::UnsupportedFeature(
-                    "AAC unsigned-pairs codebooks 7/8 require magnitude tables",
-                ))
-            }
+            AacCodebook::SignedPairs6 => non_empty_table(self.signed_pairs6, "AAC codebook 6"),
+            AacCodebook::UnsignedPairs7
+            | AacCodebook::UnsignedPairs8
+            | AacCodebook::UnsignedPairs9
+            | AacCodebook::UnsignedPairs10 => Err(Error::UnsupportedFeature(
+                "AAC unsigned-pairs codebooks 7/8/9/10 require magnitude tables",
+            )),
             AacCodebook::Escape => non_empty_table(self.escape, "AAC escape codebook"),
         }
     }
@@ -662,6 +748,7 @@ impl<'a> AacSpectralTables<'a> {
 pub struct AacSpectralMagnitudeTables<'a> {
     pub pairs1: &'a [HuffmanEntry<AacSpectralMagnitudePair>],
     pub pairs5: &'a [HuffmanEntry<AacSpectralMagnitudePair>],
+    pub pairs6: &'a [HuffmanEntry<AacSpectralMagnitudePair>],
     pub escape: &'a [HuffmanEntry<AacSpectralMagnitudePair>],
 }
 
@@ -678,11 +765,39 @@ impl<'a> AacSpectralMagnitudeTables<'a> {
             AacCodebook::SignedPairs5 => {
                 non_empty_magnitude_table(self.pairs5, "AAC magnitude codebook 5")
             }
+            AacCodebook::SignedPairs6 => {
+                non_empty_magnitude_table(self.pairs6, "AAC magnitude codebook 6")
+            }
             AacCodebook::UnsignedPairs7 => Ok(aac_unsigned_pairs7_table()),
             AacCodebook::UnsignedPairs8 => Ok(aac_unsigned_pairs8_table()),
+            AacCodebook::UnsignedPairs9 => Ok(aac_unsigned_pairs9_table()),
+            AacCodebook::UnsignedPairs10 => Ok(aac_unsigned_pairs10_table()),
             AacCodebook::Escape => {
                 non_empty_magnitude_table(self.escape, "AAC magnitude escape codebook")
             }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AacSpectralMagnitudeQuadTables<'a> {
+    pub quads1: &'a [HuffmanEntry<AacSpectralMagnitudeQuad>],
+    pub quads2: &'a [HuffmanEntry<AacSpectralMagnitudeQuad>],
+    pub quads3: &'a [HuffmanEntry<AacSpectralMagnitudeQuad>],
+    pub quads4: &'a [HuffmanEntry<AacSpectralMagnitudeQuad>],
+}
+
+impl<'a> AacSpectralMagnitudeQuadTables<'a> {
+    fn table_for_codebook_id(
+        self,
+        codebook_id: u8,
+    ) -> Result<&'a [HuffmanEntry<AacSpectralMagnitudeQuad>], Error> {
+        match codebook_id {
+            1 => non_empty_quad_table(self.quads1, "AAC quad codebook 1"),
+            2 => non_empty_quad_table(self.quads2, "AAC quad codebook 2"),
+            3 => non_empty_quad_table(self.quads3, "AAC quad codebook 3"),
+            4 => non_empty_quad_table(self.quads4, "AAC quad codebook 4"),
+            _ => Err(Error::InvalidInput("AAC quad codebook id must be 1..=4")),
         }
     }
 }
@@ -786,6 +901,160 @@ const AAC_UNSIGNED_PAIRS8_CODES: [u32; 64] = [
 static AAC_UNSIGNED_PAIRS8_TABLE: OnceLock<Vec<HuffmanEntry<AacSpectralMagnitudePair>>> =
     OnceLock::new();
 
+#[rustfmt::skip]
+const AAC_UNSIGNED_PAIRS9_LENS: [u8; 169] = [
+     1,  3,  6,  8,  9, 10, 10, 11, 11, 12, 12, 13, 13,  3,  4,  6,
+     7,  8,  8,  9, 10, 10, 10, 11, 12, 12,  6,  6,  7,  8,  8,  9,
+    10, 10, 10, 11, 12, 12, 12,  8,  7,  8,  9,  9, 10, 10, 11, 11,
+    11, 12, 12, 13,  9,  8,  9,  9, 10, 10, 11, 11, 11, 12, 12, 12,
+    13, 10,  9,  9, 10, 11, 11, 11, 12, 11, 12, 12, 13, 13, 11,  9,
+    10, 11, 11, 11, 12, 12, 12, 12, 13, 13, 13, 11, 10, 10, 11, 11,
+    12, 12, 13, 13, 13, 13, 13, 13, 11, 10, 10, 11, 11, 11, 12, 12,
+    13, 13, 14, 13, 14, 11, 10, 11, 11, 12, 12, 12, 12, 13, 13, 14,
+    14, 14, 12, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 12,
+    11, 12, 12, 12, 13, 13, 13, 13, 14, 14, 15, 15, 13, 12, 12, 12,
+    13, 13, 13, 13, 14, 14, 14, 14, 15,
+];
+
+#[rustfmt::skip]
+const AAC_UNSIGNED_PAIRS9_CODES: [u32; 169] = [
+    0x0000, 0x0005, 0x0037, 0x00e7, 0x01de, 0x03ce, 0x03d9, 0x07c8,
+    0x07cd, 0x0fc8, 0x0fdd, 0x1fe4, 0x1fec, 0x0004, 0x000c, 0x0035,
+    0x0072, 0x00ea, 0x00ed, 0x01e2, 0x03d1, 0x03d3, 0x03e0, 0x07d8,
+    0x0fcf, 0x0fd5, 0x0036, 0x0034, 0x0071, 0x00e8, 0x00ec, 0x01e1,
+    0x03cf, 0x03dd, 0x03db, 0x07d0, 0x0fc7, 0x0fd4, 0x0fe4, 0x00e6,
+    0x0070, 0x00e9, 0x01dd, 0x01e3, 0x03d2, 0x03dc, 0x07cc, 0x07ca,
+    0x07de, 0x0fd8, 0x0fea, 0x1fdb, 0x01df, 0x00eb, 0x01dc, 0x01e6,
+    0x03d5, 0x03de, 0x07cb, 0x07dd, 0x07dc, 0x0fcd, 0x0fe2, 0x0fe7,
+    0x1fe1, 0x03d0, 0x01e0, 0x01e4, 0x03d6, 0x07c5, 0x07d1, 0x07db,
+    0x0fd2, 0x07e0, 0x0fd9, 0x0feb, 0x1fe3, 0x1fe9, 0x07c4, 0x01e5,
+    0x03d7, 0x07c6, 0x07cf, 0x07da, 0x0fcb, 0x0fda, 0x0fe3, 0x0fe9,
+    0x1fe6, 0x1ff3, 0x1ff7, 0x07d3, 0x03d8, 0x03e1, 0x07d4, 0x07d9,
+    0x0fd3, 0x0fde, 0x1fdd, 0x1fd9, 0x1fe2, 0x1fea, 0x1ff1, 0x1ff6,
+    0x07d2, 0x03d4, 0x03da, 0x07c7, 0x07d7, 0x07e2, 0x0fce, 0x0fdb,
+    0x1fd8, 0x1fee, 0x3ff0, 0x1ff4, 0x3ff2, 0x07e1, 0x03df, 0x07c9,
+    0x07d6, 0x0fca, 0x0fd0, 0x0fe5, 0x0fe6, 0x1feb, 0x1fef, 0x3ff3,
+    0x3ff4, 0x3ff5, 0x0fe0, 0x07ce, 0x07d5, 0x0fc6, 0x0fd1, 0x0fe1,
+    0x1fe0, 0x1fe8, 0x1ff0, 0x3ff1, 0x3ff8, 0x3ff6, 0x7ffc, 0x0fe8,
+    0x07df, 0x0fc9, 0x0fd7, 0x0fdc, 0x1fdc, 0x1fdf, 0x1fed, 0x1ff5,
+    0x3ff9, 0x3ffb, 0x7ffd, 0x7ffe, 0x1fe7, 0x0fcc, 0x0fd6, 0x0fdf,
+    0x1fde, 0x1fda, 0x1fe5, 0x1ff2, 0x3ffa, 0x3ff7, 0x3ffc, 0x3ffd,
+    0x7fff,
+];
+
+static AAC_UNSIGNED_PAIRS9_TABLE: OnceLock<Vec<HuffmanEntry<AacSpectralMagnitudePair>>> =
+    OnceLock::new();
+
+#[rustfmt::skip]
+const AAC_UNSIGNED_PAIRS10_LENS: [u8; 169] = [
+     6,  5,  6,  6,  7,  8,  9, 10, 10, 10, 11, 11, 12,  5,  4,  4,
+     5,  6,  7,  7,  8,  8,  9, 10, 10, 11,  6,  4,  5,  5,  6,  6,
+     7,  8,  8,  9,  9, 10, 10,  6,  5,  5,  5,  6,  7,  7,  8,  8,
+     9,  9, 10, 10,  7,  6,  6,  6,  6,  7,  7,  8,  8,  9,  9, 10,
+    10,  8,  7,  6,  7,  7,  7,  8,  8,  8,  9, 10, 10, 11,  9,  7,
+     7,  7,  7,  8,  8,  9,  9,  9, 10, 10, 11,  9,  8,  8,  8,  8,
+     8,  9,  9,  9, 10, 10, 11, 11,  9,  8,  8,  8,  8,  8,  9,  9,
+    10, 10, 10, 11, 11, 10,  9,  9,  9,  9,  9,  9, 10, 10, 10, 11,
+    11, 12, 10,  9,  9,  9,  9, 10, 10, 10, 10, 11, 11, 11, 12, 11,
+    10,  9, 10, 10, 10, 10, 10, 11, 11, 11, 11, 12, 11, 10, 10, 10,
+    10, 10, 10, 11, 11, 12, 12, 12, 12,
+];
+
+#[rustfmt::skip]
+const AAC_UNSIGNED_PAIRS10_CODES: [u32; 169] = [
+    0x022, 0x008, 0x01d, 0x026, 0x05f, 0x0d3, 0x1cf, 0x3d0,
+    0x3d7, 0x3ed, 0x7f0, 0x7f6, 0xffd, 0x007, 0x000, 0x001,
+    0x009, 0x020, 0x054, 0x060, 0x0d5, 0x0dc, 0x1d4, 0x3cd,
+    0x3de, 0x7e7, 0x01c, 0x002, 0x006, 0x00c, 0x01e, 0x028,
+    0x05b, 0x0cd, 0x0d9, 0x1ce, 0x1dc, 0x3d9, 0x3f1, 0x025,
+    0x00b, 0x00a, 0x00d, 0x024, 0x057, 0x061, 0x0cc, 0x0dd,
+    0x1cc, 0x1de, 0x3d3, 0x3e7, 0x05d, 0x021, 0x01f, 0x023,
+    0x027, 0x059, 0x064, 0x0d8, 0x0df, 0x1d2, 0x1e2, 0x3dd,
+    0x3ee, 0x0d1, 0x055, 0x029, 0x056, 0x058, 0x062, 0x0ce,
+    0x0e0, 0x0e2, 0x1da, 0x3d4, 0x3e3, 0x7eb, 0x1c9, 0x05e,
+    0x05a, 0x05c, 0x063, 0x0ca, 0x0da, 0x1c7, 0x1ca, 0x1e0,
+    0x3db, 0x3e8, 0x7ec, 0x1e3, 0x0d2, 0x0cb, 0x0d0, 0x0d7,
+    0x0db, 0x1c6, 0x1d5, 0x1d8, 0x3ca, 0x3da, 0x7ea, 0x7f1,
+    0x1e1, 0x0d4, 0x0cf, 0x0d6, 0x0de, 0x0e1, 0x1d0, 0x1d6,
+    0x3d1, 0x3d5, 0x3f2, 0x7ee, 0x7fb, 0x3e9, 0x1cd, 0x1c8,
+    0x1cb, 0x1d1, 0x1d7, 0x1df, 0x3cf, 0x3e0, 0x3ef, 0x7e6,
+    0x7f8, 0xffa, 0x3eb, 0x1dd, 0x1d3, 0x1d9, 0x1db, 0x3d2,
+    0x3cc, 0x3dc, 0x3ea, 0x7ed, 0x7f3, 0x7f9, 0xff9, 0x7f2,
+    0x3ce, 0x1e4, 0x3cb, 0x3d8, 0x3d6, 0x3e2, 0x3e5, 0x7e8,
+    0x7f4, 0x7f5, 0x7f7, 0xffb, 0x7fa, 0x3ec, 0x3df, 0x3e1,
+    0x3e4, 0x3e6, 0x3f0, 0x7e9, 0x7ef, 0xff8, 0xffe, 0xffc,
+    0xfff,
+];
+
+static AAC_UNSIGNED_PAIRS10_TABLE: OnceLock<Vec<HuffmanEntry<AacSpectralMagnitudePair>>> =
+    OnceLock::new();
+
+#[rustfmt::skip]
+const AAC_ESCAPE_LENS: [u8; 289] = [
+     4,  5,  6,  7,  8,  8,  9, 10, 10, 10, 11, 11, 12, 11, 12, 12,
+    10,  5,  4,  5,  6,  7,  7,  8,  8,  9,  9,  9, 10, 10, 10, 10,
+    11,  8,  6,  5,  5,  6,  7,  7,  8,  8,  8,  9,  9,  9, 10, 10,
+    10, 10,  8,  7,  6,  6,  6,  7,  7,  8,  8,  8,  9,  9,  9, 10,
+    10, 10, 10,  8,  8,  7,  7,  7,  7,  8,  8,  8,  8,  9,  9,  9,
+    10, 10, 10, 10,  8,  8,  7,  7,  7,  7,  8,  8,  8,  9,  9,  9,
+     9, 10, 10, 10, 10,  8,  9,  8,  8,  8,  8,  8,  8,  8,  9,  9,
+     9, 10, 10, 10, 10, 10,  8,  9,  8,  8,  8,  8,  8,  8,  9,  9,
+     9, 10, 10, 10, 10, 10, 10,  8, 10,  9,  8,  8,  9,  9,  9,  9,
+     9, 10, 10, 10, 10, 10, 10, 11,  8, 10,  9,  9,  9,  9,  9,  9,
+     9, 10, 10, 10, 10, 10, 10, 11, 11,  8, 11,  9,  9,  9,  9,  9,
+     9, 10, 10, 10, 10, 10, 11, 10, 11, 11,  8, 11, 10,  9,  9, 10,
+     9, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11,  8, 11, 10, 10, 10,
+    10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11,  9, 11, 10,  9,
+     9, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11,  9, 11, 10,
+    10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11,  9, 12,
+    10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 12, 12,  9,
+     9,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  8,  9,
+     5,
+];
+
+#[rustfmt::skip]
+const AAC_ESCAPE_CODES: [u32; 289] = [
+    0x000, 0x006, 0x019, 0x03d, 0x09c, 0x0c6, 0x1a7, 0x390,
+    0x3c2, 0x3df, 0x7e6, 0x7f3, 0xffb, 0x7ec, 0xffa, 0xffe,
+    0x38e, 0x005, 0x001, 0x008, 0x014, 0x037, 0x042, 0x092,
+    0x0af, 0x191, 0x1a5, 0x1b5, 0x39e, 0x3c0, 0x3a2, 0x3cd,
+    0x7d6, 0x0ae, 0x017, 0x007, 0x009, 0x018, 0x039, 0x040,
+    0x08e, 0x0a3, 0x0b8, 0x199, 0x1ac, 0x1c1, 0x3b1, 0x396,
+    0x3be, 0x3ca, 0x09d, 0x03c, 0x015, 0x016, 0x01a, 0x03b,
+    0x044, 0x091, 0x0a5, 0x0be, 0x196, 0x1ae, 0x1b9, 0x3a1,
+    0x391, 0x3a5, 0x3d5, 0x094, 0x09a, 0x036, 0x038, 0x03a,
+    0x041, 0x08c, 0x09b, 0x0b0, 0x0c3, 0x19e, 0x1ab, 0x1bc,
+    0x39f, 0x38f, 0x3a9, 0x3cf, 0x093, 0x0bf, 0x03e, 0x03f,
+    0x043, 0x045, 0x09e, 0x0a7, 0x0b9, 0x194, 0x1a2, 0x1ba,
+    0x1c3, 0x3a6, 0x3a7, 0x3bb, 0x3d4, 0x09f, 0x1a0, 0x08f,
+    0x08d, 0x090, 0x098, 0x0a6, 0x0b6, 0x0c4, 0x19f, 0x1af,
+    0x1bf, 0x399, 0x3bf, 0x3b4, 0x3c9, 0x3e7, 0x0a8, 0x1b6,
+    0x0ab, 0x0a4, 0x0aa, 0x0b2, 0x0c2, 0x0c5, 0x198, 0x1a4,
+    0x1b8, 0x38c, 0x3a4, 0x3c4, 0x3c6, 0x3dd, 0x3e8, 0x0ad,
+    0x3af, 0x192, 0x0bd, 0x0bc, 0x18e, 0x197, 0x19a, 0x1a3,
+    0x1b1, 0x38d, 0x398, 0x3b7, 0x3d3, 0x3d1, 0x3db, 0x7dd,
+    0x0b4, 0x3de, 0x1a9, 0x19b, 0x19c, 0x1a1, 0x1aa, 0x1ad,
+    0x1b3, 0x38b, 0x3b2, 0x3b8, 0x3ce, 0x3e1, 0x3e0, 0x7d2,
+    0x7e5, 0x0b7, 0x7e3, 0x1bb, 0x1a8, 0x1a6, 0x1b0, 0x1b2,
+    0x1b7, 0x39b, 0x39a, 0x3ba, 0x3b5, 0x3d6, 0x7d7, 0x3e4,
+    0x7d8, 0x7ea, 0x0ba, 0x7e8, 0x3a0, 0x1bd, 0x1b4, 0x38a,
+    0x1c4, 0x392, 0x3aa, 0x3b0, 0x3bc, 0x3d7, 0x7d4, 0x7dc,
+    0x7db, 0x7d5, 0x7f0, 0x0c1, 0x7fb, 0x3c8, 0x3a3, 0x395,
+    0x39d, 0x3ac, 0x3ae, 0x3c5, 0x3d8, 0x3e2, 0x3e6, 0x7e4,
+    0x7e7, 0x7e0, 0x7e9, 0x7f7, 0x190, 0x7f2, 0x393, 0x1be,
+    0x1c0, 0x394, 0x397, 0x3ad, 0x3c3, 0x3c1, 0x3d2, 0x7da,
+    0x7d9, 0x7df, 0x7eb, 0x7f4, 0x7fa, 0x195, 0x7f8, 0x3bd,
+    0x39c, 0x3ab, 0x3a8, 0x3b3, 0x3b9, 0x3d0, 0x3e3, 0x3e5,
+    0x7e2, 0x7de, 0x7ed, 0x7f1, 0x7f9, 0x7fc, 0x193, 0xffd,
+    0x3dc, 0x3b6, 0x3c7, 0x3cc, 0x3cb, 0x3d9, 0x3da, 0x7d3,
+    0x7e1, 0x7ee, 0x7ef, 0x7f5, 0x7f6, 0xffc, 0xfff, 0x19d,
+    0x1c2, 0x0b5, 0x0a1, 0x096, 0x097, 0x095, 0x099, 0x0a0,
+    0x0a2, 0x0ac, 0x0a9, 0x0b1, 0x0b3, 0x0bb, 0x0c0, 0x18f,
+    0x004,
+];
+
+static AAC_ESCAPE_TABLE: OnceLock<Vec<HuffmanEntry<AacSpectralMagnitudePair>>> = OnceLock::new();
+
 pub const AAC_SCALE_FACTOR_DELTA_ZERO_TABLE: &[HuffmanEntry<AacScaleFactorDelta>] =
     &[HuffmanEntry {
         symbol: AacScaleFactorDelta { delta: 0 },
@@ -847,6 +1116,20 @@ pub fn aac_unsigned_pairs7_unit_magnitude_spectral_tables() -> AacSpectralMagnit
     AacSpectralMagnitudeTables::default()
 }
 
+/// Returns the standard AAC-LC spectral table set currently implemented.
+///
+/// The unsigned-pairs codebooks 7/8/9/10 are provided implicitly by
+/// [`AacSpectralMagnitudeTables::table_for`]. This table set adds the standard
+/// escape codebook 11 so bitrate/step search can keep larger magnitudes instead
+/// of forcing them out of range. Signed/quad codebooks remain pending.
+#[must_use]
+pub fn aac_lc_standard_spectral_tables() -> AacSpectralMagnitudeTables<'static> {
+    AacSpectralMagnitudeTables {
+        escape: aac_escape_table(),
+        ..Default::default()
+    }
+}
+
 /// Returns the standard AAC unsigned-pairs codebook 7 for magnitudes 0..=7.
 #[must_use]
 pub fn aac_unsigned_pairs7_table() -> &'static [HuffmanEntry<AacSpectralMagnitudePair>] {
@@ -881,6 +1164,72 @@ pub fn aac_unsigned_pairs8_table() -> &'static [HuffmanEntry<AacSpectralMagnitud
                     symbol: AacSpectralMagnitudePair {
                         x: (index / 8) as u16,
                         y: (index % 8) as u16,
+                    },
+                    code: HuffmanCode { bits, len },
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
+/// Returns the standard AAC unsigned-pairs codebook 9 for magnitudes 0..=12.
+#[must_use]
+pub fn aac_unsigned_pairs9_table() -> &'static [HuffmanEntry<AacSpectralMagnitudePair>] {
+    AAC_UNSIGNED_PAIRS9_TABLE
+        .get_or_init(|| {
+            AAC_UNSIGNED_PAIRS9_CODES
+                .iter()
+                .zip(AAC_UNSIGNED_PAIRS9_LENS)
+                .enumerate()
+                .map(|(index, (&bits, len))| HuffmanEntry {
+                    symbol: AacSpectralMagnitudePair {
+                        x: (index / 13) as u16,
+                        y: (index % 13) as u16,
+                    },
+                    code: HuffmanCode { bits, len },
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
+/// Returns the standard AAC unsigned-pairs codebook 10 for magnitudes 0..=12.
+#[must_use]
+pub fn aac_unsigned_pairs10_table() -> &'static [HuffmanEntry<AacSpectralMagnitudePair>] {
+    AAC_UNSIGNED_PAIRS10_TABLE
+        .get_or_init(|| {
+            AAC_UNSIGNED_PAIRS10_CODES
+                .iter()
+                .zip(AAC_UNSIGNED_PAIRS10_LENS)
+                .enumerate()
+                .map(|(index, (&bits, len))| HuffmanEntry {
+                    symbol: AacSpectralMagnitudePair {
+                        x: (index / 13) as u16,
+                        y: (index % 13) as u16,
+                    },
+                    code: HuffmanCode { bits, len },
+                })
+                .collect()
+        })
+        .as_slice()
+}
+
+/// Returns the standard AAC escape codebook 11 for magnitudes 0..=16.
+///
+/// Magnitude 16 is the escape sentinel; actual magnitudes above 16 are packed
+/// by appending escape suffix bits after the Huffman codeword.
+#[must_use]
+pub fn aac_escape_table() -> &'static [HuffmanEntry<AacSpectralMagnitudePair>] {
+    AAC_ESCAPE_TABLE
+        .get_or_init(|| {
+            AAC_ESCAPE_CODES
+                .iter()
+                .zip(AAC_ESCAPE_LENS)
+                .enumerate()
+                .map(|(index, (&bits, len))| HuffmanEntry {
+                    symbol: AacSpectralMagnitudePair {
+                        x: (index / 17) as u16,
+                        y: (index % 17) as u16,
                     },
                     code: HuffmanCode { bits, len },
                 })
@@ -986,6 +1335,46 @@ pub fn spectral_pairs_for_section(
         .collect()
 }
 
+/// Converts one AAC section's quantized coefficients into quadruple symbols.
+pub fn spectral_quads_for_section(
+    quantized: &[i32],
+    section: &AacSection,
+) -> Result<Vec<AacSpectralQuad>, Error> {
+    if section.end <= section.start || section.end > quantized.len() {
+        return Err(Error::InvalidInput("invalid AAC section range"));
+    }
+    if section.codebook == AacCodebook::Zero {
+        return Ok(Vec::new());
+    }
+
+    let coeffs = &quantized[section.start..section.end];
+    if coeffs.len() % 4 != 0 {
+        return Err(Error::InvalidInput(
+            "AAC spectral quad section must have length divisible by four",
+        ));
+    }
+
+    coeffs
+        .chunks_exact(4)
+        .map(|quad| {
+            Ok(AacSpectralQuad::new(
+                i16::try_from(quad[0]).map_err(|_| {
+                    Error::InvalidInput("AAC spectral quad coefficient exceeds i16 range")
+                })?,
+                i16::try_from(quad[1]).map_err(|_| {
+                    Error::InvalidInput("AAC spectral quad coefficient exceeds i16 range")
+                })?,
+                i16::try_from(quad[2]).map_err(|_| {
+                    Error::InvalidInput("AAC spectral quad coefficient exceeds i16 range")
+                })?,
+                i16::try_from(quad[3]).map_err(|_| {
+                    Error::InvalidInput("AAC spectral quad coefficient exceeds i16 range")
+                })?,
+            ))
+        })
+        .collect()
+}
+
 /// Groups quantized AAC spectral coefficients into contiguous codebook sections.
 pub fn plan_sections(quantized: &[i32], band_width: usize) -> Result<Vec<AacSection>, Error> {
     if band_width == 0 {
@@ -1034,8 +1423,11 @@ pub fn select_codebook_by_bit_cost(
     let candidates = [
         (AacCodebook::SignedPairs1, tables.pairs1),
         (AacCodebook::SignedPairs5, tables.pairs5),
+        (AacCodebook::SignedPairs6, tables.pairs6),
         (AacCodebook::UnsignedPairs7, aac_unsigned_pairs7_table()),
         (AacCodebook::UnsignedPairs8, aac_unsigned_pairs8_table()),
+        (AacCodebook::UnsignedPairs9, aac_unsigned_pairs9_table()),
+        (AacCodebook::UnsignedPairs10, aac_unsigned_pairs10_table()),
         (AacCodebook::Escape, tables.escape),
     ];
     let mut best: Option<(AacCodebook, usize)> = None;
@@ -1082,8 +1474,11 @@ fn select_magnitude_section_by_bit_cost<'a>(
     let candidates = [
         (AacCodebook::SignedPairs1.id(), tables.pairs1),
         (AacCodebook::SignedPairs5.id(), tables.pairs5),
+        (AacCodebook::SignedPairs6.id(), tables.pairs6),
         (7, aac_unsigned_pairs7_table()),
         (8, aac_unsigned_pairs8_table()),
+        (9, aac_unsigned_pairs9_table()),
+        (10, aac_unsigned_pairs10_table()),
         (AacCodebook::Escape.id(), tables.escape),
     ];
     let mut best: Option<(u8, &'a [HuffmanEntry<AacSpectralMagnitudePair>], usize)> = None;
@@ -1431,6 +1826,51 @@ pub fn pack_section_data_with_len(
     })
 }
 
+/// Packs AAC quad-codebook section metadata with caller-supplied codebook ids.
+pub fn pack_quad_section_data_with_len(
+    sections: &[AacQuadSection],
+    band_width: usize,
+) -> Result<PackedBits, Error> {
+    if band_width == 0 {
+        return Err(Error::InvalidInput(
+            "AAC section band width must be non-zero",
+        ));
+    }
+
+    let mut writer = CoreBitWriter::new();
+    for section in sections {
+        if !(1..=4).contains(&section.codebook_id) {
+            return Err(Error::InvalidInput("AAC quad codebook id must be 1..=4"));
+        }
+        if section.end <= section.start
+            || section.start % band_width != 0
+            || section.end % band_width != 0
+        {
+            return Err(Error::InvalidInput("invalid AAC section range"));
+        }
+
+        writer.write_bits(u32::from(section.codebook_id), 4)?;
+        let mut band_count = (section.end - section.start) / band_width;
+        if band_count == 0 {
+            return Err(Error::InvalidInput("invalid AAC section length"));
+        }
+        while band_count >= 31 {
+            writer.write_bits(31, 5)?;
+            band_count -= 31;
+        }
+        writer.write_bits(
+            u32::try_from(band_count)
+                .map_err(|_| Error::InvalidInput("AAC section is too long"))?,
+            5,
+        )?;
+    }
+    let bit_len = writer.bit_len();
+    Ok(PackedBits {
+        bytes: writer.finish_byte_aligned(),
+        bit_len,
+    })
+}
+
 pub fn pack_section_data_with_offsets(
     sections: &[AacSection],
     offsets: &[usize],
@@ -1533,6 +1973,14 @@ pub fn pack_spectral_pairs_with_table(
     pack_huffman_symbols_with_len(pairs, table)
 }
 
+/// Packs AAC spectral quadruples using a caller-supplied codebook table.
+pub fn pack_spectral_quads_with_table(
+    quads: &[AacSpectralQuad],
+    table: &[HuffmanEntry<AacSpectralQuad>],
+) -> Result<PackedBits, Error> {
+    pack_huffman_symbols_with_len(quads, table)
+}
+
 /// Packs AAC spectral pairs with magnitude-keyed codewords followed by sign bits.
 pub fn pack_spectral_pairs_with_sign_bits(
     pairs: &[AacSpectralPair],
@@ -1547,10 +1995,32 @@ pub fn pack_spectral_pairs_with_sign_bits(
         );
         let code = sc_core::lookup_huffman_code(table, &table_magnitude)?;
         writer.write_bits(code.bits, code.len)?;
-        write_aac_escape_suffix(&mut writer, magnitude.x)?;
-        write_aac_escape_suffix(&mut writer, magnitude.y)?;
         write_aac_sign_bit(&mut writer, pair.x)?;
         write_aac_sign_bit(&mut writer, pair.y)?;
+        write_aac_escape_suffix(&mut writer, magnitude.x)?;
+        write_aac_escape_suffix(&mut writer, magnitude.y)?;
+    }
+    let bit_len = writer.bit_len();
+    Ok(PackedBits {
+        bytes: writer.finish_byte_aligned(),
+        bit_len,
+    })
+}
+
+/// Packs AAC spectral quadruples with magnitude-keyed codewords followed by sign bits.
+pub fn pack_spectral_quads_with_sign_bits(
+    quads: &[AacSpectralQuad],
+    table: &[HuffmanEntry<AacSpectralMagnitudeQuad>],
+) -> Result<PackedBits, Error> {
+    let mut writer = CoreBitWriter::new();
+    for quad in quads {
+        let magnitude = aac_spectral_quad_magnitude(*quad)?;
+        let code = sc_core::lookup_huffman_code(table, &magnitude)?;
+        writer.write_bits(code.bits, code.len)?;
+        write_aac_sign_bit(&mut writer, quad.v)?;
+        write_aac_sign_bit(&mut writer, quad.w)?;
+        write_aac_sign_bit(&mut writer, quad.x)?;
+        write_aac_sign_bit(&mut writer, quad.y)?;
     }
     let bit_len = writer.bit_len();
     Ok(PackedBits {
@@ -1594,6 +2064,34 @@ pub fn pack_spectral_sections_with_sign_bits(
         parts.push(pack_spectral_pairs_with_sign_bits(
             &pairs,
             tables.table_for(section.codebook)?,
+        )?);
+    }
+    concat_packed_bits(&parts)
+}
+
+/// Packs all non-zero AAC quad sections using magnitude tables and sign bits.
+pub fn pack_spectral_quad_sections_with_sign_bits(
+    sections: &[AacQuadSection],
+    quantized: &[i32],
+    tables: AacSpectralMagnitudeQuadTables<'_>,
+) -> Result<PackedBits, Error> {
+    let mut parts = Vec::new();
+    for section in sections {
+        if section.end <= section.start || section.end > quantized.len() {
+            return Err(Error::InvalidInput("invalid AAC section range"));
+        }
+        let public_section = AacSection {
+            start: section.start,
+            end: section.end,
+            codebook: AacCodebook::SignedPairs1,
+        };
+        let quads = spectral_quads_for_section(quantized, &public_section)?;
+        if quads.is_empty() {
+            continue;
+        }
+        parts.push(pack_spectral_quads_with_sign_bits(
+            &quads,
+            tables.table_for_codebook_id(section.codebook_id)?,
         )?);
     }
     concat_packed_bits(&parts)
@@ -1691,6 +2189,18 @@ pub fn pack_sectioned_spectral_payload_with_sign_bits(
 ) -> Result<PackedBits, Error> {
     let section_bits = pack_section_data_with_len(sections, band_width)?;
     let spectral_bits = pack_spectral_sections_with_sign_bits(sections, quantized, tables)?;
+    concat_packed_bits(&[section_bits, spectral_bits])
+}
+
+/// Packs AAC quad section metadata followed by magnitude-keyed quad spectral payloads.
+pub fn pack_sectioned_spectral_quad_payload_with_sign_bits(
+    sections: &[AacQuadSection],
+    quantized: &[i32],
+    band_width: usize,
+    tables: AacSpectralMagnitudeQuadTables<'_>,
+) -> Result<PackedBits, Error> {
+    let section_bits = pack_quad_section_data_with_len(sections, band_width)?;
+    let spectral_bits = pack_spectral_quad_sections_with_sign_bits(sections, quantized, tables)?;
     concat_packed_bits(&[section_bits, spectral_bits])
 }
 
@@ -2469,6 +2979,34 @@ pub fn encode_quantized_stereo_adts_with_selected_scale_factors_by_bit_cost(
     )
 }
 
+pub fn encode_quantized_stereo_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacQuantizedSpectrum<'_>,
+    right: AacQuantizedSpectrum<'_>,
+    offsets: &[usize],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    let left_scale_factors = select_scale_factors_for_quantized_bands_by_offsets(
+        left.quantized,
+        offsets,
+        i16::from(left.config.global_gain),
+    )?;
+    let right_scale_factors = select_scale_factors_for_quantized_bands_by_offsets(
+        right.quantized,
+        offsets,
+        i16::from(right.config.global_gain),
+    )?;
+    encode_quantized_stereo_adts_with_offsets_and_scale_factors_by_bit_cost(
+        adts,
+        AacQuantizedChannel::new(left.config, left.quantized, &left_scale_factors),
+        AacQuantizedChannel::new(right.config, right.quantized, &right_scale_factors),
+        offsets,
+        scale_factor_table,
+        spectral_tables,
+    )
+}
+
 /// Encodes one mono AAC-LC ADTS frame from a PCM long analysis block.
 pub fn encode_pcm_mono_long_block_adts(
     adts: AdtsConfig,
@@ -2851,6 +3389,35 @@ pub fn encode_pcm_stereo_long_block_adts_with_selected_scale_factors_by_bit_cost
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    offsets: &[usize],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    if adts.channels != 2 || pcm.channels != 2 {
+        return Err(Error::InvalidInput(
+            "AAC stereo PCM encode requires two-channel ADTS and PCM",
+        ));
+    }
+    let left_quantized = quantize_pcm_long_block(pcm, 0, start_frame, step)?;
+    let right_quantized = quantize_pcm_long_block(pcm, 1, start_frame, step)?;
+    encode_quantized_stereo_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+        adts,
+        AacQuantizedSpectrum::new(left, &left_quantized),
+        AacQuantizedSpectrum::new(right, &right_quantized),
+        offsets,
+        scale_factor_table,
+        spectral_tables,
+    )
+}
+
 /// Encodes a mono AAC-LC ADTS stream from PCM using 1024-frame long-block hops.
 pub fn encode_pcm_mono_long_block_adts_stream(
     adts: AdtsConfig,
@@ -3041,6 +3608,120 @@ pub fn encode_pcm_mono_long_block_adts_stream_with_selected_scale_factors_by_bit
     Ok(out)
 }
 
+pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    if adts.channels != 1 || pcm.channels != 1 {
+        return Err(Error::InvalidInput(
+            "AAC mono PCM encode requires one-channel ADTS and PCM",
+        ));
+    }
+
+    let mut out = Vec::new();
+    for start_frame in pcm_frame_starts(pcm, 0)? {
+        let step = select_aac_lc_mono_pcm_frame_step_with_offsets_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            scale_factor_table,
+            spectral_tables,
+        )?;
+        out.extend_from_slice(
+            &encode_pcm_mono_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+                adts,
+                channel,
+                pcm,
+                start_frame,
+                step,
+                offsets,
+                scale_factor_table,
+                spectral_tables,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    if adts.channels != 1 || pcm.channels != 1 {
+        return Err(Error::InvalidInput(
+            "AAC mono PCM encode requires one-channel ADTS and PCM",
+        ));
+    }
+
+    let mut out = Vec::new();
+    for start_frame in pcm_frame_starts(pcm, 0)? {
+        let step = select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            max_frame_len_bytes,
+            scale_factor_table,
+            spectral_tables,
+        )?;
+        out.extend_from_slice(
+            &encode_pcm_mono_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+                adts,
+                channel,
+                pcm,
+                start_frame,
+                step,
+                offsets,
+                scale_factor_table,
+                spectral_tables,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    let max_frame_len_bytes =
+        aac_lc_adts_max_frame_len_for_bitrate(adts.sample_rate, target_bitrate_bps)?;
+    encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+        adts,
+        channel,
+        pcm,
+        offsets,
+        candidates,
+        max_frame_len_bytes,
+        scale_factor_table,
+        spectral_tables,
+    )
+}
+
 pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
     adts: AdtsConfig,
     channel: AacScaleFactorChannel<'_>,
@@ -3201,6 +3882,129 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_b
         );
     }
     Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    if adts.channels != 2 || pcm.channels != 2 {
+        return Err(Error::InvalidInput(
+            "AAC stereo PCM encode requires two-channel ADTS and PCM",
+        ));
+    }
+
+    let mut out = Vec::new();
+    for start_frame in pcm_frame_starts(pcm, 0)? {
+        let step = select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            scale_factor_table,
+            spectral_tables,
+        )?;
+        out.extend_from_slice(
+            &encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+                adts,
+                left,
+                right,
+                pcm,
+                start_frame,
+                step,
+                offsets,
+                scale_factor_table,
+                spectral_tables,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    if adts.channels != 2 || pcm.channels != 2 {
+        return Err(Error::InvalidInput(
+            "AAC stereo PCM encode requires two-channel ADTS and PCM",
+        ));
+    }
+
+    let mut out = Vec::new();
+    for start_frame in pcm_frame_starts(pcm, 0)? {
+        let step = select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            max_frame_len_bytes,
+            scale_factor_table,
+            spectral_tables,
+        )?;
+        out.extend_from_slice(
+            &encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+                adts,
+                left,
+                right,
+                pcm,
+                start_frame,
+                step,
+                offsets,
+                scale_factor_table,
+                spectral_tables,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    offsets: &[usize],
+    candidates: &[f32],
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<Vec<u8>, Error> {
+    let max_frame_len_bytes =
+        aac_lc_adts_max_frame_len_for_bitrate(adts.sample_rate, target_bitrate_bps)?;
+    encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+        adts,
+        left,
+        right,
+        pcm,
+        offsets,
+        candidates,
+        max_frame_len_bytes,
+        scale_factor_table,
+        spectral_tables,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3616,6 +4420,34 @@ pub fn select_aac_lc_mono_pcm_frame_step_with_offsets_by_bit_cost(
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<f32, Error> {
+    Ok(
+        select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            max_frame_len_bytes,
+            scale_factor_table,
+            spectral_tables,
+        )?
+        .step,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost(
     adts: AdtsConfig,
     channel: AacScaleFactorChannel<'_>,
@@ -3698,6 +4530,64 @@ pub fn select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<f32, Error> {
+    Ok(
+        select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            scale_factor_table,
+            spectral_tables,
+        )?
+        .step,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<f32, Error> {
+    Ok(
+        select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            candidates,
+            max_frame_len_bytes,
+            scale_factor_table,
+            spectral_tables,
+        )?
+        .step,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
     adts: AdtsConfig,
     left: AacScaleFactorChannel<'_>,
@@ -3770,6 +4660,52 @@ pub fn select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost(
                 }
                 _ => Some(selection),
             };
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<AacPcmFrameStepSelection, Error> {
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<AacPcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "AAC quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) = evaluate_aac_lc_mono_pcm_frame_step_with_offsets_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            start_frame,
+            offsets,
+            step,
+            scale_factor_table,
+            spectral_tables,
+        ) {
+            let Some(selection) =
+                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
+            else {
+                continue;
+            };
+            selected = select_better_aac_pcm_frame_step(selected, selection);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -3862,6 +4798,95 @@ pub fn select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_
                 spectral_tables,
             )
         {
+            let Some(selection) =
+                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
+            else {
+                continue;
+            };
+            selected = select_better_aac_pcm_frame_step(selected, selection);
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<AacPcmFrameStepSelection, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<AacPcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "AAC quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) = evaluate_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            step,
+            scale_factor_table,
+            spectral_tables,
+        ) {
+            selected = select_better_aac_pcm_frame_step(selected, selection);
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    candidates: &[f32],
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<AacPcmFrameStepSelection, Error> {
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<AacPcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "AAC quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) = evaluate_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            step,
+            scale_factor_table,
+            spectral_tables,
+        ) {
             let Some(selection) =
                 limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
             else {
@@ -4217,6 +5242,37 @@ fn evaluate_aac_lc_stereo_pcm_frame_step_by_bit_cost(
 }
 
 #[allow(clippy::too_many_arguments)]
+fn evaluate_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    step: f32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+    spectral_tables: AacSpectralMagnitudeTables<'_>,
+) -> Result<AacPcmFrameStepSelection, Error> {
+    let frame =
+        encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            step,
+            offsets,
+            scale_factor_table,
+            spectral_tables,
+        )?;
+    Ok(AacPcmFrameStepSelection {
+        step,
+        frame_len: frame.len(),
+        frame_capacity_bytes: AAC_ADTS_MAX_FRAME_LEN,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 fn evaluate_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost(
     adts: AdtsConfig,
     left: AacScaleFactorChannel<'_>,
@@ -4394,6 +5450,16 @@ fn non_empty_magnitude_table<'a>(
     Ok(table)
 }
 
+fn non_empty_quad_table<'a>(
+    table: &'a [HuffmanEntry<AacSpectralMagnitudeQuad>],
+    name: &'static str,
+) -> Result<&'a [HuffmanEntry<AacSpectralMagnitudeQuad>], Error> {
+    if table.is_empty() {
+        return Err(Error::UnsupportedFeature(name));
+    }
+    Ok(table)
+}
+
 fn validate_scale_factor_band_offsets(quantized: &[i32], offsets: &[usize]) -> Result<(), Error> {
     if offsets.len() < 2 || offsets.first().copied() != Some(0) {
         return Err(Error::InvalidInput("invalid AAC scale-factor offsets"));
@@ -4442,6 +5508,10 @@ fn pcm_frame_starts(pcm: &AudioBuffer, first_start_frame: usize) -> Result<Vec<u
 
 fn aac_spectral_pair_magnitude(pair: AacSpectralPair) -> Result<AacSpectralMagnitudePair, Error> {
     AacSpectralMagnitudePair::try_from(pair)
+}
+
+fn aac_spectral_quad_magnitude(quad: AacSpectralQuad) -> Result<AacSpectralMagnitudeQuad, Error> {
+    AacSpectralMagnitudeQuad::try_from(quad)
 }
 
 fn write_aac_escape_suffix(writer: &mut CoreBitWriter, magnitude: u16) -> Result<(), Error> {
@@ -4623,9 +5693,9 @@ fn classify_aac_codebook(quantized: &[i32]) -> Result<AacCodebook, Error> {
         .unwrap_or(0);
     Ok(match max_abs {
         0 => AacCodebook::Zero,
-        1 => AacCodebook::UnsignedPairs7,
-        2..=4 => AacCodebook::SignedPairs5,
-        5..=8191 => AacCodebook::Escape,
+        1..=7 => AacCodebook::UnsignedPairs7,
+        8..=12 => AacCodebook::UnsignedPairs9,
+        13..=8191 => AacCodebook::Escape,
         _ => {
             return Err(Error::InvalidInput(
                 "AAC spectral coefficient exceeds supported codebook range",
@@ -4732,16 +5802,22 @@ impl BitWriter {
 #[cfg(test)]
 mod tests {
     use super::{
-        aac_lc_adts_max_frame_len_for_bitrate, aac_lc_long_window_scale_factor_band_offsets,
-        aac_scale_factor_delta_table, aac_scale_factor_delta_zero_table, aac_unsigned_pairs7_table,
-        aac_unsigned_pairs7_unit_magnitude_spectral_tables, aac_unsigned_pairs8_table, encode,
-        encode_pcm_mono_long_block_adts, encode_pcm_mono_long_block_adts_by_bit_cost,
-        encode_pcm_mono_long_block_adts_stream, encode_pcm_mono_long_block_adts_stream_by_bit_cost,
+        aac_escape_table, aac_lc_adts_max_frame_len_for_bitrate,
+        aac_lc_default_production_bitrate_bps, aac_lc_long_window_scale_factor_band_offsets,
+        aac_lc_standard_spectral_tables, aac_scale_factor_delta_table,
+        aac_scale_factor_delta_zero_table, aac_unsigned_pairs10_table, aac_unsigned_pairs7_table,
+        aac_unsigned_pairs7_unit_magnitude_spectral_tables, aac_unsigned_pairs8_table,
+        aac_unsigned_pairs9_table, encode, encode_pcm_mono_long_block_adts,
+        encode_pcm_mono_long_block_adts_by_bit_cost, encode_pcm_mono_long_block_adts_stream,
+        encode_pcm_mono_long_block_adts_stream_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_auto_step_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_offsets_and_auto_step_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost,
+        encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
+        encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+        encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_scale_factors,
         encode_pcm_mono_long_block_adts_stream_with_scale_factors_by_bit_cost,
         encode_pcm_mono_long_block_adts_stream_with_selected_scale_factors,
@@ -4757,6 +5833,9 @@ mod tests {
         encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost,
         encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
         encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost,
+        encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
+        encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+        encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost,
         encode_pcm_stereo_long_block_adts_stream_with_scale_factors,
         encode_pcm_stereo_long_block_adts_stream_with_scale_factors_by_bit_cost,
         encode_pcm_stereo_long_block_adts_stream_with_selected_scale_factors,
@@ -4779,41 +5858,51 @@ mod tests {
         frame_adts, frame_adts_stream, mdct_long_block, mux_adts_as_m4a,
         pack_channel_pair_raw_data_block, pack_channel_pair_raw_data_block_parts,
         pack_channel_payload_parts, pack_long_block_individual_channel_stream,
-        pack_scale_factor_deltas_with_table, pack_section_data, pack_section_data_with_len,
-        pack_section_data_with_offsets, pack_sectioned_spectral_payload,
-        pack_sectioned_spectral_payload_with_scale_factor_bits,
+        pack_quad_section_data_with_len, pack_scale_factor_deltas_with_table, pack_section_data,
+        pack_section_data_with_len, pack_section_data_with_offsets,
+        pack_sectioned_spectral_payload, pack_sectioned_spectral_payload_with_scale_factor_bits,
         pack_sectioned_spectral_payload_with_sign_bits,
         pack_sectioned_spectral_payload_with_sign_bits_and_scale_factor_bits,
         pack_sectioned_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost,
         pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost,
-        pack_single_channel_raw_data_block, pack_single_channel_raw_data_block_parts,
-        pack_spectral_codewords, pack_spectral_codewords_with_len, pack_spectral_pairs_with_table,
-        pack_spectral_sections, pack_spectral_sections_with_sign_bits, parse_adts_frame,
-        plan_scale_factor_deltas, plan_scale_factor_deltas_by_offsets, plan_sections,
-        plan_sections_by_bit_cost, plan_sections_by_offsets, quantize_long_block,
-        quantize_pcm_long_block, select_aac_lc_mono_pcm_frame_step_by_bit_cost,
+        pack_sectioned_spectral_quad_payload_with_sign_bits, pack_single_channel_raw_data_block,
+        pack_single_channel_raw_data_block_parts, pack_spectral_codewords,
+        pack_spectral_codewords_with_len, pack_spectral_pairs_with_sign_bits,
+        pack_spectral_pairs_with_table, pack_spectral_quad_sections_with_sign_bits,
+        pack_spectral_quads_with_sign_bits, pack_spectral_quads_with_table, pack_spectral_sections,
+        pack_spectral_sections_with_sign_bits, parse_adts_frame, plan_scale_factor_deltas,
+        plan_scale_factor_deltas_by_offsets, plan_sections, plan_sections_by_bit_cost,
+        plan_sections_by_offsets, quantize_long_block, quantize_pcm_long_block,
+        select_aac_lc_mono_pcm_frame_step_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_details_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
+        select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_with_max_frame_len_by_bit_cost,
+        select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
         select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_details_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
+        select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost,
+        select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_with_max_frame_len_by_bit_cost,
+        select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
         select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
-        select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost,
-        select_codebook_by_bit_cost, select_scale_factors_for_quantized_bands,
+        select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost, select_codebook_by_bit_cost,
+        select_scale_factors_for_quantized_bands,
         select_scale_factors_for_quantized_bands_by_offsets, spectral_pairs_for_section,
-        split_sectioned_spectral_payload_with_sign_bits, AacCodebook, AacLongBlockConfig,
-        AacPcmFrameStepSelection, AacPcmLongBlockConfig, AacPcmStepSearchConfig,
-        AacQuantizedChannel, AacQuantizedSpectrum, AacScaleFactorChannel, AacScaleFactorDelta,
-        AacScaleFactorSequence, AacSection, AacSpectralMagnitudePair, AacSpectralMagnitudeTables,
-        AacSpectralPair, AacSpectralTables, AdtsConfig, BitWriter,
+        spectral_quads_for_section, split_sectioned_spectral_payload_with_sign_bits, AacCodebook,
+        AacLongBlockConfig, AacPcmFrameStepSelection, AacPcmLongBlockConfig,
+        AacPcmStepSearchConfig, AacQuadSection, AacQuantizedChannel, AacQuantizedSpectrum,
+        AacScaleFactorChannel, AacScaleFactorDelta, AacScaleFactorSequence, AacSection,
+        AacSpectralMagnitudePair, AacSpectralMagnitudeQuad, AacSpectralMagnitudeQuadTables,
+        AacSpectralMagnitudeTables, AacSpectralPair, AacSpectralQuad, AacSpectralTables,
+        AdtsConfig, BitWriter, AAC_ADTS_HEADER_LEN,
         AAC_LC_16K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS,
         AAC_LC_24K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS,
         AAC_LC_32K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS,
@@ -4926,18 +6015,13 @@ mod tests {
                 },
                 AacSection {
                     start: 4,
-                    end: 8,
-                    codebook: AacCodebook::UnsignedPairs7,
-                },
-                AacSection {
-                    start: 8,
                     end: 12,
-                    codebook: AacCodebook::SignedPairs5,
+                    codebook: AacCodebook::UnsignedPairs7,
                 },
                 AacSection {
                     start: 12,
                     end: 16,
-                    codebook: AacCodebook::Escape,
+                    codebook: AacCodebook::UnsignedPairs9,
                 },
             ]
         );
@@ -4945,6 +6029,49 @@ mod tests {
         assert!(plan_sections(&quantized, 0).is_err());
         assert!(plan_sections(&quantized[..15], 4).is_err());
         assert!(plan_sections(&[8192], 1).is_err());
+    }
+
+    #[test]
+    fn default_aac_section_planner_uses_available_standard_unsigned_pair_tables() {
+        let quantized = [2, -7, 0, 1, 8, -12, 0, 0, 13, 0, 0, 0];
+        let sections = plan_sections(&quantized, 4).unwrap();
+
+        assert_eq!(
+            sections,
+            vec![
+                AacSection {
+                    start: 0,
+                    end: 4,
+                    codebook: AacCodebook::UnsignedPairs7,
+                },
+                AacSection {
+                    start: 4,
+                    end: 8,
+                    codebook: AacCodebook::UnsignedPairs9,
+                },
+                AacSection {
+                    start: 8,
+                    end: 12,
+                    codebook: AacCodebook::Escape,
+                },
+            ]
+        );
+        assert!(
+            pack_spectral_sections_with_sign_bits(
+                &sections[..2],
+                &quantized,
+                AacSpectralMagnitudeTables::default(),
+            )
+            .unwrap()
+            .bit_len
+                > 0
+        );
+        assert!(pack_spectral_sections_with_sign_bits(
+            &sections[2..],
+            &quantized,
+            AacSpectralMagnitudeTables::default(),
+        )
+        .is_err());
     }
 
     #[test]
@@ -4960,12 +6087,30 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
 
         assert_eq!(
             select_codebook_by_bit_cost(&[1, -1], tables).unwrap(),
             AacCodebook::SignedPairs5
+        );
+        let pairs6 = [HuffmanEntry {
+            symbol: AacSpectralMagnitudePair::new(1, 1),
+            code: HuffmanCode::new(0b1, 1).unwrap(),
+        }];
+        assert_eq!(
+            select_codebook_by_bit_cost(
+                &[1, -1],
+                AacSpectralMagnitudeTables {
+                    pairs1: &pairs1,
+                    pairs5: &[],
+                    pairs6: &pairs6,
+                    escape: &[],
+                },
+            )
+            .unwrap(),
+            AacCodebook::SignedPairs6
         );
         assert_eq!(
             select_codebook_by_bit_cost(&[0, 0], AacSpectralMagnitudeTables::default()).unwrap(),
@@ -4978,6 +6123,26 @@ mod tests {
         assert_eq!(
             select_codebook_by_bit_cost(&[2, 0], AacSpectralMagnitudeTables::default()).unwrap(),
             AacCodebook::UnsignedPairs8
+        );
+        assert_eq!(
+            select_codebook_by_bit_cost(&[12, -12], AacSpectralMagnitudeTables::default()).unwrap(),
+            AacCodebook::UnsignedPairs10
+        );
+        assert!(
+            select_codebook_by_bit_cost(&[17, 0], AacSpectralMagnitudeTables::default()).is_err()
+        );
+        assert_eq!(
+            select_codebook_by_bit_cost(
+                &[17, 0],
+                AacSpectralMagnitudeTables {
+                    pairs1: &[],
+                    pairs5: &[],
+                    pairs6: &[],
+                    escape: aac_escape_table(),
+                },
+            )
+            .unwrap(),
+            AacCodebook::Escape
         );
         assert_eq!(
             plan_sections_by_bit_cost(&[1, -1, 0, 0], 2, tables).unwrap(),
@@ -5614,6 +6779,85 @@ mod tests {
     }
 
     #[test]
+    fn exposes_full_aac_unsigned_pairs9_table() {
+        let table = aac_unsigned_pairs9_table();
+
+        assert_eq!(table.len(), 169);
+        assert_eq!(table[0].symbol, AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, HuffmanCode::new(0x0000, 1).unwrap());
+        assert_eq!(table[14].symbol, AacSpectralMagnitudePair::new(1, 1));
+        assert_eq!(table[14].code, HuffmanCode::new(0x000c, 4).unwrap());
+        assert_eq!(table[168].symbol, AacSpectralMagnitudePair::new(12, 12));
+        assert_eq!(table[168].code, HuffmanCode::new(0x7fff, 15).unwrap());
+    }
+
+    #[test]
+    fn exposes_full_aac_unsigned_pairs10_table() {
+        let table = aac_unsigned_pairs10_table();
+
+        assert_eq!(table.len(), 169);
+        assert_eq!(table[0].symbol, AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, HuffmanCode::new(0x022, 6).unwrap());
+        assert_eq!(table[14].symbol, AacSpectralMagnitudePair::new(1, 1));
+        assert_eq!(table[14].code, HuffmanCode::new(0x000, 4).unwrap());
+        assert_eq!(table[168].symbol, AacSpectralMagnitudePair::new(12, 12));
+        assert_eq!(table[168].code, HuffmanCode::new(0xfff, 12).unwrap());
+    }
+
+    #[test]
+    fn exposes_standard_aac_escape_table() {
+        let table = aac_escape_table();
+
+        assert_eq!(table.len(), 289);
+        assert_eq!(table[0].symbol, AacSpectralMagnitudePair::new(0, 0));
+        assert_eq!(table[0].code, HuffmanCode::new(0x000, 4).unwrap());
+        assert_eq!(table[18].symbol, AacSpectralMagnitudePair::new(1, 1));
+        assert_eq!(table[18].code, HuffmanCode::new(0x001, 4).unwrap());
+        assert_eq!(table[288].symbol, AacSpectralMagnitudePair::new(16, 16));
+        assert_eq!(table[288].code, HuffmanCode::new(0x004, 5).unwrap());
+        assert_eq!(
+            pack_spectral_pairs_with_sign_bits(&[AacSpectralPair::new(-17, 0)], table).unwrap(),
+            PackedBits {
+                bytes: vec![0b1110_0001, 0b0100_0010],
+                bit_len: 15,
+            }
+        );
+        assert_eq!(
+            pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost(
+                &[12, -12],
+                2,
+                AacSpectralMagnitudeTables {
+                    pairs1: &[],
+                    pairs5: &[],
+                    pairs6: &[],
+                    escape: table,
+                },
+            )
+            .unwrap(),
+            PackedBits {
+                bytes: vec![0b1011_0000, 0b1111_1110, 0b0111_0100],
+                bit_len: 22,
+            }
+        );
+    }
+
+    #[test]
+    fn standard_aac_lc_spectral_tables_include_escape_codebook() {
+        let tables = aac_lc_standard_spectral_tables();
+
+        assert_eq!(
+            select_codebook_by_bit_cost(&[17, 0], tables).unwrap(),
+            AacCodebook::Escape
+        );
+        assert_eq!(
+            pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost(&[17, 0], 2, tables)
+                .unwrap()
+                .bit_len,
+            24
+        );
+    }
+
+    #[test]
     fn packs_aac_escape_spectral_pairs_with_suffix_bits() {
         let table = [
             HuffmanEntry {
@@ -5630,7 +6874,7 @@ mod tests {
             super::pack_spectral_pairs_with_sign_bits(&[AacSpectralPair::new(-17, 0)], &table)
                 .unwrap(),
             PackedBits {
-                bytes: vec![0b1000_0011],
+                bytes: vec![0b1010_0001],
                 bit_len: 8,
             }
         );
@@ -5638,7 +6882,7 @@ mod tests {
             super::pack_spectral_pairs_with_sign_bits(&[AacSpectralPair::new(32, -18)], &table)
                 .unwrap(),
             PackedBits {
-                bytes: vec![0b1110_0000, 0b0000_1001],
+                bytes: vec![0b1101_1000, 0b0000_0010],
                 bit_len: 16,
             }
         );
@@ -5685,6 +6929,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -5740,6 +6985,7 @@ mod tests {
             AacSpectralTables {
                 signed_pairs1: &signed_pairs1,
                 signed_pairs5: &signed_pairs5,
+                signed_pairs6: &[],
                 escape: &[],
             },
         )
@@ -5796,6 +7042,7 @@ mod tests {
             AacSpectralTables {
                 signed_pairs1: &signed_pairs1,
                 signed_pairs5: &signed_pairs5,
+                signed_pairs6: &[],
                 escape: &[],
             },
         )
@@ -5856,6 +7103,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -5868,6 +7116,172 @@ mod tests {
                 bit_len: 37,
             }
         );
+    }
+
+    #[test]
+    fn packs_aac_codebook6_sections_from_caller_table() {
+        let quantized = [1, -1];
+        let sections = vec![AacSection {
+            start: 0,
+            end: 2,
+            codebook: AacCodebook::SignedPairs6,
+        }];
+        let signed_pairs6 = [HuffmanEntry {
+            symbol: AacSpectralPair::new(1, -1),
+            code: HuffmanCode::new(0b10, 2).unwrap(),
+        }];
+        let magnitude_pairs6 = [HuffmanEntry {
+            symbol: AacSpectralMagnitudePair::new(1, 1),
+            code: HuffmanCode::new(0b0, 1).unwrap(),
+        }];
+
+        assert_eq!(
+            pack_spectral_sections(
+                &sections,
+                &quantized,
+                AacSpectralTables {
+                    signed_pairs1: &[],
+                    signed_pairs5: &[],
+                    signed_pairs6: &signed_pairs6,
+                    escape: &[],
+                },
+            )
+            .unwrap(),
+            PackedBits {
+                bytes: vec![0b1000_0000],
+                bit_len: 2,
+            }
+        );
+        assert_eq!(
+            pack_sectioned_spectral_payload_with_sign_bits(
+                &sections,
+                &quantized,
+                2,
+                AacSpectralMagnitudeTables {
+                    pairs1: &[],
+                    pairs5: &[],
+                    pairs6: &magnitude_pairs6,
+                    escape: &[],
+                },
+            )
+            .unwrap(),
+            PackedBits {
+                bytes: vec![0b0110_0000, 0b1001_0000],
+                bit_len: 12,
+            }
+        );
+    }
+
+    #[test]
+    fn converts_and_packs_aac_spectral_quads_with_sign_bits() {
+        let quantized = [1, -1, 0, 2, 0, 0, 0, 0];
+        let section = AacSection {
+            start: 0,
+            end: 4,
+            codebook: AacCodebook::SignedPairs1,
+        };
+        let quads = spectral_quads_for_section(&quantized, &section).unwrap();
+        let signed_table = [HuffmanEntry {
+            symbol: AacSpectralQuad::new(1, -1, 0, 2),
+            code: HuffmanCode::new(0b11, 2).unwrap(),
+        }];
+        let magnitude_table = [HuffmanEntry {
+            symbol: AacSpectralMagnitudeQuad::new(1, 1, 0, 2),
+            code: HuffmanCode::new(0b101, 3).unwrap(),
+        }];
+
+        assert_eq!(quads, vec![AacSpectralQuad::new(1, -1, 0, 2)]);
+        assert_eq!(
+            spectral_quads_for_section(
+                &quantized,
+                &AacSection {
+                    start: 4,
+                    end: 8,
+                    codebook: AacCodebook::Zero,
+                },
+            )
+            .unwrap(),
+            Vec::<AacSpectralQuad>::new()
+        );
+        assert_eq!(
+            pack_spectral_quads_with_table(&quads, &signed_table).unwrap(),
+            PackedBits {
+                bytes: vec![0b1100_0000],
+                bit_len: 2,
+            }
+        );
+        assert_eq!(
+            pack_spectral_quads_with_sign_bits(&quads, &magnitude_table).unwrap(),
+            PackedBits {
+                bytes: vec![0b1010_1000],
+                bit_len: 6,
+            }
+        );
+        assert!(spectral_quads_for_section(
+            &quantized,
+            &AacSection {
+                start: 0,
+                end: 2,
+                codebook: AacCodebook::SignedPairs1,
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn packs_aac_quad_sections_with_sign_bits() {
+        let quantized = [1, -1, 0, 1, 0, 1, -1, 0];
+        let sections = vec![AacQuadSection {
+            start: 0,
+            end: 8,
+            codebook_id: 3,
+        }];
+        let table = [
+            HuffmanEntry {
+                symbol: AacSpectralMagnitudeQuad::new(1, 1, 0, 1),
+                code: HuffmanCode::new(0b10, 2).unwrap(),
+            },
+            HuffmanEntry {
+                symbol: AacSpectralMagnitudeQuad::new(0, 1, 1, 0),
+                code: HuffmanCode::new(0b11, 2).unwrap(),
+            },
+        ];
+        let tables = AacSpectralMagnitudeQuadTables {
+            quads3: &table,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            pack_quad_section_data_with_len(&sections, 4).unwrap(),
+            PackedBits {
+                bytes: vec![0b0011_0001, 0b0000_0000],
+                bit_len: 9,
+            }
+        );
+        assert_eq!(
+            pack_spectral_quad_sections_with_sign_bits(&sections, &quantized, tables).unwrap(),
+            PackedBits {
+                bytes: vec![0b1001_0110, 0b1000_0000],
+                bit_len: 9,
+            }
+        );
+        assert_eq!(
+            pack_sectioned_spectral_quad_payload_with_sign_bits(&sections, &quantized, 4, tables)
+                .unwrap(),
+            PackedBits {
+                bytes: vec![0b0011_0001, 0b0100_1011, 0b0100_0000],
+                bit_len: 18,
+            }
+        );
+        assert!(pack_quad_section_data_with_len(
+            &[AacQuadSection {
+                start: 0,
+                end: 4,
+                codebook_id: 5,
+            }],
+            4,
+        )
+        .is_err());
     }
 
     #[test]
@@ -5884,6 +7298,7 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
         let expected_sections = vec![
@@ -5942,6 +7357,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &[],
                 pairs5: &[],
+                pairs6: &[],
                 escape: &escape,
             },
         )
@@ -5950,7 +7366,7 @@ mod tests {
         assert_eq!(
             packed,
             PackedBits {
-                bytes: vec![0x00, 0xd8, 0x60, 0x80],
+                bytes: vec![0x00, 0xd8, 0x60, 0x40],
                 bit_len: 26,
             }
         );
@@ -6042,6 +7458,7 @@ mod tests {
                 AacSpectralTables {
                     signed_pairs1: &signed_pairs1,
                     signed_pairs5: &signed_pairs5,
+                    signed_pairs6: &[],
                     escape: &[],
                 },
             )
@@ -6060,6 +7477,7 @@ mod tests {
                 AacSpectralMagnitudeTables {
                     pairs1: &pairs1,
                     pairs5: &pairs5,
+                    pairs6: &[],
                     escape: &[],
                 },
             )
@@ -6181,6 +7599,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6189,8 +7608,8 @@ mod tests {
         assert_eq!(
             adts,
             [
-                0xff, 0xf1, 0x50, 0x40, 0x02, 0x1f, 0xfc, 0x00, 0xf0, 0x01, 0x80, 0x2e, 0x15, 0x10,
-                0xc4, 0xee,
+                0xff, 0xf1, 0x50, 0x40, 0x02, 0x3f, 0xfc, 0x00, 0xf0, 0x01, 0x80, 0x2e, 0x31, 0x8f,
+                0x37, 0x2b, 0x80,
             ]
         );
         assert!(encode_quantized_mono_adts(
@@ -6201,6 +7620,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6222,6 +7642,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &[],
                 pairs5: &[],
+                pairs6: &[],
                 escape: &escape,
             },
         )
@@ -6238,6 +7659,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &[],
                 pairs5: &[],
+                pairs6: &[],
                 escape: &escape,
             },
         )
@@ -6301,6 +7723,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6309,8 +7732,8 @@ mod tests {
         assert_eq!(
             adts,
             [
-                0xff, 0xf1, 0x50, 0x40, 0x02, 0x3f, 0xfc, 0x00, 0xf0, 0x01, 0x80, 0x2e, 0x15, 0x15,
-                0x83, 0x13, 0xb8,
+                0xff, 0xf1, 0x50, 0x40, 0x02, 0x3f, 0xfc, 0x00, 0xf0, 0x01, 0x80, 0x2e, 0x3b, 0x06,
+                0x3c, 0xdc, 0xae,
             ]
         );
         assert!(encode_quantized_mono_adts_with_scale_factors(
@@ -6323,6 +7746,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6359,6 +7783,7 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
 
@@ -6408,6 +7833,7 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
         let expected_sections = vec![
@@ -6518,6 +7944,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6526,8 +7953,8 @@ mod tests {
         assert_eq!(
             adts,
             [
-                0xff, 0xf1, 0x50, 0x80, 0x03, 0x1f, 0xfc, 0x20, 0x78, 0x00, 0xc0, 0x17, 0x0a, 0x88,
-                0x62, 0x73, 0x20, 0x06, 0x00, 0xb8, 0x54, 0x43, 0x23, 0x78,
+                0xff, 0xf1, 0x50, 0x80, 0x03, 0x3f, 0xfc, 0x20, 0x78, 0x00, 0xc0, 0x17, 0x18, 0xc7,
+                0x9b, 0x94, 0xc8, 0x01, 0x80, 0x2e, 0x31, 0x97, 0x37, 0x27, 0x80,
             ]
         );
         assert!(encode_quantized_stereo_adts(
@@ -6540,6 +7967,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6596,6 +8024,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6604,8 +8033,8 @@ mod tests {
         assert_eq!(
             adts,
             [
-                0xff, 0xf1, 0x50, 0x80, 0x03, 0x5f, 0xfc, 0x20, 0x78, 0x00, 0xc0, 0x17, 0x0a, 0x8a,
-                0xc1, 0x89, 0xcc, 0x80, 0x18, 0x02, 0xe1, 0x51, 0x58, 0x32, 0x37, 0x80,
+                0xff, 0xf1, 0x50, 0x80, 0x03, 0x5f, 0xfc, 0x20, 0x78, 0x00, 0xc0, 0x17, 0x1d, 0x83,
+                0x1e, 0x6e, 0x53, 0x20, 0x06, 0x00, 0xb8, 0xec, 0x19, 0x73, 0x72, 0x78,
             ]
         );
         assert!(encode_quantized_stereo_adts_with_scale_factors(
@@ -6625,6 +8054,7 @@ mod tests {
             AacSpectralMagnitudeTables {
                 pairs1: &pairs1,
                 pairs5: &pairs5,
+                pairs6: &[],
                 escape: &[],
             },
         )
@@ -6662,6 +8092,7 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
 
@@ -6719,6 +8150,7 @@ mod tests {
         let tables = AacSpectralMagnitudeTables {
             pairs1: &pairs1,
             pairs5: &pairs5,
+            pairs6: &[],
             escape: &[],
         };
         let sections = vec![
@@ -7321,6 +8753,21 @@ mod tests {
             )
             .unwrap();
         let public_scaffold = encode(&pcm).unwrap();
+        let offsets = aac_lc_long_window_scale_factor_band_offsets(44_100).unwrap();
+        let production_channel = AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
+        let production_bitrate = aac_lc_default_production_bitrate_bps(1).unwrap();
+        let production =
+            encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                production_channel,
+                &pcm,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                production_bitrate,
+                &aac_scale_factor_delta_table(),
+                aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
+            )
+            .unwrap();
         let zero_payload =
             encode_pcm_mono_long_block_adts_stream_with_selected_scale_factors_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 1),
@@ -7338,6 +8785,7 @@ mod tests {
         assert!(details.frame_len <= details.frame_capacity_bytes);
         assert_eq!(auto, selected);
         assert_eq!(&public_scaffold[..2], &[0xff, 0xf1]);
+        assert_eq!(public_scaffold, production);
         assert_ne!(public_scaffold, zero_payload);
         assert_ne!(auto, zero_payload);
     }
@@ -7456,6 +8904,17 @@ mod tests {
         let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
         let scale_factor_table = aac_scale_factor_delta_zero_table();
         let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+        let default_mono_bitrate = aac_lc_default_production_bitrate_bps(1).unwrap();
+        let default_stereo_bitrate = aac_lc_default_production_bitrate_bps(2).unwrap();
+
+        assert_eq!(default_mono_bitrate, 128_000);
+        assert_eq!(default_stereo_bitrate, 256_000);
+        assert!(
+            aac_lc_adts_max_frame_len_for_bitrate(44_100, default_mono_bitrate).unwrap()
+                >= AAC_ADTS_HEADER_LEN
+        );
+        assert!(aac_lc_default_production_bitrate_bps(0).is_err());
+        assert!(aac_lc_default_production_bitrate_bps(3).is_err());
 
         let mono_unconstrained =
             select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost(
@@ -7553,6 +9012,85 @@ mod tests {
                 spectral_tables,
             )
             .unwrap();
+        let selected_scale_factor_table = aac_scale_factor_delta_table();
+        let mono_selected_unconstrained =
+            select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_selected_step =
+            select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                mono_selected_unconstrained.frame_len,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_selected_details =
+            select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                mono_selected_unconstrained.frame_len,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_selected_encoded =
+            encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_selected_budget_encoded =
+            encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                max_adts_frame_len(&mono_selected_encoded),
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let mono_selected_target_bitrate =
+            ((max_adts_frame_len(&mono_selected_encoded) as u64 * 8 * 44_100).div_ceil(1024))
+                as u32;
+        let mono_selected_bitrate_budget =
+            aac_lc_adts_max_frame_len_for_bitrate(44_100, mono_selected_target_bitrate).unwrap();
+        let mono_selected_bitrate_encoded =
+            encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 1),
+                channel_config,
+                &mono,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                mono_selected_target_bitrate,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
 
         assert_eq!(mono_step, mono_unconstrained.step);
         assert_eq!(mono_details.step, mono_unconstrained.step);
@@ -7562,6 +9100,10 @@ mod tests {
         );
         assert_eq!(mono_budget_encoded, mono_encoded);
         assert!(max_adts_frame_len(&mono_bitrate_encoded) <= mono_bitrate_budget);
+        assert_eq!(mono_selected_details.step, mono_selected_unconstrained.step);
+        assert_eq!(mono_selected_step, mono_selected_unconstrained.step);
+        assert_eq!(mono_selected_budget_encoded, mono_selected_encoded);
+        assert!(max_adts_frame_len(&mono_selected_bitrate_encoded) <= mono_selected_bitrate_budget);
         assert!(
             select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 1),
@@ -7680,6 +9222,103 @@ mod tests {
                 spectral_tables,
             )
             .unwrap();
+        let stereo_selected_unconstrained =
+            select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_unconstrained_step =
+            select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_step =
+            select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                stereo_selected_unconstrained.frame_len,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_details =
+            select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                0,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                stereo_selected_unconstrained.frame_len,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_encoded =
+            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_budget_encoded =
+            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                max_adts_frame_len(&stereo_selected_encoded),
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
+        let stereo_selected_target_bitrate =
+            ((max_adts_frame_len(&stereo_selected_encoded) as u64 * 8 * 44_100).div_ceil(1024))
+                as u32;
+        let stereo_selected_bitrate_budget =
+            aac_lc_adts_max_frame_len_for_bitrate(44_100, stereo_selected_target_bitrate).unwrap();
+        let stereo_selected_bitrate_encoded =
+            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
+                AdtsConfig::aac_lc(44_100, 2),
+                channel_config,
+                channel_config,
+                &stereo,
+                offsets,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                stereo_selected_target_bitrate,
+                &selected_scale_factor_table,
+                spectral_tables,
+            )
+            .unwrap();
 
         assert_eq!(stereo_step, stereo_unconstrained.step);
         assert_eq!(stereo_details.step, stereo_unconstrained.step);
@@ -7689,6 +9328,19 @@ mod tests {
         );
         assert_eq!(stereo_budget_encoded, stereo_encoded);
         assert!(max_adts_frame_len(&stereo_bitrate_encoded) <= stereo_bitrate_budget);
+        assert_eq!(
+            stereo_selected_details.step,
+            stereo_selected_unconstrained.step
+        );
+        assert_eq!(
+            stereo_selected_unconstrained_step,
+            stereo_selected_unconstrained.step
+        );
+        assert_eq!(stereo_selected_step, stereo_selected_unconstrained.step);
+        assert_eq!(stereo_selected_budget_encoded, stereo_selected_encoded);
+        assert!(
+            max_adts_frame_len(&stereo_selected_bitrate_encoded) <= stereo_selected_bitrate_budget
+        );
         assert!(aac_lc_adts_max_frame_len_for_bitrate(44_100, 1).is_err());
         assert!(
             select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
@@ -7781,12 +9433,11 @@ mod tests {
         let public_scaffold = encode(&pcm).unwrap();
         let offsets = aac_lc_long_window_scale_factor_band_offsets(44_100).unwrap();
         let production_channel = AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
-        let production_scale_factors =
-            vec![i16::from(production_channel.global_gain); offsets.len() - 1];
-        let production_channel =
-            AacScaleFactorChannel::new(production_channel, &production_scale_factors);
+        let production_bitrate = aac_lc_default_production_bitrate_bps(2).unwrap();
+        let production_budget =
+            aac_lc_adts_max_frame_len_for_bitrate(44_100, production_bitrate).unwrap();
         let production_step =
-            select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost(
+            select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 2),
                 production_channel,
                 production_channel,
@@ -7794,12 +9445,13 @@ mod tests {
                 0,
                 offsets,
                 AAC_LC_PCM_STEP_CANDIDATES,
-                aac_scale_factor_delta_zero_table(),
+                production_budget,
+                &aac_scale_factor_delta_table(),
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             )
             .unwrap();
         let production_details =
-            select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost(
+            select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_len_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 2),
                 production_channel,
                 production_channel,
@@ -7807,31 +9459,34 @@ mod tests {
                 0,
                 offsets,
                 &reversed_candidates,
-                aac_scale_factor_delta_zero_table(),
+                production_budget,
+                &aac_scale_factor_delta_table(),
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             )
             .unwrap();
         let production =
-            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
+            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 2),
                 production_channel,
                 production_channel,
                 &pcm,
                 offsets,
                 AAC_LC_PCM_STEP_CANDIDATES,
-                aac_scale_factor_delta_zero_table(),
+                production_bitrate,
+                &aac_scale_factor_delta_table(),
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             )
             .unwrap();
         let production_reversed =
-            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_by_bit_cost(
+            encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 2),
                 production_channel,
                 production_channel,
                 &pcm,
                 offsets,
                 &reversed_candidates,
-                aac_scale_factor_delta_zero_table(),
+                production_bitrate,
+                &aac_scale_factor_delta_table(),
                 aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
             )
             .unwrap();
