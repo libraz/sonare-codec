@@ -60,43 +60,13 @@ fn correlation(a: &[f32], b: &[f32]) -> f64 {
     cov / (va.sqrt() * vb.sqrt())
 }
 
-/// Finds the integer lag in `0..=max_lag` that maximizes correlation between
-/// `reference` and `decoded[lag..]`, returning `(best_lag, best_correlation)`.
-fn best_lag(
-    reference: &[f32],
-    decoded: &[f32],
-    compare_len: usize,
-    max_lag: usize,
-) -> (usize, f64) {
-    let mut best = (0_usize, f64::NEG_INFINITY);
-    for lag in 0..=max_lag {
-        if lag + compare_len > decoded.len() || compare_len > reference.len() {
-            break;
-        }
-        let c = correlation(&reference[..compare_len], &decoded[lag..lag + compare_len]);
-        if c > best.1 {
-            best = (lag, c);
-        }
-    }
-    best
-}
-
-// STATUS: the Layer III encoder does not yet reconstruct through a real
-// decoder. Measured end-to-end (Symphonia) on this sweep: best-lag correlation
-// ~0.09 and decoded/input RMS ~6x. The `global_gain` calibration is correct in
-// isolation (see the spec requant-identity test in sc-mp3), so the remaining gap
-// is the analysis-to-synthesis inverse: the polyphase-analysis/hybrid-MDCT chain
-// is not yet the exact inverse of the decoder's IMDCT + polyphase synthesis
-// (line ordering, alias-reduction direction, and net filterbank gain). This test
-// encodes that target and is ignored until the pipeline reconstructs; remove the
-// ignore once it passes.
 /// Goertzel power of `samples` at frequency `f`.
 fn goertzel(samples: &[f32], sample_rate: u32, f: f32) -> f64 {
     let w = std::f64::consts::TAU * f as f64 / sample_rate as f64;
     let coeff = 2.0 * w.cos();
-    let (mut s0, mut s1, mut s2) = (0.0_f64, 0.0_f64, 0.0_f64);
+    let (mut s1, mut s2) = (0.0_f64, 0.0_f64);
     for &x in samples {
-        s0 = f64::from(x) + coeff * s1 - s2;
+        let s0 = f64::from(x) + coeff * s1 - s2;
         s2 = s1;
         s1 = s0;
     }
@@ -309,7 +279,6 @@ fn mp3_roundtrip_sweep_lag_scan() {
     );
 }
 
-#[ignore = "Layer III analysis-to-synthesis inverse not matched yet (corr ~0.09, level ~6x)"]
 #[test]
 fn mp3_roundtrip_preserves_shape_and_level() {
     let sample_rate = 44_100;
@@ -326,26 +295,39 @@ fn mp3_roundtrip_preserves_shape_and_level() {
         decoded.samples.len()
     );
 
-    // MP3 adds encoder/decoder delay (~529 samples) plus our zero-primed first
-    // granule, so align on the best lag before comparing.
-    let compare_len = 8_192;
-    let max_lag = 3_000;
-    let (lag, corr) = best_lag(&pcm.samples, &decoded.samples, compare_len, max_lag);
-
-    let reference = &pcm.samples[..compare_len];
-    let aligned = &decoded.samples[lag..lag + compare_len];
+    // Compare a clean middle segment, skipping the zero-primed first granules
+    // and the polyphase filterbank's priming delay. MP3 adds an encoder/decoder
+    // delay of roughly a thousand samples, so scan a window of lags to align.
+    let seg = 8_192;
+    let ref_start = 8_000;
+    let reference = &pcm.samples[ref_start..ref_start + seg];
+    let mut best = (0_usize, f64::NEG_INFINITY);
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.samples.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded.samples[start..start + seg]);
+        if c > best.1 {
+            best = (d, c);
+        }
+    }
+    let (delay, corr) = best;
+    let aligned = &decoded.samples[ref_start + delay..ref_start + delay + seg];
     let level_ratio = rms(aligned) / rms(reference).max(1.0e-12);
 
     eprintln!(
-        "mp3 roundtrip: lag={lag} corr={corr:.4} input_rms={:.4} decoded_rms={:.4} ratio={level_ratio:.3}",
+        "mp3 roundtrip: delay={delay} corr={corr:.4} input_rms={:.4} decoded_rms={:.4} ratio={level_ratio:.3}",
         rms(reference),
         rms(aligned),
     );
 
     // Shape: the sweep must survive the lossy roundtrip with strong correlation.
+    // The simple uniform-step encoder (no scalefactors or bit reservoir yet)
+    // reconstructs at roughly 0.85 on this sweep.
     assert!(corr > 0.6, "waveform correlation too low: {corr:.4}");
-    // Level: the calibrated global_gain must reconstruct within roughly a factor
-    // of two. An uncalibrated encoder lands ~12x off and fails this bound.
+    // Level: the calibrated global_gain plus the IMDCT-normalization offset must
+    // reconstruct close to unity. An uncalibrated encoder lands ~9x off.
     assert!(
         (0.5..2.0).contains(&level_ratio),
         "decoded level out of calibrated range: ratio={level_ratio:.3}"
