@@ -285,6 +285,80 @@ pub fn spread_masking_threshold(
     Ok(threshold)
 }
 
+/// Sliding-window width (in FFT bins) for the per-bin tonality estimate. Wide
+/// enough to average out a single tone's main lobe yet narrow relative to the
+/// half-spectrum, so tonal and noise-like regions are distinguished locally.
+const TONALITY_WINDOW_BINS: usize = 17;
+
+/// Estimates a per-bin tonality index (0 = noise-like … 1 = tonal) from a local
+/// spectral flatness measure over a sliding window of `window` bins.
+///
+/// Unlike [`spectral_flatness_tonality`], which collapses the whole spectrum to a
+/// single value, this resolves tonality by frequency: a region dominated by a
+/// pure tone reads near 1 while a flat, noisy region reads near 0. Each bin's
+/// index is the flatness of the window centred on it (clamped at the edges). An
+/// empty spectrum yields an empty result; a zero window width is rejected.
+pub fn windowed_tonality(energy: &[f64], window: usize) -> Result<Vec<f64>, Error> {
+    if energy.is_empty() {
+        return Ok(Vec::new());
+    }
+    if window == 0 {
+        return Err(Error::InvalidInput(
+            "psychoacoustic tonality window width must be non-zero",
+        ));
+    }
+    let half = window / 2;
+    let n = energy.len();
+    let mut out = Vec::with_capacity(n);
+    for center in 0..n {
+        let lo = center.saturating_sub(half);
+        let hi = (center + half + 1).min(n);
+        out.push(spectral_flatness_tonality(&energy[lo..hi]));
+    }
+    Ok(out)
+}
+
+/// Per-bin variant of [`spread_masking_threshold`]: every masker contributes with
+/// its own tonality-dependent signal-to-mask ratio.
+///
+/// Each masker's required SMR is interpolated between the tone- and noise-masking
+/// values from its local `tonality`, then applied to its spread contribution
+/// before accumulation — so a tonal peak imposes the full 18 dB ratio on the
+/// bands it spreads into while a noise-like region imposes only 6 dB. `energy`,
+/// `bark`, and `tonality` must all be the same length. This is a strict
+/// generalization: a constant tonality reproduces [`spread_masking_threshold`].
+pub fn spread_masking_threshold_per_bin(
+    energy: &[f64],
+    bark: &[f64],
+    tonality: &[f64],
+) -> Result<Vec<f64>, Error> {
+    if energy.len() != bark.len() || energy.len() != tonality.len() {
+        return Err(Error::InvalidInput(
+            "psychoacoustic energy, bark, and tonality arrays must match in length",
+        ));
+    }
+    let smr_gain: Vec<f64> = tonality
+        .iter()
+        .map(|&t| {
+            let t = t.clamp(0.0, 1.0);
+            let smr_db = t * TONE_MASKING_NOISE_DB + (1.0 - t) * NOISE_MASKING_TONE_DB;
+            10.0_f64.powf(-smr_db / 10.0)
+        })
+        .collect();
+
+    let mut threshold = Vec::with_capacity(energy.len());
+    for &maskee in bark {
+        let mut spread = 0.0_f64;
+        for ((&masker, &masker_energy), &gain) in
+            bark.iter().zip(energy.iter()).zip(smr_gain.iter())
+        {
+            spread += masker_energy * gain * 10.0_f64.powf(spreading_db(masker, maskee) / 10.0);
+        }
+        threshold.push(spread);
+    }
+    Ok(threshold)
+}
+
 /// Maps each retained half-spectrum bin to its critical-band rate (bark) for an
 /// FFT of length `fft_len` sampled at `sample_rate`.
 pub fn bin_barks(num_bins: usize, sample_rate: u32, fft_len: usize) -> Result<Vec<f64>, Error> {
@@ -497,9 +571,9 @@ pub fn perceptual_long_block_scalefactors(
         .map(|(&sample, &scale)| sample * scale)
         .collect();
     let energy = power_spectrum(&windowed)?;
-    let tonality = spectral_flatness_tonality(&energy);
+    let tonality = windowed_tonality(&energy, TONALITY_WINDOW_BINS)?;
     let barks = bin_barks(energy.len(), sample_rate, fft_len)?;
-    let threshold = spread_masking_threshold(&energy, &barks, tonality)?;
+    let threshold = spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
     let allowed =
         perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)?;
     allocate_long_block_scalefactors(mdct_spectrum, &allowed, step, scalefac_scale, sample_rate)
@@ -700,6 +774,78 @@ mod tests {
     #[test]
     fn masking_threshold_rejects_mismatched_lengths() {
         assert!(spread_masking_threshold(&[1.0, 2.0], &[0.0], 0.5).is_err());
+    }
+
+    #[test]
+    fn windowed_tonality_resolves_tone_and_noise_regions() {
+        // Low half: a clean tone embedded in near-silence (tonal). High half: a
+        // flat noise floor (noise-like). The per-bin index must separate them.
+        let bins = 128usize;
+        let mut energy = vec![1.0e-9_f64; bins];
+        energy[16] = 1.0; // isolated tone in the low region
+        for e in energy.iter_mut().take(bins).skip(bins / 2) {
+            *e = 1.0; // flat noise in the high region
+        }
+        let tonality = windowed_tonality(&energy, 17).unwrap();
+        assert_eq!(tonality.len(), bins);
+        // The window over the tone reads strongly tonal; the flat region reads
+        // fully noise-like.
+        assert!(tonality[16] > 0.6, "tone bin tonality {}", tonality[16]);
+        assert!(
+            tonality[bins - 8] < 1.0e-6,
+            "noise bin tonality {}",
+            tonality[bins - 8]
+        );
+        // Empty input yields empty output; zero window width is rejected.
+        assert!(windowed_tonality(&[], 17).unwrap().is_empty());
+        assert!(windowed_tonality(&energy, 0).is_err());
+    }
+
+    #[test]
+    fn per_bin_masking_generalizes_the_constant_tonality_case() {
+        // A constant per-bin tonality must reproduce the scalar spread function.
+        let bins = 48usize;
+        let bark: Vec<f64> = (0..bins).map(|k| k as f64 * 0.3).collect();
+        let mut energy = vec![0.01_f64; bins];
+        energy[10] = 1.0;
+        energy[30] = 0.5;
+        let constant = 0.4_f64;
+
+        let scalar = spread_masking_threshold(&energy, &bark, constant).unwrap();
+        let per_bin =
+            spread_masking_threshold_per_bin(&energy, &bark, &vec![constant; bins]).unwrap();
+        assert_eq!(scalar.len(), per_bin.len());
+        for (a, b) in scalar.iter().zip(per_bin.iter()) {
+            assert!(approx(*a, *b, 1.0e-12), "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn per_bin_masking_applies_each_maskers_own_smr() {
+        // Two equal-energy maskers far apart in bark: one fully tonal (18 dB SMR),
+        // one fully noise-like (6 dB SMR). Each bin's own threshold reflects its
+        // own ratio, so the tonal masker sits ~12 dB further below its energy.
+        let bark = [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0];
+        let mut energy = [0.0_f64; 10];
+        energy[2] = 1.0; // tonal masker
+        energy[7] = 1.0; // noise-like masker
+        let mut tonality = [0.0_f64; 10];
+        tonality[2] = 1.0;
+        tonality[7] = 0.0;
+        let threshold = spread_masking_threshold_per_bin(&energy, &bark, &tonality).unwrap();
+
+        let tonal_smr_db = 10.0 * (energy[2] / threshold[2]).log10();
+        let noise_smr_db = 10.0 * (energy[7] / threshold[7]).log10();
+        // The maskers are far enough apart that cross-spread is negligible, so
+        // each bin's SMR is dominated by its own masker.
+        assert!(approx(tonal_smr_db, 18.0, 1.5), "tonal SMR {tonal_smr_db}");
+        assert!(approx(noise_smr_db, 6.0, 1.5), "noise SMR {noise_smr_db}");
+        assert!(tonal_smr_db > noise_smr_db);
+    }
+
+    #[test]
+    fn per_bin_masking_rejects_mismatched_lengths() {
+        assert!(spread_masking_threshold_per_bin(&[1.0, 2.0], &[0.0, 1.0], &[0.5]).is_err());
     }
 
     #[test]
