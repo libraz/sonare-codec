@@ -795,6 +795,66 @@ pub fn is_transient_block(pcm: &[f64]) -> Result<bool, Error> {
     Ok(transient_attack_ratio(pcm, TRANSIENT_SEGMENTS)? >= TRANSIENT_RATIO_THRESHOLD)
 }
 
+/// Side-channel energy fraction below which mid/side coding is chosen over
+/// left/right. With strongly correlated channels the side signal is near-silent
+/// and codes almost for free, so MS concentrates bits in the mid channel.
+const MID_SIDE_ENERGY_FRACTION_THRESHOLD: f64 = 0.2;
+
+/// Applies the energy-preserving mid/side transform to a stereo pair:
+/// `mid = (left + right) / √2`, `side = (left − right) / √2`.
+///
+/// The `1/√2` normalization makes the transform orthonormal, so
+/// `mid² + side² = left² + right²` sample-for-sample and the choice of L/R vs
+/// M/S never changes the block's total energy. The two channels must be the
+/// same length.
+pub fn mid_side_transform(left: &[f64], right: &[f64]) -> Result<(Vec<f64>, Vec<f64>), Error> {
+    if left.len() != right.len() {
+        return Err(Error::InvalidInput(
+            "mid/side transform needs equal-length channels",
+        ));
+    }
+    let scale = std::f64::consts::FRAC_1_SQRT_2;
+    let mid = left
+        .iter()
+        .zip(right.iter())
+        .map(|(&l, &r)| (l + r) * scale)
+        .collect();
+    let side = left
+        .iter()
+        .zip(right.iter())
+        .map(|(&l, &r)| (l - r) * scale)
+        .collect();
+    Ok((mid, side))
+}
+
+/// Returns the fraction of stereo energy carried by the side channel,
+/// `side / (mid + side)`, in `[0, 1]`.
+///
+/// A value near 0 means the channels are nearly identical (mono-like) so the
+/// side signal is negligible; near 1 means they are anti-correlated. A fully
+/// silent pair returns 0. The channels must be the same length.
+pub fn side_energy_fraction(left: &[f64], right: &[f64]) -> Result<f64, Error> {
+    let (mid, side) = mid_side_transform(left, right)?;
+    let mid_energy: f64 = mid.iter().map(|&m| m * m).sum();
+    let side_energy: f64 = side.iter().map(|&s| s * s).sum();
+    let total = mid_energy + side_energy;
+    if total <= 0.0 {
+        return Ok(0.0);
+    }
+    Ok(side_energy / total)
+}
+
+/// Decides whether a stereo block should be coded as mid/side rather than
+/// left/right, by comparing its [`side_energy_fraction`] against
+/// [`MID_SIDE_ENERGY_FRACTION_THRESHOLD`].
+///
+/// `true` selects mid/side — worthwhile when the channels are correlated enough
+/// that the side channel is cheap to code. A silent block returns `true` (MS is
+/// harmless and the side channel is empty).
+pub fn should_use_mid_side(left: &[f64], right: &[f64]) -> Result<bool, Error> {
+    Ok(side_energy_fraction(left, right)? < MID_SIDE_ENERGY_FRACTION_THRESHOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1396,5 +1456,51 @@ mod tests {
             .is_empty());
         assert!(distribute_bits_by_perceptual_entropy(&[1.0, -1.0], 100, 10).is_err());
         assert!(distribute_bits_by_perceptual_entropy(&[1.0, f64::NAN], 100, 10).is_err());
+    }
+
+    #[test]
+    fn mid_side_transform_preserves_energy() {
+        // Orthonormal transform: mid² + side² equals left² + right² sample-wise.
+        let left = [0.3, -0.7, 0.1, 0.9, -0.2];
+        let right = [0.5, 0.2, -0.4, 0.6, 0.8];
+        let (mid, side) = mid_side_transform(&left, &right).unwrap();
+        for i in 0..left.len() {
+            let lr = left[i] * left[i] + right[i] * right[i];
+            let ms = mid[i] * mid[i] + side[i] * side[i];
+            assert!(approx(lr, ms, 1.0e-12), "energy mismatch at {i}");
+        }
+        assert!(mid_side_transform(&[1.0, 2.0], &[1.0]).is_err());
+    }
+
+    #[test]
+    fn identical_channels_choose_mid_side() {
+        // Mono-like content: left == right, so the side channel is silent and the
+        // fraction is 0 — mid/side is selected.
+        let signal: Vec<f64> = (0..256)
+            .map(|n| 0.5 * (std::f64::consts::TAU * 440.0 * n as f64 / 44_100.0).sin())
+            .collect();
+        let fraction = side_energy_fraction(&signal, &signal).unwrap();
+        assert!(approx(fraction, 0.0, 1.0e-12));
+        assert!(should_use_mid_side(&signal, &signal).unwrap());
+    }
+
+    #[test]
+    fn anticorrelated_channels_stay_left_right() {
+        // Anti-correlated content: right = −left, so the mid channel is silent and
+        // all energy is in the side — the fraction is 1 and L/R is kept.
+        let left: Vec<f64> = (0..256)
+            .map(|n| 0.5 * (std::f64::consts::TAU * 440.0 * n as f64 / 44_100.0).sin())
+            .collect();
+        let right: Vec<f64> = left.iter().map(|&s| -s).collect();
+        let fraction = side_energy_fraction(&left, &right).unwrap();
+        assert!(approx(fraction, 1.0, 1.0e-12));
+        assert!(!should_use_mid_side(&left, &right).unwrap());
+    }
+
+    #[test]
+    fn silent_stereo_is_safe_and_defaults_to_mid_side() {
+        let zero = [0.0_f64; 64];
+        assert!(approx(side_energy_fraction(&zero, &zero).unwrap(), 0.0, 1.0e-15));
+        assert!(should_use_mid_side(&zero, &zero).unwrap());
     }
 }
