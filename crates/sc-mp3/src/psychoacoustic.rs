@@ -749,6 +749,11 @@ pub fn analyze_long_block(
     pcm_window: &[f64],
     sample_rate: u32,
 ) -> Result<LongBlockAnalysis, Error> {
+    if !all_finite_f64(pcm_window) || !all_finite_f32(mdct_spectrum) {
+        return Err(Error::InvalidInput(
+            "perceptual analysis input must be finite",
+        ));
+    }
     let fft_len = pcm_window.len();
     let window = hann_window(fft_len)?;
     let windowed: Vec<f64> = pcm_window
@@ -784,6 +789,16 @@ const TRANSIENT_RATIO_THRESHOLD: f64 = 10.0;
 /// ratio stays finite instead of dividing by zero.
 const TRANSIENT_ENERGY_FLOOR: f64 = 1.0e-12;
 
+/// Returns true if every value in the slice is finite (no NaN or infinity).
+fn all_finite_f64(values: &[f64]) -> bool {
+    values.iter().all(|v| v.is_finite())
+}
+
+/// Returns true if every value in the slice is finite (no NaN or infinity).
+fn all_finite_f32(values: &[f32]) -> bool {
+    values.iter().all(|v| v.is_finite())
+}
+
 /// Splits `pcm` into `segments` equal contiguous parts and returns each part's
 /// energy (sum of squares). Each sample maps to exactly one segment.
 fn segment_energies(pcm: &[f64], segments: usize) -> Result<Vec<f64>, Error> {
@@ -795,6 +810,11 @@ fn segment_energies(pcm: &[f64], segments: usize) -> Result<Vec<f64>, Error> {
     if pcm.is_empty() {
         return Err(Error::InvalidInput(
             "transient analysis needs a non-empty block",
+        ));
+    }
+    if !all_finite_f64(pcm) {
+        return Err(Error::InvalidInput(
+            "transient analysis input must be finite",
         ));
     }
     let len = pcm.len();
@@ -1583,5 +1603,26 @@ mod tests {
         let analysis = analyze_long_block(&[0.0_f32; 576], &[0.0_f64; 1024], 44_100).unwrap();
         assert!(approx(analysis.perceptual_entropy, 0.0, 1.0e-12));
         assert!(!analysis.transient);
+    }
+
+    #[test]
+    fn analysis_rejects_non_finite_input_instead_of_panicking() {
+        // Non-finite PCM or MDCT must be reported as an error, not silently
+        // propagated as NaN through the model (and never panic).
+        let mut pcm = vec![0.1_f64; 1024];
+        pcm[10] = f64::NAN;
+        let mdct = vec![0.2_f32; 576];
+        assert!(analyze_long_block(&mdct, &pcm, 44_100).is_err());
+
+        let pcm_ok = vec![0.1_f64; 1024];
+        let mut mdct_bad = vec![0.2_f32; 576];
+        mdct_bad[3] = f32::INFINITY;
+        assert!(analyze_long_block(&mdct_bad, &pcm_ok, 44_100).is_err());
+
+        // The transient path guards the same way.
+        let mut burst = vec![0.0_f64; 1152];
+        burst[600] = f64::INFINITY;
+        assert!(transient_attack_ratio(&burst, TRANSIENT_SEGMENTS).is_err());
+        assert!(is_transient_block(&burst).is_err());
     }
 }
