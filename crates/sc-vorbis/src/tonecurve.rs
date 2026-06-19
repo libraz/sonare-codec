@@ -12,9 +12,6 @@
 //! is a later stage; this module produces the resolution-independent curves it
 //! consumes.
 
-// Feeds the (not-yet-landed) bin-render; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::masking::{band_ath, P_BANDS, P_LEVELS, P_LEVEL_0};
 use crate::psy::{attenuate_curve, from_oc, max_curve, min_curve, EHMER_MAX, EHMER_OFFSET};
 use crate::tonemask::TONEMASKS;

@@ -10,10 +10,6 @@
 //! of the page parser the decoder side relies on. Written from the Ogg/Vorbis
 //! specs (not ported from libogg), so no upstream notice attaches.
 
-// Some entry points (e.g. mux_packets, demux) are exercised only by tests and
-// the stream codec, not the shipping encoder path.
-#![allow(dead_code)]
-
 /// The Ogg page capture pattern.
 const OGG_CAPTURE: &[u8; 4] = b"OggS";
 

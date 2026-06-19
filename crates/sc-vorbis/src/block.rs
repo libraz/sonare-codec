@@ -9,7 +9,8 @@
 //! This is the analysis pipeline only; packing the posts and residue into a
 //! bitstream packet (and the Ogg framing) is a separate stage.
 
-// Assembles the analysis stages; the live encoder still ships via FFI.
+// `analyze_block` is the non-windowed convenience used by tests; the encoder
+// calls `analyze_block_windowed`.
 #![allow(dead_code)]
 
 use crate::analysis::PsyAnalysis;
@@ -50,7 +51,23 @@ pub fn analyze_block(
     postlist: &[i32],
     pcm: &[f32],
 ) -> Option<BlockAnalysis> {
-    let (mdct, logmdct) = psy.mdct_analysis(pcm)?;
+    let window = crate::window::vorbis_window(pcm.len());
+    analyze_block_windowed(psy, fitter, postlist, pcm, &window)
+}
+
+/// Like [`analyze_block`] but with a caller-supplied analysis window, for block
+/// switching: a long block neighbouring a short one is transformed through its
+/// left/right transition window so the forward MDCT matches the decoder's
+/// synthesis window. `window` must be `pcm.len()` samples.
+#[must_use]
+pub fn analyze_block_windowed(
+    psy: &PsyAnalysis,
+    fitter: &Floor1Fitter,
+    postlist: &[i32],
+    pcm: &[f32],
+    window: &[f32],
+) -> Option<BlockAnalysis> {
+    let (mdct, logmdct) = psy.mdct_analysis_windowed(pcm, window)?;
     let logmask = psy.logmask(&logmdct);
     if logmask.is_empty() {
         return None;

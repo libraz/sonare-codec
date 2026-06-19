@@ -29,10 +29,34 @@ aac_10k = sonare_codec.encode_aac_with_bitrate(44100, 1, [0.0] * 2048, 10000)
 aac_selected_10k = sonare_codec.encode_aac_with_selected_scale_factors_and_bitrate(
     44100, 1, [0.0] * 2048, 10000
 )
+aac_standard_128k = sonare_codec.encode_aac_with_standard_spectral_offsets_and_bitrate(
+    44100, 1, [0.0] * 2048, 128000, 128
+)
+aac_standard_selected_128k = (
+    sonare_codec.encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        44100, 1, [0.0] * 2048, 128000, 128, 16
+    )
+)
+aac_standard_selected_details = (
+    sonare_codec.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+        44100, 1, [0.0] * 2048, 128000, 128, 16
+    )
+)
+aac_production_details = sonare_codec.aac_selected_scale_factor_frame_details_with_bitrate(
+    44100, 1, [0.0] * 2048, 128000
+)
 m4a = sonare_codec.encode_audio("m4a", 44100, 1, [0.0] * 1024)
 m4a_10k = sonare_codec.encode_m4a_with_bitrate(44100, 1, [0.0] * 2048, 10000)
 m4a_selected_10k = sonare_codec.encode_m4a_with_selected_scale_factors_and_bitrate(
     44100, 1, [0.0] * 2048, 10000
+)
+m4a_standard_128k = sonare_codec.encode_m4a_with_standard_spectral_offsets_and_bitrate(
+    44100, 1, [0.0] * 2048, 128000, 128
+)
+m4a_standard_selected_128k = (
+    sonare_codec.encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        44100, 1, [0.0] * 2048, 128000, 128, 16
+    )
 )
 kind = sonare_codec.detect_format(m4a)  # "m4a"
 adts = sonare_codec.demux_m4a_as_aac_adts(m4a)
@@ -56,9 +80,33 @@ production candidates: mono/stereo MP3 at 32/44.1/48 kHz and mono/stereo
 AAC-LC ADTS/M4A at 7.35/8/11.025/12/16/22.05/24/32/44.1/48/64/88.2/96 kHz.
 Other non-silent MP3/AAC shapes are rejected. The package also exposes small
 lossy diagnostics for AAC ADTS bitrate budgets, AAC scale-factor/codebook
-7/8/9/10 tables, the escape codebook 11 table, codebook 6 section planning,
-MP3 Layer III main-data capacity, AAC default production bitrate lookup, and
-caller-selected AAC/MP3 bitrate encoding. The MP3 bitrate helpers include
-fixed-padding and CBR padding-scheduled variants.
-The AAC/M4A bitrate helpers include fixed-scale-factor and internally selected
-scale-factor variants.
+5/6 direct signed-pair tables, codebook 1/2 direct signed-quad tables,
+codebook 3/4 unsigned-quad tables,
+codebook 7/8/9/10 unsigned-pair tables, the
+escape codebook 11 table, codebook 6 section planning,
+quad and mixed standard-id section planning backed by core-owned unit fixtures,
+standard table-set section planning that now uses direct signed codebook 5/6
+alongside direct signed quad codebook 1/2, unsigned-quad codebook 3/4, and standard unsigned/escape codebooks, MP3 Layer III
+main-data capacity, AAC default production bitrate lookup, and caller-selected
+AAC/MP3 bitrate encoding. The mixed AAC helper also reports
+section/spectral/scale-factor split payload bit lengths for the current
+caller-table workbench, and the standard escape/mixed helpers report
+section/spectral/packed bit lengths for codebook-11 and quad+escape diagnostic
+paths. The standard mixed section and payload helpers also include
+scale-factor-band-offset variants for the same workbench, and the standard
+AAC-LC mono/stereo offsets ADTS helpers expose the same diagnostic stream
+framing used by publish-readiness, including bitrate-derived step search
+variants and flattened frame-selection telemetry. The MP3 bitrate helpers include
+fixed-padding and CBR padding-scheduled variants, the
+perceptual active CBR diagnostic encoder, and flattened reservoir frame
+telemetry including frame length, padding, `main_data_begin`, and reservoir
+state plus perceptual-vs-calibrated granule counts, quality-guard comparison
+count, and encoder-side distortion delta for the MP3 reservoir diagnostics. The
+perceptual reservoir helper exposes matching telemetry for the mono/stereo
+production psychoacoustic scale-factor reservoir path, and the quality-guarded
+perceptual reservoir helper remains available as a comparison diagnostic.
+The AAC/M4A bitrate helpers include fixed-scale-factor, internally selected
+scale-factor, and standard-id selected-scale-factor plus magnitude-bias
+variants. The standard-id selected-scale-factor frame-details helper returns
+flattened `[frame_index, step, frame_len, frame_capacity_bytes, ...]`
+telemetry for the same public AAC/M4A encode path.

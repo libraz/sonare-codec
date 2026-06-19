@@ -8,8 +8,8 @@
 //! least-significant bit of the first output byte, so a port that round-trips
 //! against [`BitReader`] also reproduces the on-the-wire layout libvorbis emits.
 
-// The packer is a foundational primitive consumed by later Vorbis port stages;
-// the live encoder still ships via the FFI path until those land.
+// `BitReader` and the writer alignment helpers are the decode-direction
+// counterparts, exercised by every module's round-trip tests.
 #![allow(dead_code)]
 
 /// Returns a mask keeping the low `bits` bits, for `bits` in `0..=32`.

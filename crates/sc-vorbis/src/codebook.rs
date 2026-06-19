@@ -12,10 +12,6 @@
 //! same length list, so the construction only has to be deterministic and
 //! spec-conformant (it is verified against the spec's worked example).
 
-// Foundational primitive for the Vorbis port; the live encoder still ships via
-// the FFI path until the encoder stages land.
-#![allow(dead_code)]
-
 use crate::oggpack::{BitReader, BitWriter};
 
 /// `ov_ilog`: number of significant bits in `v` (`ov_ilog(0) == 0`).

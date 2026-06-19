@@ -88,6 +88,66 @@ export function encode_mp3_cbr_with_bitrate(
   crc_protected: boolean
 ): Uint8Array;
 
+export function encode_mp3_perceptual_active_cbr_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Uint8Array;
+
+export function encode_mp3_perceptual_reservoir_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Uint8Array;
+
+export function encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Uint8Array;
+
+/**
+ * Returns flattened per-frame reservoir telemetry:
+ * [frame_index, step, payload_bit_len, frame_len, padding, frame_capacity_bytes, main_data_begin, reservoir_after, perceptual_granules, calibrated_granules, quality_guard_compared_granules, quality_guard_distortion_delta]...
+ */
+export function mp3_reservoir_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+/**
+ * Returns flattened per-frame perceptual reservoir telemetry:
+ * [frame_index, step, payload_bit_len, frame_len, padding, frame_capacity_bytes, main_data_begin, reservoir_after, perceptual_granules, calibrated_granules, quality_guard_compared_granules, quality_guard_distortion_delta]...
+ */
+export function mp3_perceptual_reservoir_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+/**
+ * Returns flattened per-frame quality-guarded perceptual reservoir telemetry:
+ * [frame_index, step, payload_bit_len, frame_len, padding, frame_capacity_bytes, main_data_begin, reservoir_after, perceptual_granules, calibrated_granules, quality_guard_compared_granules, quality_guard_distortion_delta]...
+ */
+export function mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
 export function encode_aac(
   sample_rate: number,
   channels: number,
@@ -108,6 +168,23 @@ export function encode_aac_with_selected_scale_factors_and_bitrate(
   target_bitrate_bps: number
 ): Uint8Array;
 
+export function encode_aac_with_standard_spectral_offsets_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number
+): Uint8Array;
+
+export function encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number
+): Uint8Array;
+
 export function encode_m4a(
   sample_rate: number,
   channels: number,
@@ -126,6 +203,23 @@ export function encode_m4a_with_selected_scale_factors_and_bitrate(
   channels: number,
   samples: Float32Array,
   target_bitrate_bps: number
+): Uint8Array;
+
+export function encode_m4a_with_standard_spectral_offsets_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number
+): Uint8Array;
+
+export function encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number
 ): Uint8Array;
 
 export function demux_m4a_as_aac_adts(input: Uint8Array): Uint8Array;
@@ -150,6 +244,26 @@ export function aac_unsigned_pairs7_unit_magnitude_table(): Uint32Array;
 export function aac_unsigned_pairs7_table(): Uint32Array;
 
 /**
+ * Returns flattened signed entries as [x, y, bits, len, ...].
+ */
+export function aac_signed_pairs5_table(): Int32Array;
+
+/**
+ * Returns flattened signed entries as [x, y, bits, len, ...].
+ */
+export function aac_signed_pairs6_table(): Int32Array;
+
+/**
+ * Returns flattened signed entries as [v, w, x, y, bits, len, ...].
+ */
+export function aac_signed_quads1_table(): Int32Array;
+
+/**
+ * Returns flattened signed entries as [v, w, x, y, bits, len, ...].
+ */
+export function aac_signed_quads2_table(): Int32Array;
+
+/**
  * Returns flattened entries as [x, y, bits, len, ...].
  */
 export function aac_unsigned_pairs8_table(): Uint32Array;
@@ -163,6 +277,16 @@ export function aac_unsigned_pairs9_table(): Uint32Array;
  * Returns flattened entries as [x, y, bits, len, ...].
  */
 export function aac_unsigned_pairs10_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [v, w, x, y, bits, len, ...].
+ */
+export function aac_unsigned_quads3_table(): Uint32Array;
+
+/**
+ * Returns flattened entries as [v, w, x, y, bits, len, ...].
+ */
+export function aac_unsigned_quads4_table(): Uint32Array;
 
 /**
  * Returns flattened entries as [x, y, bits, len, ...].
@@ -181,6 +305,152 @@ export function aac_codebook6_unit_section_plan(
   quantized: Int32Array,
   band_width: number,
 ): Uint32Array;
+
+/**
+ * Returns flattened quad sections as [start, end, codebook_id, ...].
+ */
+export function aac_quad_unit_section_plan(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
+
+/**
+ * Returns flattened mixed standard codebook-id sections as [start, end, codebook_id, ...].
+ */
+export function aac_mixed_unit_section_plan(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
+
+/**
+ * Returns mixed payload bit lengths as
+ * [section_bits, spectral_bits, packed_bits, section_scale_bits, spectral_bits, packed_scale_bits].
+ */
+export function aac_mixed_unit_payload_bit_lengths(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
+
+/**
+ * Returns flattened standard table-set sections as [start, end, codebook_id, ...].
+ */
+export function aac_standard_unit_section_plan(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
+
+/**
+ * Returns flattened standard table-set sections using scale-factor band offsets as [start, end, codebook_id, ...].
+ */
+export function aac_standard_offsets_section_plan(
+  quantized: Int32Array,
+  offsets: Uint32Array,
+): Uint32Array;
+
+/**
+ * Returns [section_bits, spectral_bits, packed_bits] for a standard codebook-11 escape fixture.
+ */
+export function aac_standard_escape_payload_bit_lengths(): Uint32Array;
+
+/**
+ * Returns mixed standard-id payload bit lengths as
+ * [section_bits, spectral_bits, packed_bits, section_scale_bits, spectral_bits, packed_scale_bits].
+ */
+export function aac_standard_mixed_payload_bit_lengths(
+  quantized: Int32Array,
+  band_width: number,
+): Uint32Array;
+
+/**
+ * Returns mixed standard-id payload bit lengths using scale-factor band offsets as
+ * [section_bits, spectral_bits, packed_bits, section_scale_bits, spectral_bits, packed_scale_bits].
+ */
+export function aac_standard_mixed_offsets_payload_bit_lengths(
+  quantized: Int32Array,
+  offsets: Uint32Array,
+): Uint32Array;
+
+/**
+ * Encodes a mono AAC-LC ADTS diagnostic stream with standard-id spectral sections.
+ */
+export function encode_aac_standard_mono_offsets_with_step(
+  sample_rate: number,
+  samples: Float32Array,
+  step: number,
+  global_gain: number,
+): Uint8Array;
+
+/**
+ * Encodes a mono AAC-LC ADTS diagnostic stream with standard-id spectral sections and bitrate-derived step search.
+ */
+export function encode_aac_standard_mono_offsets_with_bitrate(
+  sample_rate: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+): Uint8Array;
+
+/**
+ * Returns flattened mono standard-id offsets bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_standard_mono_offsets_bitrate_frame_details(
+  sample_rate: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+): Float64Array;
+
+/**
+ * Encodes a stereo AAC-LC ADTS diagnostic stream with standard-id spectral sections.
+ */
+export function encode_aac_standard_stereo_offsets_with_step(
+  sample_rate: number,
+  samples: Float32Array,
+  step: number,
+  global_gain: number,
+): Uint8Array;
+
+/**
+ * Encodes a stereo AAC-LC ADTS diagnostic stream with standard-id spectral sections and bitrate-derived step search.
+ */
+export function encode_aac_standard_stereo_offsets_with_bitrate(
+  sample_rate: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+): Uint8Array;
+
+/**
+ * Returns flattened stereo standard-id offsets bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_standard_stereo_offsets_bitrate_frame_details(
+  sample_rate: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+): Float64Array;
+
+/**
+ * Returns flattened standard-id selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+): Float64Array;
+
+/**
+ * Returns flattened production selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_selected_scale_factor_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
 
 export function mp3_layer3_main_data_capacity_bytes(
   sample_rate: number,

@@ -13,9 +13,6 @@
 //! never compared bit-exactly against another decoder, so the float cascade is
 //! a faithful, self-consistent equivalent.
 
-// Consumed by the Vorbis encode stage; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::codebook::{Codebook, VqBook};
 use crate::oggpack::{BitReader, BitWriter};
 

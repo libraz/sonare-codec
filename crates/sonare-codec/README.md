@@ -20,15 +20,27 @@ that need to budget frame payloads explicitly without duplicating header
 calculations, the low-level psychoacoustic long-block scale-factor selector, and perceptual scale-factor frame/stream helpers with payload-budget and bitrate-derived capacity search used to validate future MP3 bit-allocation work. The AAC helper
 re-exports include production-shaped ADTS and M4A bitrate encode helpers for
 both fixed and internally selected scale-factor paths, the standard
-scale-factor delta table, the standard unsigned-pairs codebook 7/8/9/10 tables
-used by the current production-shaped AAC-LC path, and the escape codebook 11
+scale-factor delta table, the standard signed-pairs codebook 5/6 tables,
+the standard signed-quad codebook 1/2 tables, the standard unsigned-quad codebook 3/4 tables, the standard unsigned-pairs codebook 7/8/9/10 tables used by the current
+production-shaped AAC-LC path, and the escape codebook 11
 table for explicit diagnostic packing. A standard AAC-LC spectral table-set
 helper also exposes that escape table for diagnostics and future rate-control
 work; production encode keeps the current FFmpeg-oracle-passing table set until
-escape-coded output is accepted by the readiness gate. The bit-cost section
-planner can select codebook 7/8/9/10 by default, codebook 6 when a
-caller-supplied signed-pair table is provided, and codebook 11 when an explicit
-escape table is supplied.
+escape-coded output is accepted by the readiness gate. The standard-id bit-cost
+section planner can select direct signed quad codebook 1/2, unsigned-quad
+codebook 3/4, direct signed pair codebook 5/6, unsigned-pair codebook
+7/8/9/10, and codebook 11 with matching direct-signed or magnitude+sign-bit
+packing. `encode_aac_adts_with_standard_spectral_offsets_and_bitrate` and
+`encode_m4a_with_standard_spectral_offsets_and_bitrate` expose that standard-id
+offsets/table-set path as a high-level mono/stereo bitrate-budgeted ADTS/M4A
+surface. The
+`encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate`
+and
+`encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate`
+variants expose the same standard-id path with internal scale-factor selection
+and a caller-provided magnitude bias for diagnostics, while the default
+production AAC encode path remains on the current oracle-passing
+selected-scale-factor table set.
 The default magnitude-classified AAC section planner also routes non-zero
 sections through the available standard unsigned-pairs codebook 7/9 tables
 before falling back to escape-class sections.

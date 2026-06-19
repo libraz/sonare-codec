@@ -20,9 +20,6 @@
 //! Princen-Bradley window (see [`crate::window`]) reconstructs exactly under
 //! 50%-overlap add (time-domain aliasing cancellation).
 
-// Consumed by later Vorbis port stages; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use std::f64::consts::PI;
 
 /// Forward MDCT: `m` time-domain samples to `m/2` spectral coefficients.

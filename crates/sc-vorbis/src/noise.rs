@@ -14,9 +14,6 @@
 //! differences of large prefix sums lose too much to `f32` cancellation, and
 //! this is an internal perceptual quantity (never part of the bitstream).
 
-// Feeds the masking mix; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::psy::to_bark;
 
 /// Builds the per-bin Bark-scale noise windows (`_vp_psy_init`'s `bark` loop),

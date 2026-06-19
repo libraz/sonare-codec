@@ -608,6 +608,31 @@ pub fn perceptual_long_block_scalefactors(
     allocate_long_block_scalefactors(mdct_spectrum, &allowed, step, scalefac_scale, sample_rate)
 }
 
+/// Derives the long-block allowed-noise target used by
+/// [`perceptual_long_block_scalefactors`].
+///
+/// This exposes the same clean-room masking threshold path to encoder-side
+/// quality guards, so they can compare candidate payloads in perceptual units
+/// instead of raw unweighted spectral error.
+pub fn perceptual_long_block_allowed_noise(
+    mdct_spectrum: &[f32],
+    pcm_window: &[f64],
+    sample_rate: u32,
+) -> Result<[f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    let fft_len = pcm_window.len();
+    let window = hann_window(fft_len)?;
+    let windowed: Vec<f64> = pcm_window
+        .iter()
+        .zip(window.iter())
+        .map(|(&sample, &scale)| sample * scale)
+        .collect();
+    let energy = power_spectrum(&windowed)?;
+    let tonality = windowed_tonality(&energy, TONALITY_WINDOW_BINS)?;
+    let barks = bin_barks(energy.len(), sample_rate, fft_len)?;
+    let threshold = spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
+    perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

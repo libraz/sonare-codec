@@ -36,10 +36,11 @@ fn stream_is_smaller_than_raw_pcm() {
     let pcm = sine(48_000, 1, 48_000, 440.0);
     let stream = sc_vorbis::encode(&pcm).expect("encode");
     let raw16 = 48_000 * 2; // 16-bit mono PCM
-                            // The residue value book is Huffman-fitted to the stream, so a tone (whose
-                            // whitened residue is sharply peaked at zero) compresses well past 2.5x.
+                            // Long blocks concentrate the tone into few bins, the Huffman-fitted
+                            // residue books code the near-zero remainder cheaply, and the cascade
+                            // keeps the peak from clipping: a steady tone compresses past 5x.
     assert!(
-        stream.len() * 5 < raw16 * 2, // i.e. ratio > 2.5x
+        stream.len() * 5 < raw16, // i.e. ratio > 5x
         "weak compression: {} bytes vs raw {raw16}",
         stream.len()
     );

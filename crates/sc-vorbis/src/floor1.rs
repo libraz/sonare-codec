@@ -6,7 +6,8 @@
 //! fitting that curve. Derivative work of libvorbis/aoTuV (BSD-3-Clause); see
 //! `LICENSE-THIRDPARTY`.
 
-// Consumed by the floor1 fit/encode stage; the live encoder still ships via FFI.
+// The floor1 reader and line rasterizer helpers are the decode-direction
+// counterparts, exercised by this module's round-trip tests rather than the encoder.
 #![allow(dead_code)]
 
 use crate::codebook::{ov_ilog, Codebook};
@@ -764,6 +765,72 @@ impl Floor1Encoding {
                     // Guard out-of-range values exactly as the C does.
                     if (out[j + k] as usize) < cb.entries() {
                         cb.encode(out[j + k] as usize, w);
+                    }
+                }
+            }
+            j += cdim;
+        }
+    }
+
+    /// Histograms the codebook entries [`pack`](Self::pack) would code for the
+    /// deviation values `out`, into `counts` keyed by global book index
+    /// (`counts[book][entry] += 1`). This mirrors `pack`'s cascade classification
+    /// exactly but counts instead of writing, so the per-book entry distribution
+    /// can drive an adaptive Huffman fit. The classification depends only on each
+    /// book's *entry count* (not its codeword lengths), so histogramming with the
+    /// construction-time books and then coding with length-fitted books of the
+    /// same size produces a bit-identical stream — only the codeword lengths, and
+    /// thus the size, change.
+    pub fn histogram(&self, out: &[i32], counts: &mut [Vec<u64>]) {
+        let mut j = 2usize;
+        for &class_idx in &self.partition_class {
+            let class = &self.classes[class_idx];
+            let cdim = class.dim;
+            let csubbits = class.subs;
+            let csub = 1usize << csubbits;
+            let mut bookas = [0usize; 8];
+
+            if csubbits > 0 {
+                let mut maxval = [0i32; 8];
+                for (k, slot) in maxval.iter_mut().enumerate().take(csub) {
+                    let booknum = class.subbook[k];
+                    *slot = if booknum < 0 {
+                        1
+                    } else {
+                        self.books[booknum as usize].entries() as i32
+                    };
+                }
+                let mut cval = 0u32;
+                let mut cshift = 0u32;
+                for k in 0..cdim {
+                    let val = out[j + k];
+                    for (l, &mv) in maxval.iter().enumerate().take(csub) {
+                        if val < mv {
+                            bookas[k] = l;
+                            break;
+                        }
+                    }
+                    cval |= (bookas[k] as u32) << cshift;
+                    cshift += csubbits;
+                }
+                if let Some(book) = counts.get_mut(class.book) {
+                    if let Some(slot) = book.get_mut(cval as usize) {
+                        *slot += 1;
+                    }
+                }
+            }
+
+            for (k, &b) in bookas.iter().enumerate().take(cdim) {
+                let book = class.subbook[b];
+                if book >= 0 {
+                    let cb = &self.books[book as usize];
+                    let entry = out[j + k] as usize;
+                    if entry < cb.entries() {
+                        if let Some(hist) = counts.get_mut(book as usize) {
+                            if let Some(slot) = hist.get_mut(entry) {
+                                *slot += 1;
+                            }
+                        }
                     }
                 }
             }

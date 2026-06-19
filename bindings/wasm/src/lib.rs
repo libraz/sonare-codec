@@ -207,6 +207,66 @@ pub fn encode_mp3_cbr_with_bitrate(
 }
 
 #[wasm_bindgen]
+pub fn encode_mp3_perceptual_active_cbr_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_mp3_perceptual_reservoir_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
 pub fn encode_aac(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
     let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
         .map_err(|err| err.to_string())?;
@@ -240,6 +300,44 @@ pub fn encode_aac_with_selected_scale_factors_and_bitrate(
 }
 
 #[wasm_bindgen]
+pub fn encode_aac_with_standard_spectral_offsets_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
 pub fn encode_m4a(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
     let aac = encode_aac(sample_rate, channels, samples)?;
     sonare_codec::mux_aac_adts_as_m4a(&aac).map_err(|err| err.to_string())
@@ -268,6 +366,44 @@ pub fn encode_m4a_with_selected_scale_factors_and_bitrate(
         .map_err(|err| err.to_string())?;
     sonare_codec::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
         .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_m4a_with_standard_spectral_offsets_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+    .map_err(|err| err.to_string())
 }
 
 #[wasm_bindgen]
@@ -320,6 +456,36 @@ pub fn aac_unsigned_pairs7_table() -> Vec<u32> {
 }
 
 #[wasm_bindgen]
+pub fn aac_signed_pairs5_table() -> Vec<i32> {
+    sonare_codec::aac_signed_pairs5_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                entry.code.bits as i32,
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn aac_signed_pairs6_table() -> Vec<i32> {
+    sonare_codec::aac_signed_pairs6_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                entry.code.bits as i32,
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
 pub fn aac_unsigned_pairs8_table() -> Vec<u32> {
     sonare_codec::aac_unsigned_pairs8_table()
         .iter()
@@ -365,6 +531,74 @@ pub fn aac_unsigned_pairs10_table() -> Vec<u32> {
 }
 
 #[wasm_bindgen]
+pub fn aac_signed_quads1_table() -> Vec<i32> {
+    sonare_codec::aac_signed_quads1_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.v),
+                i32::from(entry.symbol.w),
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                i32::try_from(entry.code.bits).unwrap_or(i32::MAX),
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn aac_signed_quads2_table() -> Vec<i32> {
+    sonare_codec::aac_signed_quads2_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.v),
+                i32::from(entry.symbol.w),
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                i32::try_from(entry.code.bits).unwrap_or(i32::MAX),
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn aac_unsigned_quads3_table() -> Vec<u32> {
+    sonare_codec::aac_unsigned_quads3_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.v),
+                u32::from(entry.symbol.w),
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
+pub fn aac_unsigned_quads4_table() -> Vec<u32> {
+    sonare_codec::aac_unsigned_quads4_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.v),
+                u32::from(entry.symbol.w),
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[wasm_bindgen]
 pub fn aac_escape_table() -> Vec<u32> {
     sonare_codec::aac_escape_table()
         .iter()
@@ -398,19 +632,10 @@ pub fn aac_codebook6_unit_section_plan(
     quantized: &[i32],
     band_width: usize,
 ) -> Result<Vec<u32>, String> {
-    let pairs6 = [sonare_codec::HuffmanEntry {
-        symbol: sonare_codec::AacSpectralMagnitudePair::new(1, 1),
-        code: sonare_codec::HuffmanCode::new(0b1, 1).expect("valid AAC codebook 6 unit code"),
-    }];
     let sections = sonare_codec::plan_sections_by_bit_cost(
         quantized,
         band_width,
-        sonare_codec::AacSpectralMagnitudeTables {
-            pairs1: &[],
-            pairs5: &[],
-            pairs6: &pairs6,
-            escape: &[],
-        },
+        sonare_codec::aac_unit_codebook6_spectral_tables(),
     )
     .map_err(|err| err.to_string())?;
 
@@ -424,6 +649,591 @@ pub fn aac_codebook6_unit_section_plan(
             ]
         })
         .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_quad_unit_section_plan(
+    quantized: &[i32],
+    band_width: usize,
+) -> Result<Vec<u32>, String> {
+    let sections = sonare_codec::plan_quad_sections_by_bit_cost(
+        quantized,
+        band_width,
+        sonare_codec::aac_unit_quad_spectral_tables(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_mixed_unit_section_plan(
+    quantized: &[i32],
+    band_width: usize,
+) -> Result<Vec<u32>, String> {
+    let sections = sonare_codec::plan_spectral_sections_by_bit_cost(
+        quantized,
+        band_width,
+        sonare_codec::aac_unit_codebook6_spectral_tables(),
+        sonare_codec::aac_unit_quad_spectral_tables(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_mixed_unit_payload_bit_lengths(
+    quantized: &[i32],
+    band_width: usize,
+) -> Result<Vec<u32>, String> {
+    let pair_tables = sonare_codec::aac_unit_codebook6_spectral_tables();
+    let quad_tables = sonare_codec::aac_unit_quad_spectral_tables();
+    let sections = sonare_codec::plan_spectral_sections_by_bit_cost(
+        quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+    let split = sonare_codec::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+    let packed = sonare_codec::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+    let scale_factor_bits = sonare_codec::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits(
+            &sections,
+            quantized,
+            band_width,
+            scale_factor_bits.clone(),
+            pair_tables,
+            quad_tables,
+        )
+        .map_err(|err| err.to_string())?;
+    let packed_with_scale =
+        sonare_codec::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits(
+            &sections,
+            quantized,
+            band_width,
+            scale_factor_bits,
+            pair_tables,
+            quad_tables,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_unit_section_plan(
+    quantized: &[i32],
+    band_width: usize,
+) -> Result<Vec<u32>, String> {
+    let sections =
+        sonare_codec::plan_aac_lc_standard_spectral_sections_by_bit_cost(quantized, band_width)
+            .map_err(|err| err.to_string())?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_offsets_section_plan(
+    quantized: &[i32],
+    offsets: &[u32],
+) -> Result<Vec<u32>, String> {
+    let offsets = wasm_offsets_to_usize(offsets)?;
+    let sections = sonare_codec::plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(
+        quantized, &offsets,
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_escape_payload_bit_lengths() -> Result<Vec<u32>, String> {
+    let quantized = [17, 0];
+    let band_width = 2;
+    let pair_tables = sonare_codec::aac_lc_standard_spectral_tables();
+    let quad_tables = sonare_codec::AacSpectralMagnitudeQuadTables::default();
+    let sections = sonare_codec::plan_spectral_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+    if sections.first().map(|section| section.codebook_id)
+        != Some(sonare_codec::AacCodebook::Escape.id())
+    {
+        return Err("AAC standard escape fixture did not select codebook 11".to_owned());
+    }
+    let split = sonare_codec::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+    let packed = sonare_codec::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_mixed_payload_bit_lengths(
+    quantized: &[i32],
+    band_width: usize,
+) -> Result<Vec<u32>, String> {
+    let split = sonare_codec::split_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        quantized, band_width,
+    )
+    .map_err(|err| err.to_string())?;
+    let packed = sonare_codec::pack_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        quantized, band_width,
+    )
+    .map_err(|err| err.to_string())?;
+    let scale_factor_bits = sonare_codec::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec::split_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost(
+            quantized,
+            band_width,
+            scale_factor_bits.clone(),
+        )
+        .map_err(|err| err.to_string())?;
+    let packed_with_scale =
+        sonare_codec::pack_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost(
+            quantized,
+            band_width,
+            scale_factor_bits,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_mixed_offsets_payload_bit_lengths(
+    quantized: &[i32],
+    offsets: &[u32],
+) -> Result<Vec<u32>, String> {
+    let offsets = wasm_offsets_to_usize(offsets)?;
+    let split =
+        sonare_codec::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            quantized,
+            &offsets,
+        )
+        .map_err(|err| err.to_string())?;
+    let packed =
+        sonare_codec::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            quantized, &offsets,
+        )
+        .map_err(|err| err.to_string())?;
+    let scale_factor_bits = sonare_codec::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost(
+            quantized,
+            &offsets,
+            scale_factor_bits.clone(),
+        )
+        .map_err(|err| err.to_string())?;
+    let packed_with_scale =
+        sonare_codec::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost(
+            quantized,
+            &offsets,
+            scale_factor_bits,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_standard_mono_offsets_with_step(
+    sample_rate: u32,
+    samples: &[f32],
+    step: f32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
+    let channel_config =
+        sonare_codec::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec::aac_scale_factor_delta_table();
+
+    sonare_codec::encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+        sonare_codec::AdtsConfig::aac_lc(sample_rate, 1),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        step,
+        offsets,
+        &scale_factor_table,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_standard_mono_offsets_with_bitrate(
+    sample_rate: u32,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_mono_offsets_bitrate_frame_details(
+    sample_rate: u32,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
+    let channel_config =
+        sonare_codec::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec::aac_scale_factor_delta_table();
+
+    let details = sonare_codec::select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        sonare_codec::AdtsConfig::aac_lc(sample_rate, 1),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        offsets,
+        sonare_codec::AAC_LC_PCM_STEP_CANDIDATES,
+        target_bitrate_bps,
+        &scale_factor_table,
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_standard_stereo_offsets_with_step(
+    sample_rate: u32,
+    samples: &[f32],
+    step: f32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
+    let channel_config =
+        sonare_codec::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec::aac_scale_factor_delta_table();
+
+    sonare_codec::encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+        sonare_codec::AdtsConfig::aac_lc(sample_rate, 2),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        step,
+        offsets,
+        &scale_factor_table,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_standard_stereo_offsets_with_bitrate(
+    sample_rate: u32,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_stereo_offsets_bitrate_frame_details(
+    sample_rate: u32,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
+    let channel_config =
+        sonare_codec::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec::aac_scale_factor_delta_table();
+
+    let details = sonare_codec::select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        sonare_codec::AdtsConfig::aac_lc(sample_rate, 2),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        offsets,
+        sonare_codec::AAC_LC_PCM_STEP_CANDIDATES,
+        target_bitrate_bps,
+        &scale_factor_table,
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_selected_scale_factor_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details = sonare_codec::aac_selected_scale_factor_frame_details_with_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+fn wasm_offsets_to_usize(offsets: &[u32]) -> Result<Vec<usize>, String> {
+    offsets
+        .iter()
+        .map(|&offset| {
+            usize::try_from(offset).map_err(|_| "AAC offset does not fit usize".to_owned())
+        })
+        .collect()
+}
+
+fn aac_offsets_max_sfb(offsets: &[usize]) -> Result<u8, String> {
+    u8::try_from(offsets.len().saturating_sub(1))
+        .map_err(|_| "AAC-LC scale-factor band count exceeds max_sfb range".to_owned())
+}
+
+fn constant_aac_scale_factors_by_frame(
+    pcm: &sonare_codec::AudioBuffer,
+    global_gain: usize,
+    band_count: usize,
+) -> Vec<Vec<i16>> {
+    let frame_count = pcm.samples.len().div_ceil(usize::from(pcm.channels) * 1024);
+    let scale_factor = i16::try_from(global_gain).unwrap_or(i16::MAX);
+    (0..frame_count)
+        .map(|_| vec![scale_factor; band_count])
+        .collect()
 }
 
 #[wasm_bindgen]
@@ -462,6 +1272,127 @@ pub fn mp3_layer3_main_data_capacity_bits(
     )
     .map_err(|err| err.to_string())?;
     sonare_codec::layer3_main_data_capacity_bits(header).map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn mp3_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details = sonare_codec::select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_perceptual_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            &pcm,
+            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            bitrate_kbps,
+            crc_protected,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details = sonare_codec::select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+        &pcm,
+        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
 }
 
 impl From<sonare_codec::AudioBuffer> for WavPcm {
@@ -521,15 +1452,35 @@ fn is_m4a_container(input: &[u8]) -> bool {
 mod tests {
     use super::{
         aac_codebook6_unit_section_plan, aac_escape_table, aac_lc_adts_max_frame_len_for_bitrate,
-        aac_lc_default_production_bitrate_bps, aac_scale_factor_delta_table,
+        aac_lc_default_production_bitrate_bps, aac_mixed_unit_payload_bit_lengths,
+        aac_mixed_unit_section_plan, aac_quad_unit_section_plan, aac_scale_factor_delta_table,
+        aac_selected_scale_factor_frame_details_with_bitrate, aac_signed_pairs5_table,
+        aac_signed_pairs6_table, aac_signed_quads1_table, aac_signed_quads2_table,
+        aac_standard_escape_payload_bit_lengths, aac_standard_mixed_offsets_payload_bit_lengths,
+        aac_standard_mixed_payload_bit_lengths, aac_standard_mono_offsets_bitrate_frame_details,
+        aac_standard_offsets_section_plan,
+        aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate,
+        aac_standard_stereo_offsets_bitrate_frame_details, aac_standard_unit_section_plan,
         aac_unsigned_pairs10_table, aac_unsigned_pairs7_table,
         aac_unsigned_pairs7_unit_magnitude_table, aac_unsigned_pairs8_table,
-        aac_unsigned_pairs9_table, decode_aac, decode_audio, decode_m4a, decode_mp3,
-        demux_m4a_as_aac_adts, detect_format, encode_aac, encode_aac_with_bitrate,
-        encode_aac_with_selected_scale_factors_and_bitrate, encode_audio, encode_audio_production,
-        encode_m4a, encode_m4a_with_bitrate, encode_m4a_with_selected_scale_factors_and_bitrate,
-        encode_mp3, encode_mp3_cbr_with_bitrate, encode_mp3_with_bitrate,
-        mp3_layer3_main_data_capacity_bits, mp3_layer3_main_data_capacity_bytes, StreamDecoder,
+        aac_unsigned_pairs9_table, aac_unsigned_quads3_table, aac_unsigned_quads4_table,
+        decode_aac, decode_audio, decode_m4a, decode_mp3, demux_m4a_as_aac_adts, detect_format,
+        encode_aac, encode_aac_standard_mono_offsets_with_bitrate,
+        encode_aac_standard_mono_offsets_with_step,
+        encode_aac_standard_stereo_offsets_with_bitrate,
+        encode_aac_standard_stereo_offsets_with_step, encode_aac_with_bitrate,
+        encode_aac_with_selected_scale_factors_and_bitrate,
+        encode_aac_with_standard_spectral_offsets_and_bitrate, encode_audio,
+        encode_audio_production, encode_m4a, encode_m4a_with_bitrate,
+        encode_m4a_with_selected_scale_factors_and_bitrate,
+        encode_m4a_with_standard_spectral_offsets_and_bitrate, encode_mp3,
+        encode_mp3_cbr_with_bitrate, encode_mp3_perceptual_active_cbr_with_bitrate,
+        encode_mp3_perceptual_reservoir_with_bitrate,
+        encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate, encode_mp3_with_bitrate,
+        mp3_layer3_main_data_capacity_bits, mp3_layer3_main_data_capacity_bytes,
+        mp3_perceptual_reservoir_frame_details_with_bitrate,
+        mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate,
+        mp3_reservoir_frame_details_with_bitrate, StreamDecoder,
     };
 
     fn assert_mpeg1_layer3_frame_budget(
@@ -550,7 +1501,7 @@ mod tests {
             assert_eq!(frame[1] & 0xe0, 0xe0);
             assert_eq!((frame[1] >> 3) & 0x03, 0x03);
             assert_eq!((frame[1] >> 1) & 0x03, 0x01);
-            let bitrate_kbps = match frame[2] >> 4 {
+            let bitrate_kbps: u16 = match frame[2] >> 4 {
                 7 => 96,
                 9 => 128,
                 index => panic!("unexpected MPEG-1 Layer III bitrate index {index}"),
@@ -584,6 +1535,37 @@ mod tests {
         }
         assert!(frames > 0);
         assert_eq!(offset, encoded.len());
+    }
+
+    fn mpeg1_layer3_main_data_begins(encoded: &[u8]) -> Vec<f64> {
+        let mut begins = Vec::new();
+        let mut offset = 0usize;
+        while offset < encoded.len() {
+            let frame = &encoded[offset..];
+            assert!(frame.len() >= 6);
+            assert_eq!(frame[0], 0xff);
+            assert_eq!(frame[1] & 0xe0, 0xe0);
+            let bitrate_kbps: u16 = match frame[2] >> 4 {
+                7 => 96,
+                9 => 128,
+                index => panic!("unexpected MPEG-1 Layer III bitrate index {index}"),
+            };
+            let sample_rate = match (frame[2] >> 2) & 0x03 {
+                0 => 44_100,
+                1 => 48_000,
+                2 => 32_000,
+                index => panic!("unexpected MPEG-1 sample-rate index {index}"),
+            };
+            let padding = usize::from(frame[2] & 0x02 != 0);
+            let frame_len = 144 * usize::from(bitrate_kbps) * 1000
+                / usize::try_from(sample_rate).unwrap()
+                + padding;
+            begins.push(f64::from(
+                (u16::from(frame[4]) << 1) | u16::from(frame[5] >> 7),
+            ));
+            offset += frame_len;
+        }
+        begins
     }
 
     #[test]
@@ -809,6 +1791,100 @@ mod tests {
     }
 
     #[test]
+    fn exposes_mp3_reservoir_frame_details_helper() {
+        let frames = 8_usize;
+        let detail_width = 12_usize;
+        let samples_per_frame = 1152_usize;
+        let samples = (0..(frames * samples_per_frame))
+            .map(|index| {
+                let frame = index / samples_per_frame;
+                let t = (index % samples_per_frame) as f32;
+                if frame % 2 == 0 {
+                    0.3 * ((t * 0.043).sin()
+                        + (t * 0.131).sin()
+                        + (t * 0.277).sin()
+                        + (t * 0.611).sin())
+                } else {
+                    0.02 * (t * 0.05).sin()
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let details =
+            mp3_reservoir_frame_details_with_bitrate(44_100, 1, &samples, 128, false).unwrap();
+
+        assert_eq!(details.len(), frames * detail_width);
+        assert_eq!(details[0], 0.0);
+        assert_eq!(details[6], 0.0);
+        assert!(details
+            .chunks_exact(detail_width)
+            .any(|detail| detail[6] > 0.0));
+        assert!(details.chunks_exact(detail_width).all(|detail| {
+            detail[2] <= (detail[5] + detail[6]) * 8.0
+                && detail[7] >= 0.0
+                && detail[8] == 0.0
+                && detail[9] == 2.0
+                && detail[10] == 0.0
+                && detail[11] == 0.0
+        }));
+
+        let perceptual_details =
+            mp3_perceptual_reservoir_frame_details_with_bitrate(44_100, 1, &samples, 128, false)
+                .unwrap();
+        let perceptual =
+            encode_mp3_perceptual_reservoir_with_bitrate(44_100, 1, &samples, 128, false).unwrap();
+        let begins = mpeg1_layer3_main_data_begins(&perceptual);
+        assert_eq!(perceptual_details.len(), frames * detail_width);
+        assert_eq!(perceptual_details[0], 0.0);
+        assert_eq!(perceptual_details[6], 0.0);
+        assert!(perceptual_details
+            .chunks_exact(detail_width)
+            .any(|detail| detail[6] > 0.0));
+        assert!(perceptual_details.chunks_exact(detail_width).all(|detail| {
+            detail[2] <= (detail[5] + detail[6]) * 8.0
+                && detail[7] >= 0.0
+                && detail[8] == 2.0
+                && detail[9] == 0.0
+                && detail[10] == 0.0
+                && detail[11] == 0.0
+        }));
+        assert_eq!(begins.len() * detail_width, perceptual_details.len());
+        for (frame, main_data_begin) in begins.iter().enumerate() {
+            assert_eq!(
+                *main_data_begin,
+                perceptual_details[frame * detail_width + 6]
+            );
+        }
+
+        let guarded_details = mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
+            44_100, 1, &samples, 128, false,
+        )
+        .unwrap();
+        let guarded = encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
+            44_100, 1, &samples, 128, false,
+        )
+        .unwrap();
+        let guarded_begins = mpeg1_layer3_main_data_begins(&guarded);
+        assert_eq!(guarded_details.len(), frames * detail_width);
+        assert_eq!(guarded_details[0], 0.0);
+        assert_eq!(guarded_details[6], 0.0);
+        assert!(guarded_details
+            .chunks_exact(detail_width)
+            .any(|detail| detail[6] > 0.0));
+        assert!(guarded_details.chunks_exact(detail_width).all(|detail| {
+            detail[2] <= (detail[5] + detail[6]) * 8.0
+                && detail[7] >= 0.0
+                && detail[8] + detail[9] == 2.0
+                && detail[10] == 2.0
+                && detail[11].is_finite()
+        }));
+        assert_eq!(guarded_begins.len() * detail_width, guarded_details.len());
+        for (frame, main_data_begin) in guarded_begins.iter().enumerate() {
+            assert_eq!(*main_data_begin, guarded_details[frame * detail_width + 6]);
+        }
+    }
+
+    #[test]
     fn unified_m4a_api_muxes_silent_aac() {
         let samples = vec![0.0; 1024];
 
@@ -887,6 +1963,36 @@ mod tests {
         assert_eq!(&pairs7[..4], &[0, 0, 0, 1]);
         assert_eq!(&pairs7[36..40], &[1, 1, 0x00c, 4]);
         assert_eq!(&pairs7[252..256], &[7, 7, 0xfff, 12]);
+        let signed5 = aac_signed_pairs5_table();
+        assert_eq!(signed5.len(), 324);
+        assert_eq!(&signed5[..4], &[-4, -4, 0x1fff, 13]);
+        assert_eq!(&signed5[160..164], &[0, 0, 0, 1]);
+        assert_eq!(&signed5[320..324], &[4, 4, 0x1ffe, 13]);
+        let signed6 = aac_signed_pairs6_table();
+        assert_eq!(signed6.len(), 324);
+        assert_eq!(&signed6[..4], &[-4, -4, 0x7fe, 11]);
+        assert_eq!(&signed6[160..164], &[0, 0, 0, 4]);
+        assert_eq!(&signed6[320..324], &[4, 4, 0x7fc, 11]);
+        let signed_quads1 = aac_signed_quads1_table();
+        assert_eq!(signed_quads1.len(), 486);
+        assert_eq!(&signed_quads1[..6], &[-1, -1, -1, -1, 0x7f8, 11]);
+        assert_eq!(&signed_quads1[240..246], &[0, 0, 0, 0, 0, 1]);
+        assert_eq!(&signed_quads1[480..486], &[1, 1, 1, 1, 0x7f4, 11]);
+        let signed_quads2 = aac_signed_quads2_table();
+        assert_eq!(signed_quads2.len(), 486);
+        assert_eq!(&signed_quads2[..6], &[-1, -1, -1, -1, 0x1f3, 9]);
+        assert_eq!(&signed_quads2[240..246], &[0, 0, 0, 0, 0, 3]);
+        assert_eq!(&signed_quads2[480..486], &[1, 1, 1, 1, 0x1f6, 9]);
+        let quads3 = aac_unsigned_quads3_table();
+        assert_eq!(quads3.len(), 486);
+        assert_eq!(&quads3[..6], &[0, 0, 0, 0, 0, 1]);
+        assert_eq!(&quads3[240..246], &[1, 1, 1, 1, 0x74, 7]);
+        assert_eq!(&quads3[480..486], &[2, 2, 2, 2, 0x7ffa, 15]);
+        let quads4 = aac_unsigned_quads4_table();
+        assert_eq!(quads4.len(), 486);
+        assert_eq!(&quads4[..6], &[0, 0, 0, 0, 0x7, 4]);
+        assert_eq!(&quads4[240..246], &[1, 1, 1, 1, 0, 4]);
+        assert_eq!(&quads4[480..486], &[2, 2, 2, 2, 0x7fc, 11]);
         let pairs8 = aac_unsigned_pairs8_table();
         assert_eq!(pairs8.len(), 256);
         assert_eq!(&pairs8[..4], &[0, 0, 0x00e, 5]);
@@ -917,6 +2023,156 @@ mod tests {
             vec![0, 2, 6, 2, 4, 0]
         );
         assert_eq!(
+            aac_quad_unit_section_plan(&[1, -1, 0, 1, 0, 1, -1, 0, 0, 0, 0, 0], 4).unwrap(),
+            vec![0, 8, 3, 8, 12, 0]
+        );
+        assert_eq!(
+            aac_mixed_unit_section_plan(&[1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0], 4).unwrap(),
+            vec![0, 4, 3, 4, 8, 6, 8, 12, 0]
+        );
+        assert_eq!(
+            aac_mixed_unit_payload_bit_lengths(&[1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0], 4)
+                .unwrap(),
+            vec![27, 11, 38, 29, 11, 40]
+        );
+        assert_eq!(
+            aac_standard_unit_section_plan(&[1, -1, 17, 0], 2).unwrap(),
+            vec![0, 2, 6, 2, 4, 11]
+        );
+        assert_eq!(
+            aac_standard_unit_section_plan(&[0, 1], 2).unwrap(),
+            vec![0, 2, 5]
+        );
+        assert_eq!(
+            aac_standard_unit_section_plan(&[1, -1, 0, 1, 17, 0, 0, 0], 4).unwrap(),
+            vec![0, 4, 4, 4, 8, 11]
+        );
+        assert_eq!(
+            aac_standard_offsets_section_plan(&[1, -1, 0, 1, 17, 0, 0, 0], &[0, 4, 8]).unwrap(),
+            vec![0, 4, 4, 4, 8, 11]
+        );
+        assert_eq!(
+            aac_standard_escape_payload_bit_lengths().unwrap(),
+            vec![9, 15, 24]
+        );
+        assert_eq!(
+            aac_standard_mixed_payload_bit_lengths(&[1, -1, 0, 1, 17, 0, 0, 0], 4).unwrap(),
+            vec![18, 26, 44, 20, 26, 46]
+        );
+        assert_eq!(
+            aac_standard_mixed_offsets_payload_bit_lengths(&[1, -1, 0, 1, 17, 0, 0, 0], &[0, 4, 8])
+                .unwrap(),
+            vec![18, 26, 44, 20, 26, 46]
+        );
+        let standard_mono =
+            encode_aac_standard_mono_offsets_with_step(44_100, &[0.0; 2048], 20.0, 128).unwrap();
+        assert_eq!(&standard_mono[..2], &[0xff, 0xf1]);
+        assert!(max_adts_frame_len(&standard_mono) <= 16);
+        let standard_mono_bitrate =
+            encode_aac_standard_mono_offsets_with_bitrate(44_100, &[0.0; 2048], 128_000, 128)
+                .unwrap();
+        assert_eq!(&standard_mono_bitrate[..2], &[0xff, 0xf1]);
+        assert!(
+            max_adts_frame_len(&standard_mono_bitrate)
+                <= aac_lc_adts_max_frame_len_for_bitrate(44_100, 128_000).unwrap()
+        );
+        let standard_generic_adts = encode_aac_with_standard_spectral_offsets_and_bitrate(
+            44_100,
+            1,
+            &[0.0; 2048],
+            128_000,
+            128,
+        )
+        .unwrap();
+        assert_eq!(&standard_generic_adts[..2], &[0xff, 0xf1]);
+        assert!(
+            max_adts_frame_len(&standard_generic_adts)
+                <= aac_lc_adts_max_frame_len_for_bitrate(44_100, 128_000).unwrap()
+        );
+        let standard_generic_m4a = encode_m4a_with_standard_spectral_offsets_and_bitrate(
+            44_100,
+            1,
+            &[0.0; 2048],
+            128_000,
+            128,
+        )
+        .unwrap();
+        assert_eq!(&standard_generic_m4a[4..8], b"ftyp");
+        let standard_mono_details =
+            aac_standard_mono_offsets_bitrate_frame_details(44_100, &[0.0; 2048], 128_000, 128)
+                .unwrap();
+        assert_eq!(standard_mono_details.len(), 8);
+        assert_eq!(standard_mono_details[0], 0.0);
+        assert_eq!(standard_mono_details[4], 1.0);
+        assert!(standard_mono_details[2] <= 372.0);
+        assert!(standard_mono_details[6] <= 372.0);
+        let standard_selected_details =
+            aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+                128,
+                16,
+            )
+            .unwrap();
+        assert_eq!(standard_selected_details.len(), 8);
+        assert_eq!(standard_selected_details[0], 0.0);
+        assert_eq!(standard_selected_details[4], 1.0);
+        assert!(standard_selected_details[2] <= 372.0);
+        assert!(standard_selected_details[6] <= 372.0);
+        let production_selected_details =
+            aac_selected_scale_factor_frame_details_with_bitrate(44_100, 1, &[0.0; 2048], 128_000)
+                .unwrap();
+        assert_eq!(production_selected_details.len(), 8);
+        assert_eq!(production_selected_details[0], 0.0);
+        assert_eq!(production_selected_details[4], 1.0);
+        assert!(production_selected_details[2] <= 372.0);
+        assert!(production_selected_details[6] <= 372.0);
+        let standard_stereo =
+            encode_aac_standard_stereo_offsets_with_step(44_100, &[0.0; 4096], 20.0, 128).unwrap();
+        assert_eq!(&standard_stereo[..2], &[0xff, 0xf1]);
+        assert!(max_adts_frame_len(&standard_stereo) <= 28);
+        let standard_stereo_bitrate =
+            encode_aac_standard_stereo_offsets_with_bitrate(44_100, &[0.0; 4096], 256_000, 128)
+                .unwrap();
+        assert_eq!(&standard_stereo_bitrate[..2], &[0xff, 0xf1]);
+        assert!(
+            max_adts_frame_len(&standard_stereo_bitrate)
+                <= aac_lc_adts_max_frame_len_for_bitrate(44_100, 256_000).unwrap()
+        );
+        let standard_stereo_details =
+            aac_standard_stereo_offsets_bitrate_frame_details(44_100, &[0.0; 4096], 256_000, 128)
+                .unwrap();
+        assert_eq!(standard_stereo_details.len(), 8);
+        assert_eq!(standard_stereo_details[0], 0.0);
+        assert_eq!(standard_stereo_details[4], 1.0);
+        assert!(standard_stereo_details[2] <= 744.0);
+        assert!(standard_stereo_details[6] <= 744.0);
+        let standard_selected_stereo_details =
+            aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+                44_100,
+                2,
+                &[0.0; 4096],
+                256_000,
+                128,
+                16,
+            )
+            .unwrap();
+        assert_eq!(standard_selected_stereo_details.len(), 8);
+        assert_eq!(standard_selected_stereo_details[0], 0.0);
+        assert_eq!(standard_selected_stereo_details[4], 1.0);
+        assert!(standard_selected_stereo_details[2] <= 744.0);
+        assert!(standard_selected_stereo_details[6] <= 744.0);
+        let production_selected_stereo_details =
+            aac_selected_scale_factor_frame_details_with_bitrate(44_100, 2, &[0.0; 4096], 256_000)
+                .unwrap();
+        assert_eq!(production_selected_stereo_details.len(), 8);
+        assert_eq!(production_selected_stereo_details[0], 0.0);
+        assert_eq!(production_selected_stereo_details[4], 1.0);
+        assert!(production_selected_stereo_details[2] <= 744.0);
+        assert!(production_selected_stereo_details[6] <= 744.0);
+        assert_eq!(
             mp3_layer3_main_data_capacity_bytes(44_100, 1, 128, false, false).unwrap(),
             396
         );
@@ -925,6 +2181,13 @@ mod tests {
             3168
         );
         assert!(mp3_layer3_main_data_capacity_bytes(44_100, 3, 128, false, false).is_err());
+        let mp3_samples = (0..(1152 * 3))
+            .map(|sample| ((sample as f32) * 0.013).sin() * 0.25)
+            .collect::<Vec<_>>();
+        let perceptual =
+            encode_mp3_perceptual_active_cbr_with_bitrate(44_100, 1, &mp3_samples, 128, false)
+                .unwrap();
+        assert_mpeg1_layer3_frame_budget(&perceptual, 44_100, 1, 128);
     }
 
     #[test]

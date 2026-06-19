@@ -7,8 +7,6 @@
 //! residue. Derivative work of libvorbis/aoTuV (BSD-3-Clause); see
 //! `LICENSE-THIRDPARTY`.
 
-// Used by the residue stage; the live encoder still ships via FFI.
-#![allow(dead_code)]
 // The lookup table is transcribed verbatim from libvorbis; keep its published
 // digits rather than trimming them to the nearest f32 representation.
 #![allow(clippy::excessive_precision)]

@@ -14,8 +14,8 @@
 //! the codebooks are placeholder. Derivative work of libvorbis/aoTuV
 //! (BSD-3-Clause) via its components; see `LICENSE-THIRDPARTY`.
 
-// A pure-Rust encode path not yet wired into the public encoder, which still
-// ships via FFI until the standard codebooks make the stream spec-compatible.
+// Self-contained Ogg Vorbis stream superseded by `encoder`; retained as a tested
+// reference and exercised only by its own round-trip tests.
 #![allow(dead_code)]
 
 use crate::block_codec::BlockCodec;

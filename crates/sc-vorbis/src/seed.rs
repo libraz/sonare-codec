@@ -10,9 +10,6 @@
 //! `seed_curve` per spectral peak, `seed_chase` resolves overlapping seeds, and
 //! `max_seeds` scatters the result back onto the per-bin floor.
 
-// Part of the masking-curve build; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::masking::{P_BANDS, P_LEVELS, P_LEVEL_0};
 use crate::octave::PsyOctaveMap;
 use crate::psy::EHMER_OFFSET;

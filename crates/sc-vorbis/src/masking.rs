@@ -7,10 +7,6 @@
 //! masking curves do not fall to −∞. Derivative work of libvorbis/aoTuV
 //! (BSD-3-Clause); see `LICENSE-THIRDPARTY`.
 
-// Feeds the (not-yet-landed) tone-curve setup; the live encoder still ships via
-// FFI until the analysis stages are wired in.
-#![allow(dead_code)]
-
 use crate::psy::{from_oc, EHMER_MAX};
 
 /// Number of quarter-octave entries in the ATH table (`MAX_ATH`).

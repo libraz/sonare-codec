@@ -130,6 +130,10 @@ path now uses the same offset-based selected-scale-factor bitrate-budget stream
 helpers with a conservative default production budget, so scale-factor
 selection, bit-cost section planning, and ADTS frame budgeting stay on one path
 for Rust callers.
+The standard-id AAC spectral workbench can also plan and pack direct signed
+codebook 5/6, quad, unsigned-pair, and escape diagnostic payloads by
+scale-factor band offsets, giving the future full codebook production path the
+same section metadata shape used by production AAC-LC frames.
 Sectioned spectral payloads can now be written into a long-block individual
 channel stream, single-channel raw data block, and independent-stereo
 channel-pair raw data block without inserting byte padding between syntax
@@ -151,12 +155,35 @@ building local test tables.
 The auto-step non-zero AAC helper path remains experimental; production
 candidate output uses bitrate-budgeted stream selection and is still limited
 until the remaining standard spectral codebooks replace the local experimental
-tables. The standard unsigned-pairs codebook 7/8/9/10 tables and escape
-codebook 11 table are exposed as `aac_unsigned_pairs7_table`,
-`aac_unsigned_pairs8_table`, `aac_unsigned_pairs9_table`,
-`aac_unsigned_pairs10_table`, and `aac_escape_table`, with the older
+tables. The standard signed-quad codebook 1/2 tables, signed-pairs codebook
+5/6 tables, unsigned-quad codebook 3/4 tables, unsigned-pairs codebook 7/8/9/10 tables,
+and escape codebook 11 table are exposed as
+`aac_signed_quads1_table`, `aac_signed_quads2_table`,
+`aac_signed_pairs5_table`, `aac_signed_pairs6_table`,
+`aac_unsigned_quads3_table`, `aac_unsigned_quads4_table`,
+`aac_unsigned_pairs7_table`, `aac_unsigned_pairs8_table`,
+`aac_unsigned_pairs9_table`, `aac_unsigned_pairs10_table`, and `aac_escape_table`, with the older
 unit-magnitude helper retained for diagnostics, and re-exported by the umbrella
 crate so callers can verify the production-shaped spectral packing surface. The
+AAC quad section workbench is also exposed through a core-owned unit-table
+section planner for binding/package diagnostics. A low-level standard-id
+spectral section planner can combine standard direct signed-quad codebook 1/2,
+unsigned-quad codebook 3/4, standard direct signed-pair codebook 5/6,
+unsigned-pair codebooks 7/8/9/10, and escape codebook 11, or caller-supplied
+quad codebooks 1-4 with pair/escape codebooks 5-11, without reusing the older
+compatibility codebook-1 pair path, and exposes split helpers that keep section
+plus scale-factor bits separate from spectral bits for the long-block
+individual-channel payload packer, including a dedicated standard
+AAC-LC workbench helper and bit-cost planning entry points that feed those
+split/scale-factor payload helpers directly. The
+umbrella crate also exposes `encode_aac_adts_with_standard_spectral_offsets_and_bitrate`
+and `encode_m4a_with_standard_spectral_offsets_and_bitrate`, plus
+`encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate`
+and `encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate`,
+giving Rust, WASM, and Python callers high-level mono/stereo
+bitrate-budgeted ADTS/M4A surfaces that use the standard-id offsets,
+scale-factor DPCM, and full standard spectral table-set workbench without
+making that path the default production encoder yet. The
 default magnitude-classified section planner now uses the available standard
 unsigned-pairs codebook 7 table for magnitudes up to 7 and codebook 9 for
 magnitudes up to 12 before falling back to escape-class sections. A standard
@@ -185,9 +212,9 @@ production candidate streams are checked by the local FFmpeg-backed readiness
 oracle. The production-facing quantizer uses the true polyphase + hybrid MDCT
 workbench for mono and keeps stereo on a compatibility cosine-modulated
 subband scaffold while the stereo true-polyphase path is brought up to that
-oracle. The default non-silent mono production path now uses the CBR
-bit-reservoir packer; stereo reservoir promotion is still pending because it
-currently fails the readiness oracle. MP3 also exposes clean-room psychoacoustic long-block scale-factor helpers that wire zero-padded PCM analysis, the sign-inverted hybrid MDCT spectrum, masking thresholds, and per-band allocation into the scale-factor quantizer workbench, plus frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors. Production encode still uses calibrated global gain until the matching bit-budget/rate-control loop is validated. Remaining Huffman-table coverage and full rate
+oracle. The default non-silent mono/stereo production path now uses the CBR
+bit-reservoir packer and is checked against the same selector telemetry in the
+publish-readiness gate. MP3 also exposes clean-room psychoacoustic long-block scale-factor helpers that wire zero-padded PCM analysis, the sign-inverted hybrid MDCT spectrum, masking thresholds, and per-band allocation into the scale-factor quantizer workbench, plus frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors. Non-silent mono/stereo production encode now uses the perceptual scale-factor reservoir path; the quality-guarded perceptual reservoir helper remains available as a comparison diagnostic. Remaining Huffman-table coverage and full rate
 control are still pending; interleaved PCM can now be extracted into
 zero-padded analysis blocks and classified into Layer III entropy regions for
 those stages. Region metadata can be written into side-info, and
@@ -239,9 +266,20 @@ depending on candidate order, and can report the selected step together with
 payload bit length and frame capacity for the future rate-control path.
 `layer3_header_for_capacity`, `layer3_main_data_capacity_bytes`, and
 `layer3_main_data_capacity_bits` expose the per-frame Layer III payload budget
-for callers and wrapper crates, and the bitrate-selected stream helper derives
-the MPEG header and per-frame capacity from a caller-selected Layer III bitrate.
-The umbrella crate re-exports the MP3 scaffold helpers, psychoacoustic long-block scale-factor selector, perceptual scale-factor frame/stream helpers with payload-budget and bitrate-derived capacity search, and related side-info/table-selection types behind the `mp3` feature.
+for callers and wrapper crates, the bitrate-selected stream helper derives the
+MPEG header and per-frame capacity from a caller-selected Layer III bitrate,
+and the reservoir detail helper reports per-frame CBR capacity, selected step,
+payload bits, frame length, padding, `main_data_begin`, and post-frame reservoir
+state from the same selection pass used by the production reservoir encoder,
+including per-frame perceptual-vs-calibrated granule counts for the guarded
+psychoacoustic bridge plus quality-guard comparison count and encoder-side
+distortion delta telemetry.
+The umbrella crate re-exports the MP3 scaffold helpers, psychoacoustic
+long-block scale-factor selector, perceptual scale-factor frame/stream helpers
+with payload-budget and bitrate-derived capacity search, the perceptual active
+CBR diagnostic stream helper, the perceptual active reservoir candidate helper,
+reservoir detail helpers, and related side-info/table-selection types behind
+the `mp3` feature.
 Complete standard big-values table implementation beyond the currently wired
 tables, full standard bit-cost search/rate control, production psychoacoustic
 bit-allocation integration, and full non-silent encode integration remain
@@ -259,12 +297,17 @@ API. `format` accepts `wav`, `flac`, `mp3`, `vorbis`, `opus`, `aac`, `m4a`, or
 `StreamDecoder`, which buffers chunked input and returns PCM once the
 accumulated bytes form a complete stream. Small lossy diagnostic helpers are
 available on both package surfaces for AAC-LC ADTS bitrate frame budgets, the
-AAC default production bitrate budget, AAC unsigned-pairs codebook 7/8/9/10
-tables, escape codebook 11 table, codebook 6 section planning, and MP3 Layer
-III main-data capacity. WASM and Python also expose caller-selected AAC/M4A
-bitrate encode helpers for fixed and internally selected scale-factor paths,
-plus MP3 fixed-padding and CBR padding-scheduled bitrate encode helpers for the
-current lossy scaffolds.
+AAC default production bitrate budget, AAC signed-pairs codebook 5/6 tables,
+unsigned-pairs codebook 7/8/9/10 tables, escape codebook 11 table, codebook 6 section planning, mixed
+standard-id payload bit lengths, standard table-set section planning, standard
+escape and mixed standard-id payload bit lengths, standard-id AAC-LC mono/stereo
+offsets ADTS diagnostic stream helpers with fixed-step and bitrate-derived step
+search modes plus frame-selection telemetry, and MP3 Layer III main-data capacity/reservoir
+telemetry for the mono/stereo production perceptual reservoir path and the
+quality-guarded comparison helper. WASM and Python also expose
+caller-selected AAC/M4A bitrate encode helpers for fixed and internally
+selected scale-factor paths, plus MP3 fixed-padding and CBR padding-scheduled
+bitrate encode helpers for the current lossy scaffolds.
 
 ## License and clean-room policy
 
@@ -392,8 +435,15 @@ then keeps the best correlated candidate with an RMS tie-break toward the input
 level. The final summary still reports the standard-table section mix and
 default bitrate-derived ADTS frame budget so escape-table, scale-factor, and
 future full-codebook work can be tracked separately from the production
-candidate. The local oracle also rejects extremely over-amplified output, not
-just silent or uncorrelated PCM.
+candidate. The same readiness diagnostic now also runs the public high-level
+standard-id AAC/M4A bitrate helpers for mono and stereo, including the selected
+scale-factor plus magnitude-bias variants, checking ADTS frame budgets, FFmpeg
+decode, decoded RMS, and correlation while leaving the default production AAC
+path on the higher-quality selected-scale-factor table set. Python/WASM also
+expose flattened frame-selection telemetry for the same selected standard-id
+path as `[frame_index, step, frame_len, frame_capacity_bytes, ...]`. The local
+oracle also rejects extremely over-amplified output, not just silent or
+uncorrelated PCM.
 `mp3-perceptual-diagnostic` uses the same local FFmpeg oracle to decode the
 perceptual-scale-factor MP3 helper output at 128kbps CBR without promoting that
 path to production. It also reports the CBR padding count, selected step range,

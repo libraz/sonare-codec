@@ -11,8 +11,8 @@
 //! `f32::to_bits` / `f32::from_bits`, so no `unsafe` is needed. The remaining
 //! transforms are the `scales.h` closed forms verbatim.
 
-// Foundation for the masking model; the live encoder still ships via FFI until
-// the analysis stages land.
+// The inverse scale conversions are exercised by this module's tests; the
+// masking model uses only the forward direction.
 #![allow(dead_code)]
 
 /// Number of points in an Ehmer masking curve (`EHMER_MAX`).

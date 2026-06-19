@@ -13,9 +13,6 @@
 //! framing flag bit. After the 7-byte preamble the stream is byte-aligned, so
 //! the 32-bit fields and embedded strings stay byte-aligned until that flag.
 
-// Consumed by the Vorbis stream assembler; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::codebook::ov_ilog;
 use crate::oggpack::BitWriter;
 

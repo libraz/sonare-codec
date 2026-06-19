@@ -8,8 +8,8 @@
 //! than the standard libvorbis books (which a spec-compatible stream needs).
 //! Derivative work of libvorbis/aoTuV (BSD-3-Clause); see `LICENSE-THIRDPARTY`.
 
-// A pure-Rust encode path; the shipping encoder still uses FFI until the
-// standard codebooks and Ogg framing land.
+// Self-contained per-block codec superseded by `encoder`; retained as a tested
+// reference and exercised only by its own round-trip tests.
 #![allow(dead_code)]
 
 use crate::analysis::PsyAnalysis;

@@ -177,6 +177,66 @@ fn encode_mp3_cbr_with_bitrate(
 }
 
 #[pyfunction]
+fn encode_mp3_perceptual_active_cbr_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_mp3_perceptual_reservoir_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 fn encode_vorbis(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
     let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
         .map_err(to_py_value_error)?;
@@ -227,6 +287,44 @@ fn encode_aac_with_selected_scale_factors_and_bitrate(
 }
 
 #[pyfunction]
+fn encode_aac_with_standard_spectral_offsets_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
 fn encode_m4a(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
     let aac = encode_aac(sample_rate, channels, samples)?;
     sonare_codec_rs::mux_aac_adts_as_m4a(&aac).map_err(to_py_value_error)
@@ -255,6 +353,44 @@ fn encode_m4a_with_selected_scale_factors_and_bitrate(
         .map_err(to_py_value_error)?;
     sonare_codec_rs::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
         .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_m4a_with_standard_spectral_offsets_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> PyResult<Vec<u8>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+    .map_err(to_py_value_error)
 }
 
 #[pyfunction]
@@ -307,6 +443,36 @@ fn aac_unsigned_pairs7_table() -> Vec<u32> {
 }
 
 #[pyfunction]
+fn aac_signed_pairs5_table() -> Vec<i32> {
+    sonare_codec_rs::aac_signed_pairs5_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                entry.code.bits as i32,
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_signed_pairs6_table() -> Vec<i32> {
+    sonare_codec_rs::aac_signed_pairs6_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                entry.code.bits as i32,
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
 fn aac_unsigned_pairs8_table() -> Vec<u32> {
     sonare_codec_rs::aac_unsigned_pairs8_table()
         .iter()
@@ -352,6 +518,74 @@ fn aac_unsigned_pairs10_table() -> Vec<u32> {
 }
 
 #[pyfunction]
+fn aac_signed_quads1_table() -> Vec<i32> {
+    sonare_codec_rs::aac_signed_quads1_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.v),
+                i32::from(entry.symbol.w),
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                i32::try_from(entry.code.bits).unwrap_or(i32::MAX),
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_signed_quads2_table() -> Vec<i32> {
+    sonare_codec_rs::aac_signed_quads2_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                i32::from(entry.symbol.v),
+                i32::from(entry.symbol.w),
+                i32::from(entry.symbol.x),
+                i32::from(entry.symbol.y),
+                i32::try_from(entry.code.bits).unwrap_or(i32::MAX),
+                i32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_unsigned_quads3_table() -> Vec<u32> {
+    sonare_codec_rs::aac_unsigned_quads3_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.v),
+                u32::from(entry.symbol.w),
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
+fn aac_unsigned_quads4_table() -> Vec<u32> {
+    sonare_codec_rs::aac_unsigned_quads4_table()
+        .iter()
+        .flat_map(|entry| {
+            [
+                u32::from(entry.symbol.v),
+                u32::from(entry.symbol.w),
+                u32::from(entry.symbol.x),
+                u32::from(entry.symbol.y),
+                entry.code.bits,
+                u32::from(entry.code.len),
+            ]
+        })
+        .collect()
+}
+
+#[pyfunction]
 fn aac_escape_table() -> Vec<u32> {
     sonare_codec_rs::aac_escape_table()
         .iter()
@@ -382,19 +616,10 @@ fn aac_scale_factor_delta_table() -> Vec<i32> {
 
 #[pyfunction]
 fn aac_codebook6_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> PyResult<Vec<u32>> {
-    let pairs6 = [sonare_codec_rs::HuffmanEntry {
-        symbol: sonare_codec_rs::AacSpectralMagnitudePair::new(1, 1),
-        code: sonare_codec_rs::HuffmanCode::new(0b1, 1).expect("valid AAC codebook 6 unit code"),
-    }];
     let sections = sonare_codec_rs::plan_sections_by_bit_cost(
         &quantized,
         band_width,
-        sonare_codec_rs::AacSpectralMagnitudeTables {
-            pairs1: &[],
-            pairs5: &[],
-            pairs6: &pairs6,
-            escape: &[],
-        },
+        sonare_codec_rs::aac_unit_codebook6_spectral_tables(),
     )
     .map_err(to_py_value_error)?;
 
@@ -405,6 +630,565 @@ fn aac_codebook6_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> Py
                 section.start as u32,
                 section.end as u32,
                 u32::from(section.codebook.id()),
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_quad_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> PyResult<Vec<u32>> {
+    let sections = sonare_codec_rs::plan_quad_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        sonare_codec_rs::aac_unit_quad_spectral_tables(),
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_mixed_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> PyResult<Vec<u32>> {
+    let sections = sonare_codec_rs::plan_spectral_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        sonare_codec_rs::aac_unit_codebook6_spectral_tables(),
+        sonare_codec_rs::aac_unit_quad_spectral_tables(),
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_mixed_unit_payload_bit_lengths(
+    quantized: Vec<i32>,
+    band_width: usize,
+) -> PyResult<Vec<u32>> {
+    let pair_tables = sonare_codec_rs::aac_unit_codebook6_spectral_tables();
+    let quad_tables = sonare_codec_rs::aac_unit_quad_spectral_tables();
+    let sections = sonare_codec_rs::plan_spectral_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+    let split = sonare_codec_rs::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+    let packed = sonare_codec_rs::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+    let scale_factor_bits = sonare_codec_rs::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec_rs::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits(
+            &sections,
+            &quantized,
+            band_width,
+            scale_factor_bits.clone(),
+            pair_tables,
+            quad_tables,
+        )
+        .map_err(to_py_value_error)?;
+    let packed_with_scale =
+        sonare_codec_rs::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits(
+            &sections,
+            &quantized,
+            band_width,
+            scale_factor_bits,
+            pair_tables,
+            quad_tables,
+        )
+        .map_err(to_py_value_error)?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[pyfunction]
+fn aac_standard_unit_section_plan(quantized: Vec<i32>, band_width: usize) -> PyResult<Vec<u32>> {
+    let sections =
+        sonare_codec_rs::plan_aac_lc_standard_spectral_sections_by_bit_cost(&quantized, band_width)
+            .map_err(to_py_value_error)?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_standard_offsets_section_plan(
+    quantized: Vec<i32>,
+    offsets: Vec<usize>,
+) -> PyResult<Vec<u32>> {
+    let sections = sonare_codec_rs::plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(
+        &quantized, &offsets,
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(sections
+        .iter()
+        .flat_map(|section| {
+            [
+                section.start as u32,
+                section.end as u32,
+                u32::from(section.codebook_id),
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_standard_escape_payload_bit_lengths() -> PyResult<Vec<u32>> {
+    let quantized = [17, 0];
+    let band_width = 2;
+    let pair_tables = sonare_codec_rs::aac_lc_standard_spectral_tables();
+    let quad_tables = sonare_codec_rs::AacSpectralMagnitudeQuadTables::default();
+    let sections = sonare_codec_rs::plan_spectral_sections_by_bit_cost(
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+    if sections.first().map(|section| section.codebook_id)
+        != Some(sonare_codec_rs::AacCodebook::Escape.id())
+    {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "AAC standard escape fixture did not select codebook 11",
+        ));
+    }
+    let split = sonare_codec_rs::split_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+    let packed = sonare_codec_rs::pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits(
+        &sections,
+        &quantized,
+        band_width,
+        pair_tables,
+        quad_tables,
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+    ])
+}
+
+#[pyfunction]
+fn aac_standard_mixed_payload_bit_lengths(
+    quantized: Vec<i32>,
+    band_width: usize,
+) -> PyResult<Vec<u32>> {
+    let split = sonare_codec_rs::split_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        &quantized, band_width,
+    )
+    .map_err(to_py_value_error)?;
+    let packed = sonare_codec_rs::pack_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        &quantized, band_width,
+    )
+    .map_err(to_py_value_error)?;
+    let scale_factor_bits = sonare_codec_rs::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec_rs::split_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost(
+            &quantized,
+            band_width,
+            scale_factor_bits.clone(),
+        )
+        .map_err(to_py_value_error)?;
+    let packed_with_scale =
+        sonare_codec_rs::pack_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost(
+            &quantized,
+            band_width,
+            scale_factor_bits,
+        )
+        .map_err(to_py_value_error)?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[pyfunction]
+fn aac_standard_mixed_offsets_payload_bit_lengths(
+    quantized: Vec<i32>,
+    offsets: Vec<usize>,
+) -> PyResult<Vec<u32>> {
+    let split =
+        sonare_codec_rs::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            &quantized,
+            &offsets,
+        )
+        .map_err(to_py_value_error)?;
+    let packed =
+        sonare_codec_rs::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            &quantized,
+            &offsets,
+        )
+        .map_err(to_py_value_error)?;
+    let scale_factor_bits = sonare_codec_rs::PackedBits {
+        bytes: vec![0b1100_0000],
+        bit_len: 2,
+    };
+    let split_with_scale =
+        sonare_codec_rs::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost(
+            &quantized,
+            &offsets,
+            scale_factor_bits.clone(),
+        )
+        .map_err(to_py_value_error)?;
+    let packed_with_scale =
+        sonare_codec_rs::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost(
+            &quantized,
+            &offsets,
+            scale_factor_bits,
+        )
+        .map_err(to_py_value_error)?;
+
+    Ok(vec![
+        split.section_and_scale_factor_bits.bit_len as u32,
+        split.spectral_bits.bit_len as u32,
+        packed.bit_len as u32,
+        split_with_scale.section_and_scale_factor_bits.bit_len as u32,
+        split_with_scale.spectral_bits.bit_len as u32,
+        packed_with_scale.bit_len as u32,
+    ])
+}
+
+#[pyfunction]
+fn encode_aac_standard_mono_offsets_with_step(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    step: f32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
+        })?;
+    let channel_config =
+        sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec_rs::aac_scale_factor_delta_table();
+
+    sonare_codec_rs::encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+        sonare_codec_rs::AdtsConfig::aac_lc(sample_rate, 1),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        step,
+        offsets,
+        &scale_factor_table,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_aac_standard_mono_offsets_with_bitrate(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn aac_standard_mono_offsets_bitrate_frame_details(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<f64>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
+        })?;
+    let channel_config =
+        sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec_rs::aac_scale_factor_delta_table();
+
+    let details = sonare_codec_rs::select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        sonare_codec_rs::AdtsConfig::aac_lc(sample_rate, 1),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        offsets,
+        sonare_codec_rs::AAC_LC_PCM_STEP_CANDIDATES,
+        target_bitrate_bps,
+        &scale_factor_table,
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn encode_aac_standard_stereo_offsets_with_step(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    step: f32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
+        })?;
+    let channel_config =
+        sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec_rs::aac_scale_factor_delta_table();
+
+    sonare_codec_rs::encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+        sonare_codec_rs::AdtsConfig::aac_lc(sample_rate, 2),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        step,
+        offsets,
+        &scale_factor_table,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn encode_aac_standard_stereo_offsets_with_bitrate(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<u8>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+    )
+    .map_err(to_py_value_error)
+}
+
+#[pyfunction]
+fn aac_standard_stereo_offsets_bitrate_frame_details(
+    sample_rate: u32,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+) -> PyResult<Vec<f64>> {
+    let pcm =
+        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
+        })?;
+    let channel_config =
+        sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
+    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
+        &pcm,
+        usize::from(channel_config.global_gain),
+        offsets.len() - 1,
+    );
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let scale_factor_table = sonare_codec_rs::aac_scale_factor_delta_table();
+
+    let details = sonare_codec_rs::select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        sonare_codec_rs::AdtsConfig::aac_lc(sample_rate, 2),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        sonare_codec_rs::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+        &pcm,
+        0,
+        offsets,
+        sonare_codec_rs::AAC_LC_PCM_STEP_CANDIDATES,
+        target_bitrate_bps,
+        &scale_factor_table,
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> PyResult<Vec<f64>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    let details =
+        sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(to_py_value_error)?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn aac_selected_scale_factor_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    target_bitrate_bps: u32,
+) -> PyResult<Vec<f64>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    let details = sonare_codec_rs::aac_selected_scale_factor_frame_details_with_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
             ]
         })
         .collect())
@@ -448,6 +1232,127 @@ fn mp3_layer3_main_data_capacity_bits(
     sonare_codec_rs::layer3_main_data_capacity_bits(header).map_err(to_py_value_error)
 }
 
+#[pyfunction]
+fn mp3_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<f64>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    let details = sonare_codec_rs::select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn mp3_perceptual_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<f64>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    let details =
+        sonare_codec_rs::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            &pcm,
+            sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            bitrate_kbps,
+            crc_protected,
+            sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(to_py_value_error)?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
+}
+
+#[pyfunction]
+fn mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> PyResult<Vec<f64>> {
+    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
+        .map_err(to_py_value_error)?;
+    let details = sonare_codec_rs::select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+        &pcm,
+        sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        bitrate_kbps,
+        crc_protected,
+        sonare_codec_rs::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(to_py_value_error)?;
+
+    Ok(details
+        .into_iter()
+        .flat_map(|detail| {
+            [
+                detail.frame_index as f64,
+                f64::from(detail.step),
+                detail.payload_bit_len as f64,
+                detail.frame_len as f64,
+                u8::from(detail.padding) as f64,
+                detail.frame_capacity_bytes as f64,
+                detail.main_data_begin as f64,
+                detail.reservoir_after as f64,
+                detail.perceptual_granules as f64,
+                detail.calibrated_granules as f64,
+                detail.quality_guard_compared_granules as f64,
+                detail.quality_guard_distortion_delta,
+            ]
+        })
+        .collect())
+}
+
 #[pymodule]
 fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<StreamDecoder>()?;
@@ -467,6 +1372,30 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(encode_mp3, module)?)?;
     module.add_function(wrap_pyfunction!(encode_mp3_with_bitrate, module)?)?;
     module.add_function(wrap_pyfunction!(encode_mp3_cbr_with_bitrate, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_mp3_perceptual_active_cbr_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_mp3_perceptual_reservoir_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        mp3_reservoir_frame_details_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        mp3_perceptual_reservoir_frame_details_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(encode_vorbis, module)?)?;
     module.add_function(wrap_pyfunction!(encode_opus, module)?)?;
     module.add_function(wrap_pyfunction!(encode_aac, module)?)?;
@@ -475,10 +1404,34 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
         encode_aac_with_selected_scale_factors_and_bitrate,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_with_standard_spectral_offsets_and_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(encode_m4a, module)?)?;
     module.add_function(wrap_pyfunction!(encode_m4a_with_bitrate, module)?)?;
     module.add_function(wrap_pyfunction!(
         encode_m4a_with_selected_scale_factors_and_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_m4a_with_standard_spectral_offsets_and_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_selected_scale_factor_frame_details_with_bitrate,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(demux_m4a_as_aac_adts, module)?)?;
@@ -495,12 +1448,62 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module
     )?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs7_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_signed_pairs5_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_signed_pairs6_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_signed_quads1_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_signed_quads2_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs8_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs9_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_unsigned_pairs10_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_unsigned_quads3_table, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_unsigned_quads4_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_escape_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_scale_factor_delta_table, module)?)?;
     module.add_function(wrap_pyfunction!(aac_codebook6_unit_section_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_quad_unit_section_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_mixed_unit_section_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_mixed_unit_payload_bit_lengths,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(aac_standard_unit_section_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(aac_standard_offsets_section_plan, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_escape_payload_bit_lengths,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_mixed_payload_bit_lengths,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_mixed_offsets_payload_bit_lengths,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_standard_mono_offsets_with_step,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_standard_mono_offsets_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_mono_offsets_bitrate_frame_details,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_standard_stereo_offsets_with_step,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        encode_aac_standard_stereo_offsets_with_bitrate,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        aac_standard_stereo_offsets_bitrate_frame_details,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(
         mp3_layer3_main_data_capacity_bytes,
         module
@@ -514,6 +1517,26 @@ fn sonare_codec(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn pcm_tuple(pcm: sonare_codec_rs::AudioBuffer) -> (u32, u16, Vec<f32>) {
     (pcm.sample_rate, pcm.channels, pcm.samples)
+}
+
+fn aac_offsets_max_sfb(offsets: &[usize]) -> PyResult<u8> {
+    u8::try_from(offsets.len().saturating_sub(1)).map_err(|_| {
+        pyo3::exceptions::PyValueError::new_err(
+            "AAC-LC scale-factor band count exceeds max_sfb range",
+        )
+    })
+}
+
+fn constant_aac_scale_factors_by_frame(
+    pcm: &sonare_codec_rs::AudioBuffer,
+    global_gain: usize,
+    band_count: usize,
+) -> Vec<Vec<i16>> {
+    let frame_count = pcm.samples.len().div_ceil(usize::from(pcm.channels) * 1024);
+    let scale_factor = i16::try_from(global_gain).unwrap_or(i16::MAX);
+    (0..frame_count)
+        .map(|_| vec![scale_factor; band_count])
+        .collect()
 }
 
 fn parse_format(format: &str) -> PyResult<sonare_codec_rs::Format> {

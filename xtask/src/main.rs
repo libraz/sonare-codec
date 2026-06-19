@@ -75,11 +75,29 @@ const RELEASE_VERSION: &str = "0.1.0";
 const PROJECT_LICENSE: &str = "Apache-2.0";
 const PROJECT_REPOSITORY: &str = "https://github.com/libraz/sonare-codec";
 const REQUIRED_QA_TOOLS_ENV: &str = "SONARE_REQUIRED_QA_TOOLS";
-const AAC_STANDARD_DIAGNOSTIC_GLOBAL_GAIN_CANDIDATES: &[u8] = &[104, 112, 120, 128, 136, 144];
+const AAC_STANDARD_DIAGNOSTIC_GLOBAL_GAIN_CANDIDATES: &[u8] =
+    &[104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 144];
+const AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_GLOBAL_GAIN: u8 = 128;
+const AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_MAGNITUDE_BIAS: i16 = 16;
+const AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES: &[u8] = &[
+    124,
+    AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_GLOBAL_GAIN,
+    132,
+];
+const AAC_STANDARD_HIGH_LEVEL_FIXED_SURFACE_GLOBAL_GAIN_CANDIDATES: &[u8] =
+    AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES;
+const AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_MAGNITUDE_BIAS_CANDIDATES: &[i16] =
+    &[8, AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_MAGNITUDE_BIAS];
 const AAC_STANDARD_DIAGNOSTIC_MIN_DECODED_RMS: f64 = 0.10;
 const AAC_STANDARD_DIAGNOSTIC_MIN_CORRELATION: f64 = 0.50;
+const AAC_STANDARD_ID_MAX_PRODUCTION_CORRELATION_GAP: f64 = 0.25;
 const MP3_PERCEPTUAL_DIAGNOSTIC_MIN_DECODED_RMS: f64 = 0.10;
 const MP3_PERCEPTUAL_DIAGNOSTIC_MIN_CORRELATION: f64 = 0.30;
+const MP3_STEREO_PERCEPTUAL_RESERVOIR_MIN_CORRELATION: f64 = 0.49;
+const MP3_PERCEPTUAL_RESERVOIR_MAX_PRODUCTION_CORRELATION_GAP: f64 = 0.10;
+const MP3_PRODUCTION_MONO_MIN_CORRELATION: f64 = 0.30;
+const MP3_PRODUCTION_STEREO_MIN_CORRELATION: f64 = 0.55;
+const AAC_PRODUCTION_MIN_CORRELATION: f64 = 0.70;
 const MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES: &[f32] =
     sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES;
 const PUBLIC_BINDING_FUNCTIONS: &[&str] = &[
@@ -99,23 +117,55 @@ const PUBLIC_BINDING_FUNCTIONS: &[&str] = &[
     "encode_mp3",
     "encode_mp3_with_bitrate",
     "encode_mp3_cbr_with_bitrate",
+    "encode_mp3_perceptual_active_cbr_with_bitrate",
+    "encode_mp3_perceptual_reservoir_with_bitrate",
+    "encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate",
+    "mp3_reservoir_frame_details_with_bitrate",
+    "mp3_perceptual_reservoir_frame_details_with_bitrate",
+    "mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate",
     "encode_aac",
     "encode_aac_with_bitrate",
     "encode_aac_with_selected_scale_factors_and_bitrate",
+    "encode_aac_with_standard_spectral_offsets_and_bitrate",
+    "encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate",
     "encode_m4a",
     "encode_m4a_with_bitrate",
     "encode_m4a_with_selected_scale_factors_and_bitrate",
+    "encode_m4a_with_standard_spectral_offsets_and_bitrate",
+    "encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate",
     "demux_m4a_as_aac_adts",
     "aac_lc_adts_max_frame_len_for_bitrate",
     "aac_lc_default_production_bitrate_bps",
     "aac_unsigned_pairs7_unit_magnitude_table",
     "aac_unsigned_pairs7_table",
+    "aac_signed_pairs5_table",
+    "aac_signed_pairs6_table",
+    "aac_signed_quads1_table",
+    "aac_signed_quads2_table",
     "aac_unsigned_pairs8_table",
     "aac_unsigned_pairs9_table",
     "aac_unsigned_pairs10_table",
+    "aac_unsigned_quads3_table",
+    "aac_unsigned_quads4_table",
     "aac_escape_table",
     "aac_scale_factor_delta_table",
     "aac_codebook6_unit_section_plan",
+    "aac_quad_unit_section_plan",
+    "aac_mixed_unit_section_plan",
+    "aac_mixed_unit_payload_bit_lengths",
+    "aac_standard_unit_section_plan",
+    "aac_standard_offsets_section_plan",
+    "aac_standard_escape_payload_bit_lengths",
+    "aac_standard_mixed_payload_bit_lengths",
+    "aac_standard_mixed_offsets_payload_bit_lengths",
+    "encode_aac_standard_mono_offsets_with_step",
+    "encode_aac_standard_mono_offsets_with_bitrate",
+    "aac_standard_mono_offsets_bitrate_frame_details",
+    "encode_aac_standard_stereo_offsets_with_step",
+    "encode_aac_standard_stereo_offsets_with_bitrate",
+    "aac_standard_stereo_offsets_bitrate_frame_details",
+    "aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate",
+    "aac_selected_scale_factor_frame_details_with_bitrate",
     "mp3_layer3_main_data_capacity_bytes",
     "mp3_layer3_main_data_capacity_bits",
 ];
@@ -321,18 +371,24 @@ fn qa_check() -> ExitCode {
 }
 
 fn publish_readiness() -> ExitCode {
+    match run_publish_readiness_check() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{err}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_publish_readiness_check() -> Result<(), String> {
     for check in [
         run_package_metadata_check,
         verify_production_lossy_encode_readiness,
         verify_diagnostic_lossy_encode_readiness,
     ] {
-        if let Err(err) = check() {
-            eprintln!("{err}");
-            return ExitCode::FAILURE;
-        }
+        check()?;
     }
-
-    ExitCode::SUCCESS
+    Ok(())
 }
 
 fn aac_standard_diagnostic() -> ExitCode {
@@ -1121,6 +1177,36 @@ fn run_ffmpeg_acceptance(ffmpeg: &OsStr, artifact: &Path) -> Result<(), String> 
     }
 }
 
+fn run_ffmpeg_clean_acceptance(ffmpeg: &OsStr, artifact: &Path) -> Result<(), String> {
+    let label = format!(
+        "{} -v error -i {} -f null -",
+        ffmpeg.to_string_lossy(),
+        artifact.display()
+    );
+    eprintln!("running {label}");
+    let output = Command::new(ffmpeg)
+        .args(["-v", "error", "-i"])
+        .arg(artifact)
+        .args(["-f", "null", "-"])
+        .output()
+        .map_err(|err| format!("failed to run {label}: {err}"))?;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let summary = stderr
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or("no stderr output");
+    if output.status.success() && output.stderr.is_empty() {
+        Ok(())
+    } else if output.status.success() {
+        Err(format!("{label} produced stderr: {summary}"))
+    } else {
+        Err(format!(
+            "{label} failed with status {}; first stderr line: {summary}",
+            output.status
+        ))
+    }
+}
+
 fn run_ffmpeg_decode_f32le(
     ffmpeg: &OsStr,
     artifact: &Path,
@@ -1552,7 +1638,7 @@ fn run_check(check: Check<'_>) -> Result<(), String> {
         Check::GitHead => run_git_head_check(),
         Check::MaturinBuild => run_maturin_build(),
         Check::PackageMetadata => run_package_metadata_check(),
-        Check::PublishReadiness => verify_production_lossy_encode_readiness(),
+        Check::PublishReadiness => run_publish_readiness_check(),
         Check::PublishRustPackages => run_publish_rust_packages(),
         Check::PythonWheelOutput => run_python_wheel_output_check(),
         Check::ToolReadiness => run_tool_readiness_check()
@@ -1868,6 +1954,8 @@ fn verify_diagnostic_lossy_encode_readiness() -> Result<(), String> {
     })?;
     let pcm = readiness_pcm(44_100, 1)
         .map_err(|err| format!("failed to build diagnostic readiness PCM: {err}"))?;
+    let stereo_pcm = readiness_pcm(44_100, 2)
+        .map_err(|err| format!("failed to build stereo diagnostic readiness PCM: {err}"))?;
     let out_dir = env::temp_dir().join(format!(
         "sonare-codec-diagnostic-readiness-{}-{}",
         std::process::id(),
@@ -1878,22 +1966,115 @@ fn verify_diagnostic_lossy_encode_readiness() -> Result<(), String> {
     fs::create_dir_all(&out_dir)
         .map_err(|err| format!("failed to create {}: {err}", out_dir.display()))?;
 
-    let result =
-        mp3_perceptual_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir).and_then(|mp3_quality| {
-            standard_aac_lc_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir)
-                .map(|aac_quality| (mp3_quality, aac_quality))
-        });
+    let result: Result<DiagnosticLossyQualitySummary, String> = (|| {
+        let mp3_quality = mp3_perceptual_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir)?;
+        let mp3_reservoir_quality =
+            mp3_perceptual_reservoir_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir)?;
+        let mp3_stereo_reservoir_quality =
+            mp3_perceptual_reservoir_nonzero_encode_diagnostic(&ffmpeg, &stereo_pcm, &out_dir)?;
+        let (mp3_production_mono_quality, mp3_production_stereo_quality) =
+            validate_mp3_production_benchmark_surface(&ffmpeg, &pcm, &stereo_pcm, &out_dir)?;
+        validate_diagnostic_quality_floor(
+            "MP3 stereo perceptual reservoir diagnostic",
+            mp3_stereo_reservoir_quality,
+            MP3_PERCEPTUAL_DIAGNOSTIC_MIN_DECODED_RMS,
+            MP3_STEREO_PERCEPTUAL_RESERVOIR_MIN_CORRELATION,
+        )?;
+        validate_mp3_perceptual_reservoir_production_correlation_gap(
+            "MP3 perceptual reservoir mono",
+            mp3_reservoir_quality,
+            mp3_production_mono_quality,
+        )?;
+        validate_mp3_perceptual_reservoir_production_correlation_gap(
+            "MP3 perceptual reservoir stereo",
+            mp3_stereo_reservoir_quality,
+            mp3_production_stereo_quality,
+        )?;
+        validate_aac_standard_id_mixed_workbench()?;
+        let aac_quality = standard_aac_lc_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir)?;
+        let (aac_standard_surface_mono_quality, aac_standard_surface_stereo_quality) =
+            validate_aac_standard_id_high_level_bitrate_surface(&ffmpeg, &pcm, &out_dir)?;
+        let (aac_production_mono_quality, aac_production_stereo_quality) =
+            validate_aac_production_benchmark_surface(&ffmpeg, &pcm, &out_dir)?;
+        validate_aac_standard_id_production_correlation_gap(
+            "AAC standard-id mono",
+            aac_standard_surface_mono_quality,
+            aac_production_mono_quality,
+        )?;
+        validate_aac_standard_id_production_correlation_gap(
+            "AAC standard-id stereo",
+            aac_standard_surface_stereo_quality,
+            aac_production_stereo_quality,
+        )?;
+        validate_aac_standard_id_rms_control_advantage(
+            "AAC standard-id mono",
+            aac_standard_surface_mono_quality,
+            aac_production_mono_quality,
+            rms(&pcm.samples),
+        )?;
+        let aac_standard_stereo_pcm = aac_standard_surface_stereo_pcm(&pcm)?;
+        validate_aac_standard_id_rms_control_advantage(
+            "AAC standard-id stereo",
+            aac_standard_surface_stereo_quality,
+            aac_production_stereo_quality,
+            rms(&aac_standard_stereo_pcm.samples),
+        )?;
+        Ok(DiagnosticLossyQualitySummary {
+            mp3_quality,
+            mp3_reservoir_quality,
+            mp3_stereo_reservoir_quality,
+            mp3_production_mono_quality,
+            mp3_production_stereo_quality,
+            aac_quality,
+            aac_standard_surface_mono_quality,
+            aac_standard_surface_stereo_quality,
+            aac_production_mono_quality,
+            aac_production_stereo_quality,
+        })
+    })();
 
     let cleanup = fs::remove_dir_all(&out_dir)
         .map_err(|err| format!("failed to remove {}: {err}", out_dir.display()));
     match (result, cleanup) {
-        (Ok((mp3_quality, aac_quality)), Ok(())) => {
+        (Ok(summary), Ok(())) => {
+            let aac_mono_expected_rms = rms(&pcm.samples);
+            let aac_standard_stereo_pcm = aac_standard_surface_stereo_pcm(&pcm)?;
+            let aac_stereo_expected_rms = rms(&aac_standard_stereo_pcm.samples);
             eprintln!(
-                "diagnostic lossy encode readiness: MP3 decoded_rms={:.4}, MP3 best_correlation={:.3}, AAC decoded_rms={:.4}, AAC best_correlation={:.3}",
-                mp3_quality.decoded_rms,
-                mp3_quality.best_correlation,
-                aac_quality.decoded_rms,
-                aac_quality.best_correlation
+                "diagnostic lossy encode readiness: MP3 decoded_rms={:.4}, MP3 best_correlation={:.3}, MP3 reservoir decoded_rms={:.4}, MP3 reservoir best_correlation={:.3}, MP3 stereo reservoir decoded_rms={:.4}, MP3 stereo reservoir best_correlation={:.3}, MP3 production mono best_correlation={:.3}, MP3 reservoir mono correlation_gap={:.3}, MP3 production stereo best_correlation={:.3}, MP3 reservoir stereo correlation_gap={:.3}, AAC decoded_rms={:.4}, AAC best_correlation={:.3}, AAC standard-id mono decoded_rms={:.4}, AAC standard-id mono rms_error={:.4}, AAC standard-id mono best_correlation={:.3}, AAC production mono decoded_rms={:.4}, AAC production mono rms_error={:.4}, AAC production mono best_correlation={:.3}, AAC standard-id mono correlation_gap={:.3}, AAC standard-id stereo decoded_rms={:.4}, AAC standard-id stereo rms_error={:.4}, AAC standard-id stereo best_correlation={:.3}, AAC production stereo decoded_rms={:.4}, AAC production stereo rms_error={:.4}, AAC production stereo best_correlation={:.3}, AAC standard-id stereo correlation_gap={:.3}",
+                summary.mp3_quality.decoded_rms,
+                summary.mp3_quality.best_correlation,
+                summary.mp3_reservoir_quality.decoded_rms,
+                summary.mp3_reservoir_quality.best_correlation,
+                summary.mp3_stereo_reservoir_quality.decoded_rms,
+                summary.mp3_stereo_reservoir_quality.best_correlation,
+                summary.mp3_production_mono_quality.best_correlation,
+                summary.mp3_production_mono_quality.best_correlation
+                    - summary.mp3_reservoir_quality.best_correlation,
+                summary.mp3_production_stereo_quality.best_correlation,
+                summary.mp3_production_stereo_quality.best_correlation
+                    - summary.mp3_stereo_reservoir_quality.best_correlation,
+                summary.aac_quality.decoded_rms,
+                summary.aac_quality.best_correlation,
+                summary.aac_standard_surface_mono_quality.decoded_rms,
+                rms_error(summary.aac_standard_surface_mono_quality, aac_mono_expected_rms),
+                summary.aac_standard_surface_mono_quality.best_correlation,
+                summary.aac_production_mono_quality.decoded_rms,
+                rms_error(summary.aac_production_mono_quality, aac_mono_expected_rms),
+                summary.aac_production_mono_quality.best_correlation,
+                summary.aac_production_mono_quality.best_correlation
+                    - summary.aac_standard_surface_mono_quality.best_correlation,
+                summary.aac_standard_surface_stereo_quality.decoded_rms,
+                rms_error(
+                    summary.aac_standard_surface_stereo_quality,
+                    aac_stereo_expected_rms
+                ),
+                summary.aac_standard_surface_stereo_quality.best_correlation,
+                summary.aac_production_stereo_quality.decoded_rms,
+                rms_error(summary.aac_production_stereo_quality, aac_stereo_expected_rms),
+                summary.aac_production_stereo_quality.best_correlation,
+                summary.aac_production_stereo_quality.best_correlation
+                    - summary.aac_standard_surface_stereo_quality.best_correlation
             );
             Ok(())
         }
@@ -1903,6 +2084,20 @@ fn verify_diagnostic_lossy_encode_readiness() -> Result<(), String> {
             "diagnostic lossy encode readiness failed: {err}; cleanup also failed: {cleanup_err}"
         )),
     }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DiagnosticLossyQualitySummary {
+    mp3_quality: LossyOraclePcmQuality,
+    mp3_reservoir_quality: LossyOraclePcmQuality,
+    mp3_stereo_reservoir_quality: LossyOraclePcmQuality,
+    mp3_production_mono_quality: LossyOraclePcmQuality,
+    mp3_production_stereo_quality: LossyOraclePcmQuality,
+    aac_quality: LossyOraclePcmQuality,
+    aac_standard_surface_mono_quality: LossyOraclePcmQuality,
+    aac_standard_surface_stereo_quality: LossyOraclePcmQuality,
+    aac_production_mono_quality: LossyOraclePcmQuality,
+    aac_production_stereo_quality: LossyOraclePcmQuality,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1991,6 +2186,17 @@ fn compatibility_lossy_encode_diagnostics(
         ),
         Err(err) => {
             format!("MP3 perceptual-scale-factor scaffold is not publish-ready: {err}")
+        }
+    });
+    let mp3_perceptual_reservoir =
+        mp3_perceptual_reservoir_nonzero_encode_diagnostic(ffmpeg, expected_pcm, &out_dir);
+    diagnostics.push(match mp3_perceptual_reservoir {
+        Ok(quality) => format!(
+            "MP3 perceptual reservoir scaffold is still not production-gated: decoded_rms={:.4}, best_correlation={:.3}",
+            quality.decoded_rms, quality.best_correlation
+        ),
+        Err(err) => {
+            format!("MP3 perceptual reservoir scaffold is not publish-ready: {err}")
         }
     });
     let aac_experimental =
@@ -2122,6 +2328,116 @@ fn mp3_perceptual_nonzero_encode_diagnostic(
         MP3_PERCEPTUAL_DIAGNOSTIC_MIN_DECODED_RMS,
         MP3_PERCEPTUAL_DIAGNOSTIC_MIN_CORRELATION,
     )?;
+    Ok(quality)
+}
+
+fn mp3_perceptual_reservoir_nonzero_encode_diagnostic(
+    ffmpeg: &OsStr,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+) -> Result<LossyOraclePcmQuality, String> {
+    let label = if expected_pcm.channels == 2 {
+        "MP3 stereo perceptual reservoir diagnostic"
+    } else {
+        "MP3 perceptual reservoir diagnostic"
+    };
+    let encoded =
+        sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+            expected_pcm,
+            MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES,
+            128,
+            false,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| format!("perceptual reservoir encode failed: {err}"))?;
+    let path = out_dir.join(if expected_pcm.channels == 2 {
+        "mp3-stereo-perceptual-reservoir-nonzero.mp3"
+    } else {
+        "mp3-perceptual-reservoir-nonzero.mp3"
+    });
+    verify_mp3_cbr_bitrate_budget(label, 128, expected_pcm, &encoded)?;
+    verify_mp3_perceptual_reservoir(label, expected_pcm, &encoded)?;
+    fs::write(&path, encoded)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    run_ffmpeg_acceptance(ffmpeg, &path)
+        .map_err(|err| format!("FFmpeg acceptance failed: {err}"))?;
+    let decoded = run_ffmpeg_decode_f32le(
+        ffmpeg,
+        &path,
+        expected_pcm.sample_rate,
+        expected_pcm.channels,
+    )
+    .map_err(|err| format!("FFmpeg PCM decode failed: {err}"))?;
+    let quality = validate_lossy_oracle_pcm_quality(&expected_pcm.samples, &decoded)?;
+    validate_diagnostic_quality_floor(
+        label,
+        quality,
+        MP3_PERCEPTUAL_DIAGNOSTIC_MIN_DECODED_RMS,
+        MP3_PERCEPTUAL_DIAGNOSTIC_MIN_CORRELATION,
+    )?;
+    Ok(quality)
+}
+
+fn validate_mp3_production_benchmark_surface(
+    ffmpeg: &OsStr,
+    mono_pcm: &sonare_codec::AudioBuffer,
+    stereo_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+) -> Result<(LossyOraclePcmQuality, LossyOraclePcmQuality), String> {
+    if mono_pcm.channels != 1 {
+        return Err("MP3 production benchmark mono PCM must be mono".to_owned());
+    }
+    if stereo_pcm.channels != 2 {
+        return Err("MP3 production benchmark stereo PCM must be stereo".to_owned());
+    }
+    let mono_quality = validate_mp3_production_benchmark_artifact(
+        ffmpeg,
+        "MP3 production benchmark mono",
+        mono_pcm,
+        out_dir,
+        "mp3-production-benchmark-mono",
+    )?;
+    let stereo_quality = validate_mp3_production_benchmark_artifact(
+        ffmpeg,
+        "MP3 production benchmark stereo",
+        stereo_pcm,
+        out_dir,
+        "mp3-production-benchmark-stereo",
+    )?;
+    Ok((mono_quality, stereo_quality))
+}
+
+fn validate_mp3_production_benchmark_artifact(
+    ffmpeg: &OsStr,
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<LossyOraclePcmQuality, String> {
+    let mp3 = sonare_codec::encode_with_mode(
+        sonare_codec::Format::Mp3,
+        expected_pcm,
+        sonare_codec::EncodeMode::ProductionOnly,
+    )
+    .map_err(|err| format!("{label} encode failed: {err}"))?;
+    verify_mp3_default_production_budget(label, ProductionArtifactKind::Mp3, expected_pcm, &mp3)?;
+    let path = out_dir.join(format!("{file_stem}.mp3"));
+    fs::write(&path, mp3).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    run_ffmpeg_acceptance(ffmpeg, &path)
+        .map_err(|err| format!("{label} FFmpeg acceptance failed: {err}"))?;
+    let decoded = run_ffmpeg_decode_f32le(
+        ffmpeg,
+        &path,
+        expected_pcm.sample_rate,
+        expected_pcm.channels,
+    )
+    .map_err(|err| format!("{label} FFmpeg PCM decode failed: {err}"))?;
+    let quality = validate_lossy_oracle_pcm_quality(&expected_pcm.samples, &decoded)
+        .map_err(|err| format!("{label} PCM quality failed: {err}"))?;
+    eprintln!(
+        "{label}: decoded_rms={:.4}, best_correlation={:.3}",
+        quality.decoded_rms, quality.best_correlation
+    );
     Ok(quality)
 }
 
@@ -2409,6 +2725,27 @@ fn standard_aac_lc_nonzero_encode_diagnostic(
             &quantized
         )
     );
+    validate_aac_standard_id_offsets_payload_for_diagnostic(&quantized, offsets)?;
+    validate_aac_standard_id_offsets_encoded_candidate(
+        ffmpeg,
+        expected_pcm,
+        out_dir,
+        offsets,
+        max_sfb,
+        &best_candidate,
+        budget,
+        bitrate,
+        &scale_factor_table,
+    )?;
+    validate_aac_standard_id_offsets_stereo_encoded_candidate(
+        ffmpeg,
+        expected_pcm,
+        out_dir,
+        offsets,
+        max_sfb,
+        &best_candidate,
+        &scale_factor_table,
+    )?;
     let max_frame_len = max_adts_frame_len(&best_candidate.encoded)
         .map_err(|err| format!("standard-table ADTS frame budget inspection failed: {err}"))?;
     validate_adts_frame_budget(
@@ -2427,6 +2764,1243 @@ fn standard_aac_lc_nonzero_encode_diagnostic(
         AAC_STANDARD_DIAGNOSTIC_MIN_CORRELATION,
     )?;
     Ok(best_candidate.quality)
+}
+
+fn validate_aac_standard_id_high_level_bitrate_surface(
+    ffmpeg: &OsStr,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+) -> Result<(LossyOraclePcmQuality, LossyOraclePcmQuality), String> {
+    if expected_pcm.channels != 1 {
+        return Err("AAC standard-id high-level surface diagnostic expects mono PCM".to_owned());
+    }
+
+    let mono_bitrate = sonare_codec::aac_lc_default_production_bitrate_bps(1)
+        .map_err(|err| format!("AAC standard-id surface mono bitrate failed: {err}"))?;
+    let mono_candidate = select_aac_standard_id_high_level_gain_candidate(
+        ffmpeg,
+        "AAC-LC standard-id high-level mono ADTS",
+        expected_pcm,
+        ProductionArtifactKind::Aac,
+        mono_bitrate,
+        out_dir,
+        "aaclc-standard-id-surface-mono",
+    )?;
+    eprintln!(
+        "AAC-LC standard-id high-level mono ADTS selected global_gain={}, max_frame_len={}, decoded_rms={:.4}, best_correlation={:.3}",
+        mono_candidate.global_gain,
+        mono_candidate.max_frame_len,
+        mono_candidate.quality.decoded_rms,
+        mono_candidate.quality.best_correlation
+    );
+
+    let mono_m4a = sonare_codec::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+        expected_pcm,
+        mono_bitrate,
+        mono_candidate.global_gain,
+    )
+    .map_err(|err| format!("AAC standard-id surface mono M4A encode failed: {err}"))?;
+    let mono_m4a_quality = validate_aac_standard_id_high_level_artifact(
+        ffmpeg,
+        "AAC-LC standard-id high-level mono M4A",
+        expected_pcm,
+        &mono_m4a,
+        ProductionArtifactKind::M4a,
+        mono_bitrate,
+        &out_dir.join("aaclc-standard-id-surface-mono.m4a"),
+    )?;
+    if mono_m4a_quality.best_correlation + f64::EPSILON < mono_candidate.quality.best_correlation {
+        return Err(format!(
+            "AAC standard-id surface mono M4A quality lagged ADTS: m4a={mono_m4a_quality:?}, adts={:?}",
+            mono_candidate.quality
+        ));
+    }
+    let mono_selected_quality = validate_aac_standard_id_high_level_selected_bias_surface(
+        ffmpeg,
+        "AAC-LC standard-id high-level selected-scale-factor mono",
+        expected_pcm,
+        mono_bitrate,
+        out_dir,
+        "aaclc-standard-id-selected-surface-mono",
+    )?;
+    if mono_selected_quality.best_correlation + f64::EPSILON
+        < mono_candidate.quality.best_correlation
+    {
+        return Err(format!(
+            "AAC standard-id selected surface mono quality lagged fixed surface: selected={mono_selected_quality:?}, fixed={:?}",
+            mono_candidate.quality
+        ));
+    }
+
+    let stereo_pcm = aac_standard_surface_stereo_pcm(expected_pcm)?;
+    let stereo_bitrate = sonare_codec::aac_lc_default_production_bitrate_bps(2)
+        .map_err(|err| format!("AAC standard-id surface stereo bitrate failed: {err}"))?;
+    let stereo_candidate = select_aac_standard_id_high_level_gain_candidate(
+        ffmpeg,
+        "AAC-LC standard-id high-level stereo ADTS",
+        &stereo_pcm,
+        ProductionArtifactKind::Aac,
+        stereo_bitrate,
+        out_dir,
+        "aaclc-standard-id-surface-stereo",
+    )?;
+    eprintln!(
+        "AAC-LC standard-id high-level stereo ADTS selected global_gain={}, max_frame_len={}, decoded_rms={:.4}, best_correlation={:.3}",
+        stereo_candidate.global_gain,
+        stereo_candidate.max_frame_len,
+        stereo_candidate.quality.decoded_rms,
+        stereo_candidate.quality.best_correlation
+    );
+
+    let stereo_m4a = sonare_codec::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+        &stereo_pcm,
+        stereo_bitrate,
+        stereo_candidate.global_gain,
+    )
+    .map_err(|err| format!("AAC standard-id surface stereo M4A encode failed: {err}"))?;
+    let stereo_m4a_quality = validate_aac_standard_id_high_level_artifact(
+        ffmpeg,
+        "AAC-LC standard-id high-level stereo M4A",
+        &stereo_pcm,
+        &stereo_m4a,
+        ProductionArtifactKind::M4a,
+        stereo_bitrate,
+        &out_dir.join("aaclc-standard-id-surface-stereo.m4a"),
+    )?;
+    if stereo_m4a_quality.best_correlation + f64::EPSILON
+        < stereo_candidate.quality.best_correlation
+    {
+        return Err(format!(
+            "AAC standard-id surface stereo M4A quality lagged ADTS: m4a={stereo_m4a_quality:?}, adts={:?}",
+            stereo_candidate.quality
+        ));
+    }
+    let stereo_selected_quality = validate_aac_standard_id_high_level_selected_bias_surface(
+        ffmpeg,
+        "AAC-LC standard-id high-level selected-scale-factor stereo",
+        &stereo_pcm,
+        stereo_bitrate,
+        out_dir,
+        "aaclc-standard-id-selected-surface-stereo",
+    )?;
+    if stereo_selected_quality.best_correlation + f64::EPSILON
+        < stereo_candidate.quality.best_correlation
+    {
+        return Err(format!(
+            "AAC standard-id selected surface stereo quality lagged fixed surface: selected={stereo_selected_quality:?}, fixed={:?}",
+            stereo_candidate.quality
+        ));
+    }
+
+    Ok((mono_selected_quality, stereo_selected_quality))
+}
+
+fn aac_standard_surface_stereo_pcm(
+    mono_pcm: &sonare_codec::AudioBuffer,
+) -> Result<sonare_codec::AudioBuffer, String> {
+    if mono_pcm.channels != 1 {
+        return Err("AAC standard-id high-level stereo fixture expects mono PCM".to_owned());
+    }
+    sonare_codec::AudioBuffer::new(
+        mono_pcm.sample_rate,
+        2,
+        mono_pcm
+            .samples
+            .iter()
+            .enumerate()
+            .flat_map(|(index, &sample)| {
+                let right = if index % 2 == 0 {
+                    -sample * 0.75
+                } else {
+                    sample * 0.5
+                };
+                [sample, right]
+            })
+            .collect(),
+    )
+    .map_err(|err| format!("AAC standard-id high-level stereo PCM failed: {err}"))
+}
+
+fn validate_aac_production_benchmark_surface(
+    ffmpeg: &OsStr,
+    mono_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+) -> Result<(LossyOraclePcmQuality, LossyOraclePcmQuality), String> {
+    if mono_pcm.channels != 1 {
+        return Err("AAC production benchmark surface expects mono PCM".to_owned());
+    }
+    let mono_quality = validate_aac_production_benchmark_artifact(
+        ffmpeg,
+        "AAC-LC production benchmark mono",
+        mono_pcm,
+        out_dir,
+        "aaclc-production-benchmark-mono",
+    )?;
+    let stereo_pcm = aac_standard_surface_stereo_pcm(mono_pcm)?;
+    let stereo_quality = validate_aac_production_benchmark_artifact(
+        ffmpeg,
+        "AAC-LC production benchmark stereo",
+        &stereo_pcm,
+        out_dir,
+        "aaclc-production-benchmark-stereo",
+    )?;
+    Ok((mono_quality, stereo_quality))
+}
+
+fn validate_aac_production_benchmark_artifact(
+    ffmpeg: &OsStr,
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<LossyOraclePcmQuality, String> {
+    let adts = sonare_codec::encode_with_mode(
+        sonare_codec::Format::Aac,
+        expected_pcm,
+        sonare_codec::EncodeMode::ProductionOnly,
+    )
+    .map_err(|err| format!("{label} ADTS encode failed: {err}"))?;
+    let bitrate = sonare_codec::aac_lc_default_production_bitrate_bps(
+        u8::try_from(expected_pcm.channels)
+            .map_err(|_| format!("{label} channel count exceeds AAC production range"))?,
+    )
+    .map_err(|err| format!("{label} default bitrate failed: {err}"))?;
+    let adts_quality = validate_aac_standard_id_high_level_artifact(
+        ffmpeg,
+        &format!("{label} ADTS"),
+        expected_pcm,
+        &adts,
+        ProductionArtifactKind::Aac,
+        bitrate,
+        &out_dir.join(format!("{file_stem}.aac")),
+    )?;
+
+    let m4a = sonare_codec::mux_aac_adts_as_m4a(&adts)
+        .map_err(|err| format!("{label} M4A mux failed: {err}"))?;
+    let m4a_quality = validate_aac_standard_id_high_level_artifact(
+        ffmpeg,
+        &format!("{label} M4A"),
+        expected_pcm,
+        &m4a,
+        ProductionArtifactKind::M4a,
+        bitrate,
+        &out_dir.join(format!("{file_stem}.m4a")),
+    )?;
+    if m4a_quality.best_correlation + f64::EPSILON < adts_quality.best_correlation {
+        return Err(format!(
+            "{label} M4A quality lagged ADTS: m4a={m4a_quality:?}, adts={adts_quality:?}"
+        ));
+    }
+    eprintln!(
+        "{label}: adts_rms={:.4}, adts_correlation={:.3}, m4a_rms={:.4}, m4a_correlation={:.3}",
+        adts_quality.decoded_rms,
+        adts_quality.best_correlation,
+        m4a_quality.decoded_rms,
+        m4a_quality.best_correlation
+    );
+    Ok(adts_quality)
+}
+
+fn validate_aac_standard_id_high_level_selected_bias_surface(
+    ffmpeg: &OsStr,
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    bitrate: u32,
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<LossyOraclePcmQuality, String> {
+    let expected_rms = rms(&expected_pcm.samples);
+    let mut selected: Option<AacStandardSelectedHighLevelCandidate> = None;
+    let mut last_rejection: Option<String> = None;
+    for &global_gain in AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES {
+        for &magnitude_bias in AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_MAGNITUDE_BIAS_CANDIDATES {
+            let frame_details = match sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+                expected_pcm,
+                bitrate,
+                global_gain,
+                magnitude_bias,
+            ) {
+                Ok(details) => details,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "global_gain={global_gain}, magnitude_bias={magnitude_bias}: frame detail selection failed: {err}"
+                    ));
+                    continue;
+                }
+            };
+            let adts = match sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+                expected_pcm,
+                bitrate,
+                global_gain,
+                magnitude_bias,
+            ) {
+                Ok(adts) => adts,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "global_gain={global_gain}, magnitude_bias={magnitude_bias}: ADTS encode failed: {err}"
+                    ));
+                    continue;
+                }
+            };
+            let adts_quality = match validate_aac_standard_id_high_level_artifact(
+                ffmpeg,
+                &format!("{label} ADTS gain {global_gain} bias {magnitude_bias}"),
+                expected_pcm,
+                &adts,
+                ProductionArtifactKind::Aac,
+                bitrate,
+                &out_dir.join(format!(
+                    "{file_stem}-gain-{global_gain}-bias-{magnitude_bias}.aac"
+                )),
+            ) {
+                Ok(quality) => quality,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "global_gain={global_gain}, magnitude_bias={magnitude_bias}: {err}"
+                    ));
+                    continue;
+                }
+            };
+
+            let m4a = match sonare_codec::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+                expected_pcm,
+                bitrate,
+                global_gain,
+                magnitude_bias,
+            ) {
+                Ok(m4a) => m4a,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "global_gain={global_gain}, magnitude_bias={magnitude_bias}: M4A encode failed: {err}"
+                    ));
+                    continue;
+                }
+            };
+            let m4a_quality = match validate_aac_standard_id_high_level_artifact(
+                ffmpeg,
+                &format!("{label} M4A gain {global_gain} bias {magnitude_bias}"),
+                expected_pcm,
+                &m4a,
+                ProductionArtifactKind::M4a,
+                bitrate,
+                &out_dir.join(format!(
+                    "{file_stem}-gain-{global_gain}-bias-{magnitude_bias}.m4a"
+                )),
+            ) {
+                Ok(quality) => quality,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "global_gain={global_gain}, magnitude_bias={magnitude_bias}: {err}"
+                    ));
+                    continue;
+                }
+            };
+            if m4a_quality.best_correlation + f64::EPSILON < adts_quality.best_correlation {
+                last_rejection = Some(format!(
+                    "global_gain={global_gain}, magnitude_bias={magnitude_bias}: M4A quality lagged ADTS: m4a={m4a_quality:?}, adts={adts_quality:?}"
+                ));
+                continue;
+            }
+
+            let candidate = AacStandardSelectedHighLevelCandidate {
+                global_gain,
+                magnitude_bias,
+                frame_details,
+                adts_quality,
+                m4a_quality,
+            };
+            selected = match selected {
+                Some(previous)
+                    if lossy_oracle_quality_is_at_least_as_good(
+                        &previous.adts_quality,
+                        &candidate.adts_quality,
+                        expected_rms,
+                    ) =>
+                {
+                    Some(previous)
+                }
+                _ => Some(candidate),
+            };
+        }
+    }
+
+    let selected = selected.ok_or_else(|| {
+        format!(
+            "{label} found no selected-scale-factor candidate: last rejection={}",
+            last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })?;
+    let step_summary = selected
+        .frame_details
+        .iter()
+        .map(|selection| selection.step.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let selection_summary = aac_step_selection_summary(&selected.frame_details);
+    eprintln!(
+        "{label}: global_gain={}, scale_factor_magnitude_bias={}, steps=[{}], {}, adts_rms={:.4}, adts_correlation={:.3}, m4a_rms={:.4}, m4a_correlation={:.3}",
+        selected.global_gain,
+        selected.magnitude_bias,
+        step_summary,
+        selection_summary,
+        selected.adts_quality.decoded_rms,
+        selected.adts_quality.best_correlation,
+        selected.m4a_quality.decoded_rms,
+        selected.m4a_quality.best_correlation
+    );
+    Ok(selected.adts_quality)
+}
+
+fn select_aac_standard_id_high_level_gain_candidate(
+    ffmpeg: &OsStr,
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    kind: ProductionArtifactKind,
+    bitrate: u32,
+    out_dir: &Path,
+    file_stem: &str,
+) -> Result<AacStandardHighLevelCandidate, String> {
+    let expected_rms = rms(&expected_pcm.samples);
+    let mut selected: Option<AacStandardHighLevelCandidate> = None;
+    let mut last_rejection: Option<String> = None;
+    for &global_gain in AAC_STANDARD_HIGH_LEVEL_FIXED_SURFACE_GLOBAL_GAIN_CANDIDATES {
+        let bytes = match kind {
+            ProductionArtifactKind::Aac => {
+                match sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+                    expected_pcm,
+                    bitrate,
+                    global_gain,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        last_rejection = Some(format!(
+                            "{label} global_gain={global_gain} encode failed: {err}"
+                        ));
+                        eprintln!("{label} candidate rejected: global_gain={global_gain}, {err}");
+                        continue;
+                    }
+                }
+            }
+            ProductionArtifactKind::M4a => {
+                match sonare_codec::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+                    expected_pcm,
+                    bitrate,
+                    global_gain,
+                ) {
+                    Ok(bytes) => bytes,
+                    Err(err) => {
+                        last_rejection = Some(format!(
+                            "{label} global_gain={global_gain} M4A encode failed: {err}"
+                        ));
+                        eprintln!("{label} candidate rejected: global_gain={global_gain}, {err}");
+                        continue;
+                    }
+                }
+            }
+            ProductionArtifactKind::Mp3 => {
+                return Err(format!("{label} gain sweep received MP3 artifact kind"));
+            }
+        };
+        let extension = match kind {
+            ProductionArtifactKind::Aac => "aac",
+            ProductionArtifactKind::M4a => "m4a",
+            ProductionArtifactKind::Mp3 => unreachable!(),
+        };
+        let path = out_dir.join(format!("{file_stem}-gain-{global_gain}.{extension}"));
+        let quality = match validate_aac_standard_id_high_level_artifact(
+            ffmpeg,
+            &format!("{label} gain {global_gain}"),
+            expected_pcm,
+            &bytes,
+            kind,
+            bitrate,
+            &path,
+        ) {
+            Ok(quality) => quality,
+            Err(err) => {
+                last_rejection = Some(err.clone());
+                eprintln!("{label} candidate rejected: global_gain={global_gain}, {err}");
+                continue;
+            }
+        };
+        let adts = match kind {
+            ProductionArtifactKind::Aac => bytes,
+            ProductionArtifactKind::M4a => match sonare_codec::demux_m4a_as_aac_adts(&bytes) {
+                Ok(adts) => adts,
+                Err(err) => {
+                    last_rejection = Some(format!(
+                        "{label} global_gain={global_gain} demux failed: {err}"
+                    ));
+                    eprintln!(
+                        "{label} candidate rejected: global_gain={global_gain}, demux failed: {err}"
+                    );
+                    continue;
+                }
+            },
+            ProductionArtifactKind::Mp3 => unreachable!(),
+        };
+        let max_frame_len = match max_adts_frame_len(&adts) {
+            Ok(max_frame_len) => max_frame_len,
+            Err(err) => {
+                last_rejection = Some(format!(
+                    "{label} global_gain={global_gain} ADTS inspect failed: {err}"
+                ));
+                eprintln!(
+                    "{label} candidate rejected: global_gain={global_gain}, ADTS inspect failed: {err}"
+                );
+                continue;
+            }
+        };
+        let candidate = AacStandardHighLevelCandidate {
+            global_gain,
+            max_frame_len,
+            quality,
+        };
+        selected = match selected {
+            Some(previous)
+                if lossy_oracle_quality_is_at_least_as_good(
+                    &previous.quality,
+                    &candidate.quality,
+                    expected_rms,
+                ) =>
+            {
+                Some(previous)
+            }
+            _ => Some(candidate),
+        };
+    }
+    selected.ok_or_else(|| {
+        format!(
+            "{label} found no global_gain candidate: last rejection={}",
+            last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })
+}
+
+fn validate_aac_standard_id_high_level_artifact(
+    ffmpeg: &OsStr,
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    bytes: &[u8],
+    kind: ProductionArtifactKind,
+    bitrate: u32,
+    path: &Path,
+) -> Result<LossyOraclePcmQuality, String> {
+    let adts = match kind {
+        ProductionArtifactKind::Mp3 => {
+            return Err(format!(
+                "{label} high-level AAC surface received MP3 artifact kind"
+            ));
+        }
+        ProductionArtifactKind::Aac => bytes.to_vec(),
+        ProductionArtifactKind::M4a => sonare_codec::demux_m4a_as_aac_adts(bytes)
+            .map_err(|err| format!("{label} demux failed: {err}"))?,
+    };
+    let budget =
+        sonare_codec::aac_lc_adts_max_frame_len_for_bitrate(expected_pcm.sample_rate, bitrate)
+            .map_err(|err| format!("{label} bitrate budget failed: {err}"))?;
+    let max_frame_len = max_adts_frame_len(&adts)
+        .map_err(|err| format!("{label} ADTS inspection failed: {err}"))?;
+    validate_adts_frame_budget(label, max_frame_len, budget, bitrate)?;
+
+    fs::write(path, bytes).map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    run_ffmpeg_acceptance(ffmpeg, path)
+        .map_err(|err| format!("{label} FFmpeg acceptance failed: {err}"))?;
+    let decoded = run_ffmpeg_decode_f32le(
+        ffmpeg,
+        path,
+        expected_pcm.sample_rate,
+        expected_pcm.channels,
+    )
+    .map_err(|err| format!("{label} FFmpeg PCM decode failed: {err}"))?;
+    let quality = validate_lossy_oracle_pcm_quality(&expected_pcm.samples, &decoded)
+        .map_err(|err| format!("{label} PCM quality failed: {err}"))?;
+    validate_diagnostic_quality_floor(
+        label,
+        quality,
+        AAC_STANDARD_DIAGNOSTIC_MIN_DECODED_RMS,
+        AAC_STANDARD_DIAGNOSTIC_MIN_CORRELATION,
+    )?;
+    eprintln!(
+        "{label}: max_frame_len={max_frame_len}, default_budget={budget}, decoded_rms={:.4}, best_correlation={:.3}",
+        quality.decoded_rms, quality.best_correlation
+    );
+    Ok(quality)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_aac_standard_id_offsets_encoded_candidate(
+    ffmpeg: &OsStr,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+    offsets: &[usize],
+    max_sfb: u8,
+    candidate: &AacStandardDiagnosticCandidate,
+    budget: usize,
+    bitrate: u32,
+    scale_factor_table: &[sonare_codec::HuffmanEntry<sonare_codec::AacScaleFactorDelta>],
+) -> Result<(), String> {
+    let channel_config = sonare_codec::AacLongBlockConfig::new(candidate.global_gain, max_sfb);
+    let frame_count = expected_pcm
+        .samples
+        .len()
+        .div_ceil(usize::from(expected_pcm.channels) * 1024);
+    let scale_factors_by_frame = (0..frame_count)
+        .map(|_| vec![i16::from(channel_config.global_gain); offsets.len() - 1])
+        .collect::<Vec<_>>();
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let mut selected: Option<(f32, Vec<u8>, usize)> = None;
+    let mut last_rejection: Option<String> = None;
+    let path = out_dir.join(format!(
+        "aaclc-standard-id-offsets-gain-{}.aac",
+        candidate.global_gain
+    ));
+    for &step in sonare_codec::AAC_LC_PCM_STEP_CANDIDATES {
+        let encoded = match
+            sonare_codec::encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+            sonare_codec::AdtsConfig::aac_lc(expected_pcm.sample_rate, 1),
+            sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+            expected_pcm,
+            0,
+                step,
+            offsets,
+            scale_factor_table,
+        ) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                last_rejection = Some(format!("step={step}: {err}"));
+                continue;
+            }
+        };
+        let max_frame_len = max_adts_frame_len(&encoded)
+            .map_err(|err| format!("AAC standard-id offsets ADTS inspection failed: {err}"))?;
+        if max_frame_len <= budget {
+            fs::write(&path, &encoded)
+                .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+            if let Err(err) = run_ffmpeg_clean_acceptance(ffmpeg, &path) {
+                last_rejection = Some(format!("step={step}: {err}"));
+                continue;
+            }
+            selected = Some((step, encoded, max_frame_len));
+            break;
+        }
+        last_rejection = Some(format!(
+            "step={step}: max_frame_len={max_frame_len} exceeds budget {budget}"
+        ));
+    }
+    let (selected_step, encoded, max_frame_len) = selected.ok_or_else(|| {
+        format!(
+            "AAC standard-id offsets stream encode diagnostic found no step within budget {budget}: last rejection={}",
+            last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })?;
+    fs::write(&path, &encoded)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    validate_adts_frame_budget(
+        "AAC-LC standard-id offsets diagnostic",
+        max_frame_len,
+        budget,
+        bitrate,
+    )?;
+    eprintln!(
+        "AAC-LC standard-id offsets diagnostic ADTS frame budget: selected_step={selected_step}, max_frame_len={max_frame_len}, default_budget={budget}, default_bitrate_bps={bitrate}"
+    );
+
+    let expected_rms = rms(&expected_pcm.samples);
+    let mut selected_scale_factor_candidate: Option<(
+        u8,
+        i16,
+        Vec<sonare_codec::AacPcmFrameStepSelection>,
+        usize,
+        LossyOraclePcmQuality,
+    )> = None;
+    let mut selected_scale_factor_last_rejection: Option<String> = None;
+    for &global_gain in AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES {
+        for &scale_factor_magnitude_bias in
+            AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_MAGNITUDE_BIAS_CANDIDATES
+        {
+            let selected_scale_factor_details = match sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+                expected_pcm,
+                bitrate,
+                global_gain,
+                scale_factor_magnitude_bias,
+            ) {
+                Ok(details) => details,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: step selection failed: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, step selection failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            let selected_scale_factor_encoded = match sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+                expected_pcm,
+                bitrate,
+                global_gain,
+                scale_factor_magnitude_bias,
+            ) {
+                Ok(encoded) => encoded,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: encode failed: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, encode failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            let selected_scale_factor_path = out_dir.join(format!(
+                "aaclc-standard-id-offsets-selected-sf-gain-{global_gain}-bias-{scale_factor_magnitude_bias}.aac"
+            ));
+            fs::write(&selected_scale_factor_path, &selected_scale_factor_encoded).map_err(
+                |err| {
+                    format!(
+                        "failed to write {}: {err}",
+                        selected_scale_factor_path.display()
+                    )
+                },
+            )?;
+            if let Err(err) = run_ffmpeg_clean_acceptance(ffmpeg, &selected_scale_factor_path) {
+                selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                eprintln!(
+                    "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                );
+                continue;
+            }
+            let selected_scale_factor_max_frame_len = match max_adts_frame_len(
+                &selected_scale_factor_encoded,
+            ) {
+                Ok(max_frame_len) => max_frame_len,
+                Err(err) => {
+                    selected_scale_factor_last_rejection = Some(format!(
+                    "global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: ADTS inspection failed: {err}"
+                ));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, ADTS inspection failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            if let Err(err) = validate_adts_frame_budget(
+                "AAC-LC standard-id selected-scale-factor offsets diagnostic",
+                selected_scale_factor_max_frame_len,
+                budget,
+                bitrate,
+            ) {
+                selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                eprintln!(
+                    "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                );
+                continue;
+            }
+            let selected_scale_factor_decoded = match run_ffmpeg_decode_f32le(
+                ffmpeg,
+                &selected_scale_factor_path,
+                expected_pcm.sample_rate,
+                expected_pcm.channels,
+            ) {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: decode failed: {err}"));
+                    eprintln!(
+                    "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, decode failed: {err}"
+                );
+                    continue;
+                }
+            };
+            let selected_scale_factor_quality = match validate_lossy_oracle_pcm_quality(
+                &expected_pcm.samples,
+                &selected_scale_factor_decoded,
+            ) {
+                Ok(quality) => quality,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                    eprintln!(
+                    "AAC-LC standard-id selected-scale-factor offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                );
+                    continue;
+                }
+            };
+            selected_scale_factor_candidate = match selected_scale_factor_candidate {
+                Some((
+                    previous_gain,
+                    previous_bias,
+                    previous_details,
+                    previous_max_frame_len,
+                    previous_quality,
+                )) if lossy_oracle_quality_is_at_least_as_good(
+                    &previous_quality,
+                    &selected_scale_factor_quality,
+                    expected_rms,
+                ) =>
+                {
+                    Some((
+                        previous_gain,
+                        previous_bias,
+                        previous_details,
+                        previous_max_frame_len,
+                        previous_quality,
+                    ))
+                }
+                _ => Some((
+                    global_gain,
+                    scale_factor_magnitude_bias,
+                    selected_scale_factor_details,
+                    selected_scale_factor_max_frame_len,
+                    selected_scale_factor_quality,
+                )),
+            };
+        }
+    }
+    let (
+        selected_scale_factor_global_gain,
+        selected_scale_factor_magnitude_bias,
+        selected_scale_factor_details,
+        selected_scale_factor_max_frame_len,
+        selected_scale_factor_quality,
+    ) = selected_scale_factor_candidate.ok_or_else(|| {
+        format!(
+            "AAC standard-id selected-scale-factor diagnostic found no gain candidate: last rejection={}",
+            selected_scale_factor_last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })?;
+    let selected_scale_factor_step_summary = selected_scale_factor_details
+        .iter()
+        .map(|selection| selection.step.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let selected_scale_factor_selection_summary =
+        aac_step_selection_summary(&selected_scale_factor_details);
+    eprintln!(
+        "AAC-LC standard-id selected-scale-factor offsets diagnostic: global_gain={selected_scale_factor_global_gain}, scale_factor_magnitude_bias={selected_scale_factor_magnitude_bias}, steps=[{selected_scale_factor_step_summary}], {selected_scale_factor_selection_summary}, max_frame_len={selected_scale_factor_max_frame_len}, decoded_rms={:.4}, best_correlation={:.3}",
+        selected_scale_factor_quality.decoded_rms,
+        selected_scale_factor_quality.best_correlation
+    );
+    Ok(())
+}
+
+fn validate_aac_standard_id_offsets_stereo_encoded_candidate(
+    ffmpeg: &OsStr,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    out_dir: &Path,
+    offsets: &[usize],
+    max_sfb: u8,
+    candidate: &AacStandardDiagnosticCandidate,
+    scale_factor_table: &[sonare_codec::HuffmanEntry<sonare_codec::AacScaleFactorDelta>],
+) -> Result<(), String> {
+    let stereo_pcm = sonare_codec::AudioBuffer::new(
+        expected_pcm.sample_rate,
+        2,
+        expected_pcm
+            .samples
+            .iter()
+            .enumerate()
+            .flat_map(|(index, &sample)| {
+                let right = if index % 2 == 0 {
+                    -sample * 0.75
+                } else {
+                    sample * 0.5
+                };
+                [sample, right]
+            })
+            .collect(),
+    )
+    .map_err(|err| format!("AAC standard-id offsets stereo diagnostic PCM failed: {err}"))?;
+    let channel_config = sonare_codec::AacLongBlockConfig::new(candidate.global_gain, max_sfb);
+    let frame_count = stereo_pcm
+        .samples
+        .len()
+        .div_ceil(usize::from(stereo_pcm.channels) * 1024);
+    let scale_factors_by_frame = (0..frame_count)
+        .map(|_| vec![i16::from(channel_config.global_gain); offsets.len() - 1])
+        .collect::<Vec<_>>();
+    let scale_factor_refs = scale_factors_by_frame
+        .iter()
+        .map(Vec::as_slice)
+        .collect::<Vec<_>>();
+    let bitrate = sonare_codec::aac_lc_default_production_bitrate_bps(2)
+        .map_err(|err| format!("AAC standard-id offsets stereo bitrate failed: {err}"))?;
+    let budget =
+        sonare_codec::aac_lc_adts_max_frame_len_for_bitrate(stereo_pcm.sample_rate, bitrate)
+            .map_err(|err| format!("AAC standard-id offsets stereo budget failed: {err}"))?;
+    let mut selected: Option<(f32, Vec<u8>, usize)> = None;
+    let mut last_rejection: Option<String> = None;
+    let path = out_dir.join(format!(
+        "aaclc-standard-id-offsets-stereo-gain-{}.aac",
+        candidate.global_gain
+    ));
+    for &step in sonare_codec::AAC_LC_PCM_STEP_CANDIDATES {
+        let encoded = match sonare_codec::encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
+            sonare_codec::AdtsConfig::aac_lc(stereo_pcm.sample_rate, 2),
+            sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+            sonare_codec::AacScaleFactorSequence::new(channel_config, &scale_factor_refs),
+            &stereo_pcm,
+            0,
+            step,
+            offsets,
+            scale_factor_table,
+        ) {
+            Ok(encoded) => encoded,
+            Err(err) => {
+                last_rejection = Some(format!("step={step}: {err}"));
+                continue;
+            }
+        };
+        let max_frame_len = max_adts_frame_len(&encoded).map_err(|err| {
+            format!("AAC standard-id offsets stereo ADTS inspection failed: {err}")
+        })?;
+        if max_frame_len <= budget {
+            fs::write(&path, &encoded)
+                .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+            if let Err(err) = run_ffmpeg_clean_acceptance(ffmpeg, &path) {
+                last_rejection = Some(format!("step={step}: {err}"));
+                continue;
+            }
+            selected = Some((step, encoded, max_frame_len));
+            break;
+        }
+        last_rejection = Some(format!(
+            "step={step}: max_frame_len={max_frame_len} exceeds budget {budget}"
+        ));
+    }
+    let (selected_step, encoded, max_frame_len) = selected.ok_or_else(|| {
+        format!(
+            "AAC standard-id offsets stereo stream encode diagnostic found no step within budget {budget}: last rejection={}",
+            last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })?;
+    fs::write(&path, &encoded)
+        .map_err(|err| format!("failed to write {}: {err}", path.display()))?;
+    validate_adts_frame_budget(
+        "AAC-LC standard-id offsets stereo diagnostic",
+        max_frame_len,
+        budget,
+        bitrate,
+    )?;
+    eprintln!(
+        "AAC-LC standard-id offsets stereo diagnostic ADTS frame budget: selected_step={selected_step}, max_frame_len={max_frame_len}, default_budget={budget}, default_bitrate_bps={bitrate}"
+    );
+
+    let expected_rms = rms(&stereo_pcm.samples);
+    let mut selected_scale_factor_candidate: Option<(
+        u8,
+        i16,
+        Vec<sonare_codec::AacPcmFrameStepSelection>,
+        usize,
+        LossyOraclePcmQuality,
+    )> = None;
+    let mut selected_scale_factor_last_rejection: Option<String> = None;
+    for &global_gain in AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES {
+        for &scale_factor_magnitude_bias in
+            AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_MAGNITUDE_BIAS_CANDIDATES
+        {
+            let selected_scale_factor_details = match sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+                &stereo_pcm,
+                bitrate,
+                global_gain,
+                scale_factor_magnitude_bias,
+            ) {
+                Ok(details) => details,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: step selection failed: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, step selection failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            let selected_scale_factor_encoded = match sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+                &stereo_pcm,
+                bitrate,
+                global_gain,
+                scale_factor_magnitude_bias,
+            ) {
+                Ok(encoded) => encoded,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: encode failed: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, encode failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            let selected_scale_factor_path = out_dir.join(format!(
+                "aaclc-standard-id-offsets-stereo-selected-sf-gain-{global_gain}-bias-{scale_factor_magnitude_bias}.aac"
+            ));
+            fs::write(&selected_scale_factor_path, &selected_scale_factor_encoded).map_err(
+                |err| {
+                    format!(
+                        "failed to write {}: {err}",
+                        selected_scale_factor_path.display()
+                    )
+                },
+            )?;
+            if let Err(err) = run_ffmpeg_clean_acceptance(ffmpeg, &selected_scale_factor_path) {
+                selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                eprintln!(
+                    "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                );
+                continue;
+            }
+            let selected_scale_factor_max_frame_len = match max_adts_frame_len(
+                &selected_scale_factor_encoded,
+            ) {
+                Ok(max_frame_len) => max_frame_len,
+                Err(err) => {
+                    selected_scale_factor_last_rejection = Some(format!(
+                            "global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: ADTS inspection failed: {err}"
+                        ));
+                    eprintln!(
+                            "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, ADTS inspection failed: {err}"
+                        );
+                    continue;
+                }
+            };
+            if let Err(err) = validate_adts_frame_budget(
+                "AAC-LC standard-id selected-scale-factor stereo offsets diagnostic",
+                selected_scale_factor_max_frame_len,
+                budget,
+                bitrate,
+            ) {
+                selected_scale_factor_last_rejection =
+                    Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                eprintln!(
+                    "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                );
+                continue;
+            }
+            let selected_scale_factor_decoded = match run_ffmpeg_decode_f32le(
+                ffmpeg,
+                &selected_scale_factor_path,
+                stereo_pcm.sample_rate,
+                stereo_pcm.channels,
+            ) {
+                Ok(decoded) => decoded,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: decode failed: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, decode failed: {err}"
+                    );
+                    continue;
+                }
+            };
+            let selected_scale_factor_quality = match validate_lossy_oracle_pcm_quality(
+                &stereo_pcm.samples,
+                &selected_scale_factor_decoded,
+            ) {
+                Ok(quality) => quality,
+                Err(err) => {
+                    selected_scale_factor_last_rejection =
+                        Some(format!("global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}: {err}"));
+                    eprintln!(
+                        "AAC-LC standard-id selected-scale-factor stereo offsets candidate rejected: global_gain={global_gain}, scale_factor_magnitude_bias={scale_factor_magnitude_bias}, {err}"
+                    );
+                    continue;
+                }
+            };
+            selected_scale_factor_candidate = match selected_scale_factor_candidate {
+                Some((
+                    previous_gain,
+                    previous_bias,
+                    previous_details,
+                    previous_max_frame_len,
+                    previous_quality,
+                )) if lossy_oracle_quality_is_at_least_as_good(
+                    &previous_quality,
+                    &selected_scale_factor_quality,
+                    expected_rms,
+                ) =>
+                {
+                    Some((
+                        previous_gain,
+                        previous_bias,
+                        previous_details,
+                        previous_max_frame_len,
+                        previous_quality,
+                    ))
+                }
+                _ => Some((
+                    global_gain,
+                    scale_factor_magnitude_bias,
+                    selected_scale_factor_details,
+                    selected_scale_factor_max_frame_len,
+                    selected_scale_factor_quality,
+                )),
+            };
+        }
+    }
+    let (
+        selected_scale_factor_global_gain,
+        selected_scale_factor_magnitude_bias,
+        selected_scale_factor_details,
+        selected_scale_factor_max_frame_len,
+        selected_scale_factor_quality,
+    ) = selected_scale_factor_candidate.ok_or_else(|| {
+        format!(
+            "AAC standard-id selected-scale-factor stereo diagnostic found no gain candidate: last rejection={}",
+            selected_scale_factor_last_rejection.unwrap_or_else(|| "none".to_owned())
+        )
+    })?;
+    let selected_scale_factor_step_summary = selected_scale_factor_details
+        .iter()
+        .map(|selection| selection.step.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let selected_scale_factor_selection_summary =
+        aac_step_selection_summary(&selected_scale_factor_details);
+    eprintln!(
+        "AAC-LC standard-id selected-scale-factor stereo offsets diagnostic: global_gain={selected_scale_factor_global_gain}, scale_factor_magnitude_bias={selected_scale_factor_magnitude_bias}, steps=[{selected_scale_factor_step_summary}], {selected_scale_factor_selection_summary}, max_frame_len={selected_scale_factor_max_frame_len}, decoded_rms={:.4}, best_correlation={:.3}",
+        selected_scale_factor_quality.decoded_rms,
+        selected_scale_factor_quality.best_correlation
+    );
+    Ok(())
+}
+
+fn validate_aac_standard_id_offsets_payload_for_diagnostic(
+    quantized: &[i32],
+    offsets: &[usize],
+) -> Result<(), String> {
+    let sections = sonare_codec::plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(
+        quantized, offsets,
+    )
+    .map_err(|err| format!("AAC standard-id offsets diagnostic planning failed: {err}"))?;
+    let split =
+        sonare_codec::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            quantized, offsets,
+        )
+        .map_err(|err| format!("AAC standard-id offsets diagnostic split failed: {err}"))?;
+    let packed =
+        sonare_codec::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            quantized, offsets,
+        )
+        .map_err(|err| format!("AAC standard-id offsets diagnostic packing failed: {err}"))?;
+    let expected_bit_len = split
+        .section_and_scale_factor_bits
+        .bit_len
+        .checked_add(split.spectral_bits.bit_len)
+        .ok_or_else(|| "AAC standard-id offsets diagnostic bit length overflowed".to_owned())?;
+    if packed.bit_len != expected_bit_len {
+        return Err(format!(
+            "AAC standard-id offsets diagnostic split/packed bit lengths diverged: split={expected_bit_len}, packed={}",
+            packed.bit_len
+        ));
+    }
+    if split.spectral_bits.bit_len == 0 {
+        return Err("AAC standard-id offsets diagnostic produced empty spectral bits".to_owned());
+    }
+    eprintln!(
+        "{}",
+        aac_spectral_section_diagnostic_summary(
+            "AAC-LC standard-id offsets diagnostic sections",
+            &sections,
+            quantized,
+            split.section_and_scale_factor_bits.bit_len,
+            split.spectral_bits.bit_len,
+            packed.bit_len,
+        )
+    );
+    Ok(())
+}
+
+fn validate_aac_standard_id_mixed_workbench() -> Result<(), String> {
+    let quantized = [1, -1, 0, 1, 17, 0, 0, 0];
+    let band_width = 4;
+    let offsets = [0, 4, 8];
+    let sections =
+        sonare_codec::plan_aac_lc_standard_spectral_sections_by_bit_cost(&quantized, band_width)
+            .map_err(|err| format!("AAC standard-id mixed workbench planning failed: {err}"))?;
+    let flattened = sections
+        .iter()
+        .flat_map(|section| [section.start, section.end, usize::from(section.codebook_id)])
+        .collect::<Vec<_>>();
+    if flattened != [0, 4, 4, 4, 8, 11] {
+        return Err(format!(
+            "AAC standard-id mixed workbench selected unexpected sections: {flattened:?}"
+        ));
+    }
+    let offset_sections =
+        sonare_codec::plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(
+            &quantized, &offsets,
+        )
+        .map_err(|err| format!("AAC standard-id mixed offsets workbench planning failed: {err}"))?;
+    let offset_flattened = offset_sections
+        .iter()
+        .flat_map(|section| [section.start, section.end, usize::from(section.codebook_id)])
+        .collect::<Vec<_>>();
+    if offset_flattened != flattened {
+        return Err(format!(
+            "AAC standard-id mixed offsets workbench diverged: offsets={offset_flattened:?}, fixed={flattened:?}"
+        ));
+    }
+
+    let split = sonare_codec::split_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        &quantized, band_width,
+    )
+    .map_err(|err| format!("AAC standard-id mixed workbench split failed: {err}"))?;
+    let packed = sonare_codec::pack_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost(
+        &quantized, band_width,
+    )
+    .map_err(|err| format!("AAC standard-id mixed workbench packing failed: {err}"))?;
+    let expected_bit_len = split
+        .section_and_scale_factor_bits
+        .bit_len
+        .checked_add(split.spectral_bits.bit_len)
+        .ok_or_else(|| "AAC standard-id mixed workbench bit length overflowed".to_owned())?;
+    if packed.bit_len != expected_bit_len {
+        return Err(format!(
+            "AAC standard-id mixed workbench split/packed bit lengths diverged: split={expected_bit_len}, packed={}",
+            packed.bit_len
+        ));
+    }
+    if split.spectral_bits.bit_len == 0 {
+        return Err("AAC standard-id mixed workbench produced empty spectral bits".to_owned());
+    }
+    let offset_split =
+        sonare_codec::split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            &quantized, &offsets,
+        )
+        .map_err(|err| format!("AAC standard-id mixed offsets workbench split failed: {err}"))?;
+    let offset_packed =
+        sonare_codec::pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+            &quantized, &offsets,
+        )
+        .map_err(|err| format!("AAC standard-id mixed offsets workbench packing failed: {err}"))?;
+    if offset_split.section_and_scale_factor_bits.bit_len
+        != split.section_and_scale_factor_bits.bit_len
+        || offset_split.spectral_bits.bit_len != split.spectral_bits.bit_len
+        || offset_packed.bit_len != packed.bit_len
+    {
+        return Err(format!(
+            "AAC standard-id mixed offsets workbench bit lengths diverged: fixed=({}, {}, {}), offsets=({}, {}, {})",
+            split.section_and_scale_factor_bits.bit_len,
+            split.spectral_bits.bit_len,
+            packed.bit_len,
+            offset_split.section_and_scale_factor_bits.bit_len,
+            offset_split.spectral_bits.bit_len,
+            offset_packed.bit_len
+        ));
+    }
+    eprintln!(
+        "AAC standard-id mixed workbench: sections={flattened:?}, section_bits={}, spectral_bits={}, packed_bits={}, offsets_section_bits={}",
+        split.section_and_scale_factor_bits.bit_len,
+        split.spectral_bits.bit_len,
+        packed.bit_len,
+        offset_split.section_and_scale_factor_bits.bit_len
+    );
+    Ok(())
 }
 
 fn validate_diagnostic_quality_floor(
@@ -2450,18 +4024,111 @@ fn validate_diagnostic_quality_floor(
     Ok(())
 }
 
+fn validate_aac_standard_id_production_correlation_gap(
+    label: &str,
+    standard_id_quality: LossyOraclePcmQuality,
+    production_quality: LossyOraclePcmQuality,
+) -> Result<(), String> {
+    let gap = production_quality.best_correlation - standard_id_quality.best_correlation;
+    if gap > AAC_STANDARD_ID_MAX_PRODUCTION_CORRELATION_GAP {
+        return Err(format!(
+            "{label} correlation gap to production exceeded diagnostic limit: standard_id_correlation={:.3}, production_correlation={:.3}, gap={gap:.3}, max_gap={:.3}",
+            standard_id_quality.best_correlation,
+            production_quality.best_correlation,
+            AAC_STANDARD_ID_MAX_PRODUCTION_CORRELATION_GAP
+        ));
+    }
+    Ok(())
+}
+
+fn validate_aac_standard_id_rms_control_advantage(
+    label: &str,
+    standard_id_quality: LossyOraclePcmQuality,
+    production_quality: LossyOraclePcmQuality,
+    expected_rms: f64,
+) -> Result<(), String> {
+    let standard_id_error = rms_error(standard_id_quality, expected_rms);
+    let production_error = rms_error(production_quality, expected_rms);
+    if standard_id_error > production_error {
+        return Err(format!(
+            "{label} RMS control regressed behind production: standard_id_rms={:.4}, production_rms={:.4}, expected_rms={expected_rms:.4}, standard_id_error={standard_id_error:.4}, production_error={production_error:.4}",
+            standard_id_quality.decoded_rms,
+            production_quality.decoded_rms
+        ));
+    }
+    Ok(())
+}
+
+fn validate_mp3_perceptual_reservoir_production_correlation_gap(
+    label: &str,
+    reservoir_quality: LossyOraclePcmQuality,
+    production_quality: LossyOraclePcmQuality,
+) -> Result<(), String> {
+    let gap = production_quality.best_correlation - reservoir_quality.best_correlation;
+    if gap > MP3_PERCEPTUAL_RESERVOIR_MAX_PRODUCTION_CORRELATION_GAP {
+        return Err(format!(
+            "{label} correlation gap to production exceeded diagnostic limit: reservoir_correlation={:.3}, production_correlation={:.3}, gap={gap:.3}, max_gap={:.3}",
+            reservoir_quality.best_correlation,
+            production_quality.best_correlation,
+            MP3_PERCEPTUAL_RESERVOIR_MAX_PRODUCTION_CORRELATION_GAP
+        ));
+    }
+    Ok(())
+}
+
 fn aac_standard_candidate_is_at_least_as_good(
     previous: &AacStandardDiagnosticCandidate,
     candidate: &AacStandardDiagnosticCandidate,
     expected_rms: f64,
 ) -> bool {
-    let correlation_delta = previous.quality.best_correlation - candidate.quality.best_correlation;
+    lossy_oracle_quality_is_at_least_as_good(&previous.quality, &candidate.quality, expected_rms)
+}
+
+fn lossy_oracle_quality_is_at_least_as_good(
+    previous: &LossyOraclePcmQuality,
+    candidate: &LossyOraclePcmQuality,
+    expected_rms: f64,
+) -> bool {
+    let correlation_delta = previous.best_correlation - candidate.best_correlation;
     if correlation_delta.abs() > 1.0e-6 {
         return correlation_delta > 0.0;
     }
-    let previous_rms_error = (previous.quality.decoded_rms - expected_rms).abs();
-    let candidate_rms_error = (candidate.quality.decoded_rms - expected_rms).abs();
+    let previous_rms_error = (previous.decoded_rms - expected_rms).abs();
+    let candidate_rms_error = (candidate.decoded_rms - expected_rms).abs();
     previous_rms_error <= candidate_rms_error
+}
+
+fn rms_error(quality: LossyOraclePcmQuality, expected_rms: f64) -> f64 {
+    (quality.decoded_rms - expected_rms).abs()
+}
+
+fn aac_step_selection_summary(details: &[sonare_codec::AacPcmFrameStepSelection]) -> String {
+    let frames = details.len();
+    let min_step = details
+        .iter()
+        .map(|selection| selection.step)
+        .fold(f32::INFINITY, f32::min);
+    let max_step = details
+        .iter()
+        .map(|selection| selection.step)
+        .fold(0.0_f32, f32::max);
+    let max_frame_len = details
+        .iter()
+        .map(|selection| selection.frame_len)
+        .max()
+        .unwrap_or(0);
+    let min_budget_slack = details
+        .iter()
+        .map(|selection| {
+            selection
+                .frame_capacity_bytes
+                .saturating_sub(selection.frame_len)
+        })
+        .min()
+        .unwrap_or(0);
+    format!(
+        "frames={frames}, min_step={min_step}, max_step={max_step}, max_frame_len={max_frame_len}, min_budget_slack={min_budget_slack}"
+    )
 }
 
 struct AacStandardDiagnosticCandidate {
@@ -2469,6 +4136,20 @@ struct AacStandardDiagnosticCandidate {
     selected: sonare_codec::AacPcmFrameStepSelection,
     encoded: Vec<u8>,
     quality: LossyOraclePcmQuality,
+}
+
+struct AacStandardHighLevelCandidate {
+    global_gain: u8,
+    max_frame_len: usize,
+    quality: LossyOraclePcmQuality,
+}
+
+struct AacStandardSelectedHighLevelCandidate {
+    global_gain: u8,
+    magnitude_bias: i16,
+    frame_details: Vec<sonare_codec::AacPcmFrameStepSelection>,
+    adts_quality: LossyOraclePcmQuality,
+    m4a_quality: LossyOraclePcmQuality,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2585,6 +4266,59 @@ fn aac_section_diagnostic_summary(
     )
 }
 
+fn aac_spectral_section_diagnostic_summary(
+    label: &str,
+    sections: &[sonare_codec::AacSpectralSection],
+    quantized: &[i32],
+    section_bits: usize,
+    spectral_bits: usize,
+    packed_bits: usize,
+) -> String {
+    let mut zero_sections = 0usize;
+    let mut quad_sections = 0usize;
+    let mut signed_pair_sections = 0usize;
+    let mut unsigned_pair_sections = 0usize;
+    let mut escape_sections = 0usize;
+    let mut max_abs = 0i32;
+    let mut max_nonzero_section_width = 0usize;
+    for section in sections {
+        let width = section.end.saturating_sub(section.start);
+        let section_max = quantized
+            .get(section.start..section.end)
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|coeff| coeff.checked_abs())
+            .max()
+            .unwrap_or(0);
+        max_abs = max_abs.max(section_max);
+        if section.codebook_id != 0 {
+            max_nonzero_section_width = max_nonzero_section_width.max(width);
+        }
+        match section.codebook_id {
+            0 => zero_sections += 1,
+            1..=4 => quad_sections += 1,
+            5 | 6 => signed_pair_sections += 1,
+            7..=10 => unsigned_pair_sections += 1,
+            11 => escape_sections += 1,
+            _ => {}
+        }
+    }
+    format!(
+        "{label}: sections={}, zero={}, quad={}, signed_pairs={}, unsigned_pairs={}, escape={}, max_abs={}, max_nonzero_width={}, section_bits={}, spectral_bits={}, packed_bits={}",
+        sections.len(),
+        zero_sections,
+        quad_sections,
+        signed_pair_sections,
+        unsigned_pair_sections,
+        escape_sections,
+        max_abs,
+        max_nonzero_section_width,
+        section_bits,
+        spectral_bits,
+        packed_bits
+    )
+}
+
 fn verify_production_lossy_oracle_acceptance(
     ffmpeg: OsString,
     artifacts: &[(
@@ -2627,14 +4361,40 @@ fn verify_production_lossy_oracle_acceptance(
         .map_err(|err| format!("{label} production oracle PCM decode failed: {err}"))?;
         let quality = validate_lossy_oracle_pcm_quality(&expected_pcm.samples, &decoded)
             .map_err(|err| format!("{label} production oracle PCM quality failed: {err}"))?;
+        let min_correlation = production_lossy_min_correlation(*kind, expected_pcm.channels)?;
+        if quality.best_correlation < min_correlation {
+            return Err(format!(
+                "{label} production oracle PCM quality regressed below floor {min_correlation:.3}: decoded_rms={:.4}, best_correlation={:.3}",
+                quality.decoded_rms, quality.best_correlation
+            ));
+        }
         eprintln!(
-            "{label} production oracle PCM quality: decoded_rms={:.4}, best_correlation={:.3}",
+            "{label} production oracle PCM quality: decoded_rms={:.4}, best_correlation={:.3}, min_correlation={min_correlation:.3}",
             quality.decoded_rms, quality.best_correlation
         );
     }
 
     fs::remove_dir_all(&out_dir)
         .map_err(|err| format!("failed to remove {}: {err}", out_dir.display()))
+}
+
+fn production_lossy_min_correlation(
+    kind: ProductionArtifactKind,
+    channels: u16,
+) -> Result<f64, String> {
+    match (kind, channels) {
+        (ProductionArtifactKind::Mp3, 1) => Ok(MP3_PRODUCTION_MONO_MIN_CORRELATION),
+        (ProductionArtifactKind::Mp3, 2) => Ok(MP3_PRODUCTION_STEREO_MIN_CORRELATION),
+        (ProductionArtifactKind::Aac | ProductionArtifactKind::M4a, 1 | 2) => {
+            Ok(AAC_PRODUCTION_MIN_CORRELATION)
+        }
+        (ProductionArtifactKind::Mp3, _) => {
+            Err("MP3 production oracle floor supports mono/stereo only".to_owned())
+        }
+        (ProductionArtifactKind::Aac | ProductionArtifactKind::M4a, _) => {
+            Err("AAC-LC production oracle floor supports mono/stereo only".to_owned())
+        }
+    }
 }
 
 fn verify_mp3_default_production_budget(
@@ -2646,7 +4406,246 @@ fn verify_mp3_default_production_budget(
     if !matches!(kind, ProductionArtifactKind::Mp3) {
         return Ok(());
     }
-    verify_mp3_cbr_bitrate_budget(label, 128, expected_pcm, bytes)
+    verify_mp3_cbr_bitrate_budget(label, 128, expected_pcm, bytes)?;
+    verify_mp3_production_reservoir(label, expected_pcm, bytes)
+}
+
+fn verify_mp3_production_reservoir(
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let reservoir_details =
+        sonare_codec::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            expected_pcm,
+            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| {
+            format!("{label} MP3 perceptual reservoir detail selection failed: {err}")
+        })?;
+
+    let mut offset = 0usize;
+    let mut frame_count = 0usize;
+    let mut max_main_data_begin = 0u32;
+    while offset < bytes.len() {
+        let header = sonare_codec::FrameHeader::parse(&bytes[offset..])
+            .map_err(|err| format!("{label} MP3 reservoir check failed: {err}"))?;
+        let Some(detail) = reservoir_details.get(frame_count) else {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: encoded stream has more frames than selector details"
+            ));
+        };
+        let borrowed_budget_bits = detail
+            .frame_capacity_bytes
+            .checked_add(detail.main_data_begin)
+            .and_then(|bytes| bytes.checked_mul(8))
+            .ok_or_else(|| format!("{label} MP3 reservoir detail budget overflows"))?;
+        if detail.payload_bit_len > borrowed_budget_bits {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: selector detail frame {frame_count} payload_bits={} exceeds borrowed budget {borrowed_budget_bits}",
+                detail.payload_bit_len
+            ));
+        }
+        let side_info_offset = offset
+            .checked_add(4)
+            .ok_or_else(|| format!("{label} MP3 reservoir check offset overflows"))?;
+        if side_info_offset + 1 >= bytes.len() {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: frame side-info extends past stream length {}",
+                bytes.len()
+            ));
+        }
+        let main_data_begin = (u32::from(bytes[side_info_offset]) << 1)
+            | (u32::from(bytes[side_info_offset + 1]) >> 7);
+        if detail.main_data_begin != main_data_begin as usize {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: frame {frame_count} side-info main_data_begin={main_data_begin} does not match selector detail {}",
+                detail.main_data_begin
+            ));
+        }
+        max_main_data_begin = max_main_data_begin.max(main_data_begin);
+        offset = offset
+            .checked_add(header.frame_len())
+            .ok_or_else(|| format!("{label} MP3 reservoir check frame length overflows"))?;
+        frame_count += 1;
+    }
+    if frame_count != reservoir_details.len() {
+        return Err(format!(
+            "{label} MP3 reservoir check failed: encoded frame_count={frame_count} does not match selector detail count {}",
+            reservoir_details.len()
+        ));
+    }
+    if max_main_data_begin == 0 {
+        return Err(format!(
+            "{label} MP3 reservoir check failed: production stream never used main_data_begin"
+        ));
+    }
+    let granules_per_frame = if expected_pcm.channels == 1 {
+        2_usize
+    } else {
+        4_usize
+    };
+    for (frame_index, detail) in reservoir_details.iter().enumerate() {
+        if detail.perceptual_granules + detail.calibrated_granules != granules_per_frame {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: frame {frame_index} granule telemetry is inconsistent: perceptual={}, calibrated={}, expected={granules_per_frame}",
+                detail.perceptual_granules, detail.calibrated_granules
+            ));
+        }
+        if detail.quality_guard_compared_granules != 0
+            || detail.quality_guard_distortion_delta != 0.0
+        {
+            return Err(format!(
+                "{label} MP3 reservoir check failed: production unexpectedly reported quality guard telemetry on frame {frame_index}"
+            ));
+        }
+    }
+    let max_reservoir_after = reservoir_details
+        .iter()
+        .map(|detail| detail.reservoir_after)
+        .max()
+        .unwrap_or(0);
+    let min_step = reservoir_details
+        .iter()
+        .map(|detail| detail.step)
+        .fold(f32::INFINITY, f32::min);
+    let max_payload_bits = reservoir_details
+        .iter()
+        .map(|detail| detail.payload_bit_len)
+        .max()
+        .unwrap_or(0);
+    let perceptual_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.perceptual_granules)
+        .sum::<usize>();
+    let calibrated_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.calibrated_granules)
+        .sum::<usize>();
+    let quality_guard_compared_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.quality_guard_compared_granules)
+        .sum::<usize>();
+    let quality_guard_distortion_delta = reservoir_details
+        .iter()
+        .map(|detail| detail.quality_guard_distortion_delta)
+        .sum::<f64>();
+    eprintln!(
+        "{label} MP3 production reservoir: min_step={min_step}, max_payload_bits={max_payload_bits}, max_main_data_begin={max_main_data_begin}, max_reservoir_after={max_reservoir_after}, perceptual_granules={perceptual_granules}, calibrated_granules={calibrated_granules}, quality_guard_compared_granules={quality_guard_compared_granules}, quality_guard_distortion_delta={quality_guard_distortion_delta:.9e}"
+    );
+    Ok(())
+}
+
+fn verify_mp3_perceptual_reservoir(
+    label: &str,
+    expected_pcm: &sonare_codec::AudioBuffer,
+    bytes: &[u8],
+) -> Result<(), String> {
+    let reservoir_details =
+        sonare_codec::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            expected_pcm,
+            MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES,
+            128,
+            false,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| {
+            format!("{label} MP3 perceptual reservoir detail selection failed: {err}")
+        })?;
+
+    let mut offset = 0usize;
+    let mut frame_count = 0usize;
+    let mut max_main_data_begin = 0u32;
+    while offset < bytes.len() {
+        let header = sonare_codec::FrameHeader::parse(&bytes[offset..])
+            .map_err(|err| format!("{label} MP3 perceptual reservoir check failed: {err}"))?;
+        let Some(detail) = reservoir_details.get(frame_count) else {
+            return Err(format!(
+                "{label} MP3 perceptual reservoir check failed: encoded stream has more frames than selector details"
+            ));
+        };
+        let borrowed_budget_bits = detail
+            .frame_capacity_bytes
+            .checked_add(detail.main_data_begin)
+            .and_then(|bytes| bytes.checked_mul(8))
+            .ok_or_else(|| format!("{label} MP3 perceptual reservoir detail budget overflows"))?;
+        if detail.payload_bit_len > borrowed_budget_bits {
+            return Err(format!(
+                "{label} MP3 perceptual reservoir check failed: selector detail frame {frame_count} payload_bits={} exceeds borrowed budget {borrowed_budget_bits}",
+                detail.payload_bit_len
+            ));
+        }
+        let side_info_offset = offset
+            .checked_add(4)
+            .ok_or_else(|| format!("{label} MP3 perceptual reservoir check offset overflows"))?;
+        if side_info_offset + 1 >= bytes.len() {
+            return Err(format!(
+                "{label} MP3 perceptual reservoir check failed: frame side-info extends past stream length {}",
+                bytes.len()
+            ));
+        }
+        let main_data_begin = (u32::from(bytes[side_info_offset]) << 1)
+            | (u32::from(bytes[side_info_offset + 1]) >> 7);
+        if detail.main_data_begin != main_data_begin as usize {
+            return Err(format!(
+                "{label} MP3 perceptual reservoir check failed: frame {frame_count} side-info main_data_begin={main_data_begin} does not match selector detail {}",
+                detail.main_data_begin
+            ));
+        }
+        max_main_data_begin = max_main_data_begin.max(main_data_begin);
+        offset = offset.checked_add(header.frame_len()).ok_or_else(|| {
+            format!("{label} MP3 perceptual reservoir check frame length overflows")
+        })?;
+        frame_count += 1;
+    }
+    if frame_count != reservoir_details.len() {
+        return Err(format!(
+            "{label} MP3 perceptual reservoir check failed: encoded frame_count={frame_count} does not match selector detail count {}",
+            reservoir_details.len()
+        ));
+    }
+    if max_main_data_begin == 0 {
+        return Err(format!(
+            "{label} MP3 perceptual reservoir check failed: stream never used main_data_begin"
+        ));
+    }
+    let max_reservoir_after = reservoir_details
+        .iter()
+        .map(|detail| detail.reservoir_after)
+        .max()
+        .unwrap_or(0);
+    let min_step = reservoir_details
+        .iter()
+        .map(|detail| detail.step)
+        .fold(f32::INFINITY, f32::min);
+    let max_payload_bits = reservoir_details
+        .iter()
+        .map(|detail| detail.payload_bit_len)
+        .max()
+        .unwrap_or(0);
+    let perceptual_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.perceptual_granules)
+        .sum::<usize>();
+    let calibrated_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.calibrated_granules)
+        .sum::<usize>();
+    let quality_guard_compared_granules = reservoir_details
+        .iter()
+        .map(|detail| detail.quality_guard_compared_granules)
+        .sum::<usize>();
+    let quality_guard_distortion_delta = reservoir_details
+        .iter()
+        .map(|detail| detail.quality_guard_distortion_delta)
+        .sum::<f64>();
+    eprintln!(
+        "{label} MP3 perceptual reservoir: min_step={min_step}, max_payload_bits={max_payload_bits}, max_main_data_begin={max_main_data_begin}, max_reservoir_after={max_reservoir_after}, perceptual_granules={perceptual_granules}, calibrated_granules={calibrated_granules}, quality_guard_compared_granules={quality_guard_compared_granules}, quality_guard_distortion_delta={quality_guard_distortion_delta:.9e}"
+    );
+    Ok(())
 }
 
 fn verify_mp3_cbr_bitrate_budget(
@@ -2759,11 +4758,27 @@ fn verify_aac_default_production_budget(
     .map_err(|err| format!("{label} production AAC frame budget failed: {err}"))?;
     let max_frame_len = max_adts_frame_len(&adts)
         .map_err(|err| format!("{label} production ADTS frame budget failed: {err}"))?;
+    let frame_details = sonare_codec::aac_selected_scale_factor_frame_details_with_bitrate(
+        expected_pcm,
+        default_bitrate,
+    )
+    .map_err(|err| format!("{label} production AAC frame details failed: {err}"))?;
+    let selector_max_frame_len = frame_details
+        .iter()
+        .map(|selection| selection.frame_len)
+        .max()
+        .unwrap_or(0);
+    if selector_max_frame_len != max_frame_len {
+        return Err(format!(
+            "{label} production AAC selector detail mismatch: selector_max_frame_len={selector_max_frame_len}, encoded_max_frame_len={max_frame_len}"
+        ));
+    }
 
     validate_adts_frame_budget(label, max_frame_len, max_budget, default_bitrate)?;
 
     eprintln!(
-        "{label} production ADTS frame budget: max_frame_len={max_frame_len}, default_budget={max_budget}, default_bitrate_bps={default_bitrate}"
+        "{label} production ADTS frame budget: max_frame_len={max_frame_len}, default_budget={max_budget}, default_bitrate_bps={default_bitrate}, {}",
+        aac_step_selection_summary(&frame_details)
     );
     Ok(())
 }
@@ -3488,23 +5503,55 @@ try {
     "encode_mp3",
     "encode_mp3_with_bitrate",
     "encode_mp3_cbr_with_bitrate",
+    "encode_mp3_perceptual_active_cbr_with_bitrate",
+    "encode_mp3_perceptual_reservoir_with_bitrate",
+    "encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate",
+    "mp3_reservoir_frame_details_with_bitrate",
+    "mp3_perceptual_reservoir_frame_details_with_bitrate",
+    "mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate",
     "encode_aac",
     "encode_aac_with_bitrate",
     "encode_aac_with_selected_scale_factors_and_bitrate",
+    "encode_aac_with_standard_spectral_offsets_and_bitrate",
+    "encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate",
     "encode_m4a",
     "encode_m4a_with_bitrate",
     "encode_m4a_with_selected_scale_factors_and_bitrate",
+    "encode_m4a_with_standard_spectral_offsets_and_bitrate",
+    "encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate",
     "demux_m4a_as_aac_adts",
     "aac_lc_adts_max_frame_len_for_bitrate",
     "aac_lc_default_production_bitrate_bps",
     "aac_unsigned_pairs7_unit_magnitude_table",
     "aac_unsigned_pairs7_table",
+    "aac_signed_pairs5_table",
+    "aac_signed_pairs6_table",
+    "aac_signed_quads1_table",
+    "aac_signed_quads2_table",
     "aac_unsigned_pairs8_table",
     "aac_unsigned_pairs9_table",
     "aac_unsigned_pairs10_table",
+    "aac_unsigned_quads3_table",
+    "aac_unsigned_quads4_table",
     "aac_escape_table",
     "aac_scale_factor_delta_table",
     "aac_codebook6_unit_section_plan",
+    "aac_quad_unit_section_plan",
+    "aac_mixed_unit_section_plan",
+    "aac_mixed_unit_payload_bit_lengths",
+    "aac_standard_unit_section_plan",
+    "aac_standard_offsets_section_plan",
+    "aac_standard_escape_payload_bit_lengths",
+    "aac_standard_mixed_payload_bit_lengths",
+    "aac_standard_mixed_offsets_payload_bit_lengths",
+    "encode_aac_standard_mono_offsets_with_step",
+    "encode_aac_standard_mono_offsets_with_bitrate",
+    "aac_standard_mono_offsets_bitrate_frame_details",
+    "encode_aac_standard_stereo_offsets_with_step",
+    "encode_aac_standard_stereo_offsets_with_bitrate",
+    "aac_standard_stereo_offsets_bitrate_frame_details",
+    "aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate",
+    "aac_selected_scale_factor_frame_details_with_bitrate",
     "mp3_layer3_main_data_capacity_bytes",
     "mp3_layer3_main_data_capacity_bits",
   ];
@@ -3561,6 +5608,20 @@ function mp3FrameInfo(stream) {
   return { bitrateKbps, sampleRate, channels, frameLen };
 }
 
+function mp3MainDataBegins(stream) {
+  const begins = [];
+  let offset = 0;
+  while (offset < stream.length) {
+    const info = mp3FrameInfo(stream.subarray(offset));
+    begins.push((stream[offset + 4] << 1) | (stream[offset + 5] >> 7));
+    offset += info.frameLen;
+  }
+  if (offset !== stream.length) {
+    throw new Error("npm MP3 helper returned non-tiling frames");
+  }
+  return begins;
+}
+
 const selectedAac10k = glue.encode_aac_with_selected_scale_factors_and_bitrate(44100, 1, new Float32Array(2048), 10000);
 if (glue.aac_lc_default_production_bitrate_bps(1) !== 128000 || glue.aac_lc_default_production_bitrate_bps(2) !== 256000) {
   throw new Error("npm AAC default production bitrate helper returned unexpected values");
@@ -3577,10 +5638,138 @@ if (selectedM4aAdts.length !== selectedAac10k.length || !selectedM4aAdts.every((
   throw new Error("npm selected-scale-factor M4A bitrate helper did not mux the expected ADTS");
 }
 
+const signedPairs5 = Array.from(glue.aac_signed_pairs5_table());
+if (signedPairs5.length !== 324 || JSON.stringify(signedPairs5.slice(0, 4)) !== JSON.stringify([-4, -4, 0x1fff, 13]) || JSON.stringify(signedPairs5.slice(160, 164)) !== JSON.stringify([0, 0, 0, 1]) || JSON.stringify(signedPairs5.slice(-4)) !== JSON.stringify([4, 4, 0x1ffe, 13])) {
+  throw new Error("npm AAC signed-pairs codebook 5 helper returned unexpected entries");
+}
+const signedPairs6 = Array.from(glue.aac_signed_pairs6_table());
+if (signedPairs6.length !== 324 || JSON.stringify(signedPairs6.slice(0, 4)) !== JSON.stringify([-4, -4, 0x7fe, 11]) || JSON.stringify(signedPairs6.slice(160, 164)) !== JSON.stringify([0, 0, 0, 4]) || JSON.stringify(signedPairs6.slice(-4)) !== JSON.stringify([4, 4, 0x7fc, 11])) {
+  throw new Error("npm AAC signed-pairs codebook 6 helper returned unexpected entries");
+}
+const signedQuads1 = Array.from(glue.aac_signed_quads1_table());
+if (signedQuads1.length !== 486 || JSON.stringify(signedQuads1.slice(0, 6)) !== JSON.stringify([-1, -1, -1, -1, 0x7f8, 11]) || JSON.stringify(signedQuads1.slice(240, 246)) !== JSON.stringify([0, 0, 0, 0, 0, 1]) || JSON.stringify(signedQuads1.slice(-6)) !== JSON.stringify([1, 1, 1, 1, 0x7f4, 11])) {
+  throw new Error("npm AAC signed-quad codebook 1 helper returned unexpected entries");
+}
+const signedQuads2 = Array.from(glue.aac_signed_quads2_table());
+if (signedQuads2.length !== 486 || JSON.stringify(signedQuads2.slice(0, 6)) !== JSON.stringify([-1, -1, -1, -1, 0x1f3, 9]) || JSON.stringify(signedQuads2.slice(240, 246)) !== JSON.stringify([0, 0, 0, 0, 0, 3]) || JSON.stringify(signedQuads2.slice(-6)) !== JSON.stringify([1, 1, 1, 1, 0x1f6, 9])) {
+  throw new Error("npm AAC signed-quad codebook 2 helper returned unexpected entries");
+}
+const quads3 = Array.from(glue.aac_unsigned_quads3_table());
+if (quads3.length !== 486 || JSON.stringify(quads3.slice(0, 6)) !== JSON.stringify([0, 0, 0, 0, 0, 1]) || JSON.stringify(quads3.slice(240, 246)) !== JSON.stringify([1, 1, 1, 1, 0x74, 7]) || JSON.stringify(quads3.slice(-6)) !== JSON.stringify([2, 2, 2, 2, 0x7ffa, 15])) {
+  throw new Error("npm AAC unsigned-quad codebook 3 helper returned unexpected entries");
+}
+const quads4 = Array.from(glue.aac_unsigned_quads4_table());
+if (quads4.length !== 486 || JSON.stringify(quads4.slice(0, 6)) !== JSON.stringify([0, 0, 0, 0, 0x7, 4]) || JSON.stringify(quads4.slice(240, 246)) !== JSON.stringify([1, 1, 1, 1, 0, 4]) || JSON.stringify(quads4.slice(-6)) !== JSON.stringify([2, 2, 2, 2, 0x7fc, 11])) {
+  throw new Error("npm AAC unsigned-quad codebook 4 helper returned unexpected entries");
+}
+
 const sections = Array.from(glue.aac_codebook6_unit_section_plan(new Int32Array([1, -1, 0, 0]), 2));
 const expected = [0, 2, 6, 2, 4, 0];
 if (JSON.stringify(sections) !== JSON.stringify(expected)) {
   throw new Error(` + "`npm AAC codebook 6 section planner returned ${JSON.stringify(sections)}`" + `);
+}
+const quadSections = Array.from(glue.aac_quad_unit_section_plan(new Int32Array([1, -1, 0, 1, 0, 1, -1, 0, 0, 0, 0, 0]), 4));
+const expectedQuadSections = [0, 8, 3, 8, 12, 0];
+if (JSON.stringify(quadSections) !== JSON.stringify(expectedQuadSections)) {
+  throw new Error(` + "`npm AAC quad section planner returned ${JSON.stringify(quadSections)}`" + `);
+}
+const mixedSections = Array.from(glue.aac_mixed_unit_section_plan(new Int32Array([1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0]), 4));
+const expectedMixedSections = [0, 4, 3, 4, 8, 6, 8, 12, 0];
+if (JSON.stringify(mixedSections) !== JSON.stringify(expectedMixedSections)) {
+  throw new Error(` + "`npm AAC mixed section planner returned ${JSON.stringify(mixedSections)}`" + `);
+}
+const mixedBitLengths = Array.from(glue.aac_mixed_unit_payload_bit_lengths(new Int32Array([1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0]), 4));
+const expectedMixedBitLengths = [27, 11, 38, 29, 11, 40];
+if (JSON.stringify(mixedBitLengths) !== JSON.stringify(expectedMixedBitLengths)) {
+  throw new Error(` + "`npm AAC mixed payload bit lengths returned ${JSON.stringify(mixedBitLengths)}`" + `);
+}
+const standardSections = Array.from(glue.aac_standard_unit_section_plan(new Int32Array([1, -1, 17, 0]), 2));
+const expectedStandardSections = [0, 2, 6, 2, 4, 11];
+if (JSON.stringify(standardSections) !== JSON.stringify(expectedStandardSections)) {
+  throw new Error(` + "`npm AAC standard section planner returned ${JSON.stringify(standardSections)}`" + `);
+}
+const standardSignedPairs5Section = Array.from(glue.aac_standard_unit_section_plan(new Int32Array([0, 1]), 2));
+if (JSON.stringify(standardSignedPairs5Section) !== JSON.stringify([0, 2, 5])) {
+  throw new Error(` + "`npm AAC standard signed-pairs codebook 5 planner returned ${JSON.stringify(standardSignedPairs5Section)}`" + `);
+}
+const standardMixedSections = Array.from(glue.aac_standard_unit_section_plan(new Int32Array([1, -1, 0, 1, 17, 0, 0, 0]), 4));
+const expectedStandardMixedSections = [0, 4, 4, 4, 8, 11];
+if (JSON.stringify(standardMixedSections) !== JSON.stringify(expectedStandardMixedSections)) {
+  throw new Error(` + "`npm AAC standard mixed section planner returned ${JSON.stringify(standardMixedSections)}`" + `);
+}
+const standardMixedOffsetsSections = Array.from(glue.aac_standard_offsets_section_plan(new Int32Array([1, -1, 0, 1, 17, 0, 0, 0]), new Uint32Array([0, 4, 8])));
+if (JSON.stringify(standardMixedOffsetsSections) !== JSON.stringify(expectedStandardMixedSections)) {
+  throw new Error(` + "`npm AAC standard mixed offsets section planner returned ${JSON.stringify(standardMixedOffsetsSections)}`" + `);
+}
+const standardEscapeBitLengths = Array.from(glue.aac_standard_escape_payload_bit_lengths());
+const expectedStandardEscapeBitLengths = [9, 15, 24];
+if (JSON.stringify(standardEscapeBitLengths) !== JSON.stringify(expectedStandardEscapeBitLengths)) {
+  throw new Error(` + "`npm AAC standard escape payload bit lengths returned ${JSON.stringify(standardEscapeBitLengths)}`" + `);
+}
+const standardMixedBitLengths = Array.from(glue.aac_standard_mixed_payload_bit_lengths(new Int32Array([1, -1, 0, 1, 17, 0, 0, 0]), 4));
+const expectedStandardMixedBitLengths = [18, 26, 44, 20, 26, 46];
+if (JSON.stringify(standardMixedBitLengths) !== JSON.stringify(expectedStandardMixedBitLengths)) {
+  throw new Error(` + "`npm AAC standard mixed payload bit lengths returned ${JSON.stringify(standardMixedBitLengths)}`" + `);
+}
+const standardMixedOffsetsBitLengths = Array.from(glue.aac_standard_mixed_offsets_payload_bit_lengths(new Int32Array([1, -1, 0, 1, 17, 0, 0, 0]), new Uint32Array([0, 4, 8])));
+if (JSON.stringify(standardMixedOffsetsBitLengths) !== JSON.stringify(expectedStandardMixedBitLengths)) {
+  throw new Error(` + "`npm AAC standard mixed offsets payload bit lengths returned ${JSON.stringify(standardMixedOffsetsBitLengths)}`" + `);
+}
+const standardMonoAdts = glue.encode_aac_standard_mono_offsets_with_step(44100, new Float32Array(2048), 20, 128);
+if (!(standardMonoAdts instanceof Uint8Array) || standardMonoAdts[0] !== 0xff || standardMonoAdts[1] !== 0xf1 || maxAdtsFrameLen(standardMonoAdts) > 16) {
+  throw new Error("npm AAC standard mono offsets stream helper returned unexpected ADTS");
+}
+const standardMonoBitrateAdts = glue.encode_aac_standard_mono_offsets_with_bitrate(44100, new Float32Array(2048), 128000, 128);
+if (!(standardMonoBitrateAdts instanceof Uint8Array) || standardMonoBitrateAdts[0] !== 0xff || standardMonoBitrateAdts[1] !== 0xf1 || maxAdtsFrameLen(standardMonoBitrateAdts) > 372) {
+  throw new Error("npm AAC standard mono offsets bitrate stream helper returned unexpected ADTS");
+}
+const standardGenericAdts = glue.encode_aac_with_standard_spectral_offsets_and_bitrate(44100, 1, new Float32Array(2048), 128000, 128);
+if (!(standardGenericAdts instanceof Uint8Array) || standardGenericAdts[0] !== 0xff || standardGenericAdts[1] !== 0xf1 || maxAdtsFrameLen(standardGenericAdts) > 372) {
+  throw new Error("npm AAC standard spectral-offset bitrate helper returned unexpected ADTS");
+}
+const standardGenericM4a = glue.encode_m4a_with_standard_spectral_offsets_and_bitrate(44100, 1, new Float32Array(2048), 128000, 128);
+if (!(standardGenericM4a instanceof Uint8Array) || String.fromCharCode(...standardGenericM4a.slice(4, 8)) !== "ftyp") {
+  throw new Error("npm M4A standard spectral-offset bitrate helper returned unexpected container");
+}
+const standardSelectedGenericAdts = glue.encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(44100, 1, new Float32Array(2048), 128000, 128, 16);
+if (!(standardSelectedGenericAdts instanceof Uint8Array) || standardSelectedGenericAdts[0] !== 0xff || standardSelectedGenericAdts[1] !== 0xf1 || maxAdtsFrameLen(standardSelectedGenericAdts) > 372) {
+  throw new Error("npm AAC standard selected spectral-offset bitrate helper returned unexpected ADTS");
+}
+const standardSelectedGenericM4a = glue.encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(44100, 1, new Float32Array(2048), 128000, 128, 16);
+if (!(standardSelectedGenericM4a instanceof Uint8Array) || String.fromCharCode(...standardSelectedGenericM4a.slice(4, 8)) !== "ftyp") {
+  throw new Error("npm M4A standard selected spectral-offset bitrate helper returned unexpected container");
+}
+const standardSelectedDetails = Array.from(glue.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(44100, 1, new Float32Array(2048), 128000, 128, 16));
+if (standardSelectedDetails.length !== 8 || standardSelectedDetails[0] !== 0 || standardSelectedDetails[4] !== 1 || standardSelectedDetails[2] > 372 || standardSelectedDetails[6] > 372) {
+  throw new Error(` + "`npm AAC standard selected bitrate details returned ${JSON.stringify(standardSelectedDetails)}`" + `);
+}
+const productionSelectedDetails = Array.from(glue.aac_selected_scale_factor_frame_details_with_bitrate(44100, 1, new Float32Array(2048), 128000));
+if (productionSelectedDetails.length !== 8 || productionSelectedDetails[0] !== 0 || productionSelectedDetails[4] !== 1 || productionSelectedDetails[2] > 372 || productionSelectedDetails[6] > 372) {
+  throw new Error(` + "`npm AAC production selected bitrate details returned ${JSON.stringify(productionSelectedDetails)}`" + `);
+}
+const standardMonoBitrateDetails = Array.from(glue.aac_standard_mono_offsets_bitrate_frame_details(44100, new Float32Array(2048), 128000, 128));
+if (standardMonoBitrateDetails.length !== 8 || standardMonoBitrateDetails[0] !== 0 || standardMonoBitrateDetails[4] !== 1 || standardMonoBitrateDetails[2] > 372 || standardMonoBitrateDetails[6] > 372) {
+  throw new Error(` + "`npm AAC standard mono offsets bitrate details returned ${JSON.stringify(standardMonoBitrateDetails)}`" + `);
+}
+const standardStereoAdts = glue.encode_aac_standard_stereo_offsets_with_step(44100, new Float32Array(4096), 20, 128);
+if (!(standardStereoAdts instanceof Uint8Array) || standardStereoAdts[0] !== 0xff || standardStereoAdts[1] !== 0xf1 || maxAdtsFrameLen(standardStereoAdts) > 28) {
+  throw new Error("npm AAC standard stereo offsets stream helper returned unexpected ADTS");
+}
+const standardStereoBitrateAdts = glue.encode_aac_standard_stereo_offsets_with_bitrate(44100, new Float32Array(4096), 256000, 128);
+if (!(standardStereoBitrateAdts instanceof Uint8Array) || standardStereoBitrateAdts[0] !== 0xff || standardStereoBitrateAdts[1] !== 0xf1 || maxAdtsFrameLen(standardStereoBitrateAdts) > 744) {
+  throw new Error("npm AAC standard stereo offsets bitrate stream helper returned unexpected ADTS");
+}
+const standardStereoBitrateDetails = Array.from(glue.aac_standard_stereo_offsets_bitrate_frame_details(44100, new Float32Array(4096), 256000, 128));
+if (standardStereoBitrateDetails.length !== 8 || standardStereoBitrateDetails[0] !== 0 || standardStereoBitrateDetails[4] !== 1 || standardStereoBitrateDetails[2] > 744 || standardStereoBitrateDetails[6] > 744) {
+  throw new Error(` + "`npm AAC standard stereo offsets bitrate details returned ${JSON.stringify(standardStereoBitrateDetails)}`" + `);
+}
+const standardSelectedStereoDetails = Array.from(glue.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(44100, 2, new Float32Array(4096), 256000, 128, 16));
+if (standardSelectedStereoDetails.length !== 8 || standardSelectedStereoDetails[0] !== 0 || standardSelectedStereoDetails[4] !== 1 || standardSelectedStereoDetails[2] > 744 || standardSelectedStereoDetails[6] > 744) {
+  throw new Error(` + "`npm AAC standard selected stereo bitrate details returned ${JSON.stringify(standardSelectedStereoDetails)}`" + `);
+}
+const productionSelectedStereoDetails = Array.from(glue.aac_selected_scale_factor_frame_details_with_bitrate(44100, 2, new Float32Array(4096), 256000));
+if (productionSelectedStereoDetails.length !== 8 || productionSelectedStereoDetails[0] !== 0 || productionSelectedStereoDetails[4] !== 1 || productionSelectedStereoDetails[2] > 744 || productionSelectedStereoDetails[6] > 744) {
+  throw new Error(` + "`npm AAC production selected stereo bitrate details returned ${JSON.stringify(productionSelectedStereoDetails)}`" + `);
 }
 
 if (glue.mp3_layer3_main_data_capacity_bytes(44100, 1, 96, false, false) !== 292 ||
@@ -3602,6 +5791,143 @@ if (!(mp3Cbr128k instanceof Uint8Array) ||
     mp3CbrThird.frameLen !== 418 ||
     mp3Cbr128k.length !== 1253) {
   throw new Error("npm MP3 CBR bitrate helper returned an unexpected padding schedule");
+}
+const perceptualSamples = Float32Array.from({ length: 1152 * 3 }, (_, index) => Math.sin(index * 0.013) * 0.25);
+const mp3PerceptualCbr128k = glue.encode_mp3_perceptual_active_cbr_with_bitrate(44100, 1, perceptualSamples, 128, false);
+const mp3PerceptualFirst = mp3FrameInfo(mp3PerceptualCbr128k);
+const mp3PerceptualSecond = mp3FrameInfo(mp3PerceptualCbr128k.subarray(mp3PerceptualFirst.frameLen));
+const mp3PerceptualThird = mp3FrameInfo(mp3PerceptualCbr128k.subarray(mp3PerceptualFirst.frameLen + mp3PerceptualSecond.frameLen));
+if (!(mp3PerceptualCbr128k instanceof Uint8Array) ||
+    mp3PerceptualFirst.frameLen !== 417 ||
+    mp3PerceptualSecond.frameLen !== 418 ||
+    mp3PerceptualThird.frameLen !== 418 ||
+    mp3PerceptualCbr128k.length !== 1253) {
+  throw new Error("npm MP3 perceptual active CBR helper returned an unexpected padding schedule");
+}
+const reservoirSamples = Float32Array.from({ length: 1152 * 8 }, (_, index) => {
+  const frame = Math.floor(index / 1152);
+  const t = index % 1152;
+  return frame % 2 === 0
+    ? 0.3 * (Math.sin(t * 0.043) + Math.sin(t * 0.131) + Math.sin(t * 0.277) + Math.sin(t * 0.611))
+    : 0.02 * Math.sin(t * 0.05);
+});
+const reservoirStereoSamples = Float32Array.from({ length: 1152 * 8 * 2 }, (_, index) => {
+  const frame = Math.floor(index / (1152 * 2));
+  const t = Math.floor((index / 2) % 1152);
+  const right = index % 2 === 1;
+  if (frame % 2 !== 0) {
+    return (right ? 0.018 : 0.02) * Math.sin(t * (right ? 0.047 : 0.041));
+  }
+  return right
+    ? 0.24 * (Math.sin(t * 0.053) + Math.sin(t * 0.173) + Math.sin(t * 0.337))
+    : 0.28 * (Math.sin(t * 0.037) + Math.sin(t * 0.149) + Math.sin(t * 0.419));
+});
+function checkMp3ProductionReservoir(label, channels, samples) {
+  const detailWidth = 12;
+  const granulesPerFrame = channels === 1 ? 2 : 4;
+  const detailHelper = glue.mp3_perceptual_reservoir_frame_details_with_bitrate;
+  const reservoirDetails = Array.from(detailHelper(44100, channels, samples, 128, false));
+  if (reservoirDetails.length !== 8 * detailWidth || reservoirDetails[0] !== 0 || reservoirDetails[6] !== 0) {
+    throw new Error(` + "`npm ${label} MP3 reservoir detail helper returned malformed frame details`" + `);
+  }
+  let reservoirBorrowed = false;
+  for (let offset = 0; offset < reservoirDetails.length; offset += detailWidth) {
+    const payloadBits = reservoirDetails[offset + 2];
+    const frameLen = reservoirDetails[offset + 3];
+    const padding = reservoirDetails[offset + 4];
+    const capacityBytes = reservoirDetails[offset + 5];
+    const mainDataBegin = reservoirDetails[offset + 6];
+    const perceptualGranules = reservoirDetails[offset + 8];
+    const calibratedGranules = reservoirDetails[offset + 9];
+    const qualityGuardComparedGranules = reservoirDetails[offset + 10];
+    const qualityGuardDistortionDelta = reservoirDetails[offset + 11];
+    if (mainDataBegin > 0) {
+      reservoirBorrowed = true;
+    }
+    if (![417, 418].includes(frameLen) || (padding !== 0 && padding !== 1)) {
+      throw new Error(` + "`npm ${label} MP3 reservoir detail helper reported an unexpected CBR frame slot`" + `);
+    }
+    if (payloadBits > (capacityBytes + mainDataBegin) * 8) {
+      throw new Error(` + "`npm ${label} MP3 reservoir detail helper reported an over-budget frame`" + `);
+    }
+    if (perceptualGranules + calibratedGranules !== granulesPerFrame) {
+      throw new Error(` + "`npm ${label} MP3 reservoir detail helper reported inconsistent granule telemetry`" + `);
+    }
+    if (perceptualGranules !== granulesPerFrame || calibratedGranules !== 0) {
+      throw new Error(` + "`npm ${label} MP3 production reservoir did not report perceptual granules`" + `);
+    }
+    if (qualityGuardComparedGranules !== 0 || qualityGuardDistortionDelta !== 0) {
+      throw new Error(` + "`npm ${label} MP3 production reservoir unexpectedly reported quality guard telemetry`" + `);
+    }
+  }
+  if (!reservoirBorrowed) {
+    throw new Error(` + "`npm ${label} MP3 reservoir detail helper never reported main_data_begin borrowing`" + `);
+  }
+  const reservoirProduction = glue.encode_audio_production("mp3", 44100, channels, samples);
+  const perceptualProduction = glue.encode_mp3_perceptual_reservoir_with_bitrate(44100, channels, samples, 128, false);
+  if (Buffer.compare(Buffer.from(reservoirProduction), Buffer.from(perceptualProduction)) !== 0) {
+    throw new Error(` + "`npm ${label} MP3 production did not use the perceptual reservoir path`" + `);
+  }
+  const productionMainDataBegins = mp3MainDataBegins(reservoirProduction);
+  if (productionMainDataBegins.length * detailWidth !== reservoirDetails.length) {
+    throw new Error(` + "`npm ${label} MP3 production reservoir frame count did not match selector details`" + `);
+  }
+  for (let frame = 0; frame < productionMainDataBegins.length; frame += 1) {
+    if (productionMainDataBegins[frame] !== reservoirDetails[frame * detailWidth + 6]) {
+      throw new Error(` + "`npm ${label} MP3 production reservoir side-info did not match selector details`" + `);
+    }
+  }
+}
+checkMp3ProductionReservoir("mono", 1, reservoirSamples);
+checkMp3ProductionReservoir("stereo", 2, reservoirStereoSamples);
+const perceptualReservoirDetails = Array.from(glue.mp3_perceptual_reservoir_frame_details_with_bitrate(44100, 1, reservoirSamples, 128, false));
+const reservoirDetailWidth = 12;
+if (perceptualReservoirDetails.length !== 8 * reservoirDetailWidth || perceptualReservoirDetails[0] !== 0 || perceptualReservoirDetails[6] !== 0) {
+  throw new Error("npm MP3 perceptual reservoir detail helper returned malformed frame details");
+}
+let perceptualReservoirBorrowed = false;
+for (let offset = 0; offset < perceptualReservoirDetails.length; offset += reservoirDetailWidth) {
+  const payloadBits = perceptualReservoirDetails[offset + 2];
+  const frameLen = perceptualReservoirDetails[offset + 3];
+  const padding = perceptualReservoirDetails[offset + 4];
+  const capacityBytes = perceptualReservoirDetails[offset + 5];
+  const mainDataBegin = perceptualReservoirDetails[offset + 6];
+  const perceptualGranules = perceptualReservoirDetails[offset + 8];
+  const calibratedGranules = perceptualReservoirDetails[offset + 9];
+  const qualityGuardComparedGranules = perceptualReservoirDetails[offset + 10];
+  const qualityGuardDistortionDelta = perceptualReservoirDetails[offset + 11];
+  if (mainDataBegin > 0) {
+    perceptualReservoirBorrowed = true;
+  }
+  if (![417, 418].includes(frameLen) || (padding !== 0 && padding !== 1)) {
+    throw new Error("npm MP3 perceptual reservoir detail helper reported an unexpected CBR frame slot");
+  }
+  if (payloadBits > (capacityBytes + mainDataBegin) * 8) {
+    throw new Error("npm MP3 perceptual reservoir detail helper reported an over-budget frame");
+  }
+  if (perceptualGranules !== 2 || calibratedGranules !== 0) {
+    throw new Error("npm MP3 perceptual reservoir detail helper reported unexpected granule telemetry");
+  }
+  if (qualityGuardComparedGranules !== 0 || qualityGuardDistortionDelta !== 0) {
+    throw new Error("npm MP3 perceptual reservoir detail helper unexpectedly reported quality guard telemetry");
+  }
+}
+if (!perceptualReservoirBorrowed) {
+  throw new Error("npm MP3 perceptual reservoir detail helper never reported main_data_begin borrowing");
+}
+const perceptualReservoirMp3 = glue.encode_mp3_perceptual_reservoir_with_bitrate(44100, 1, reservoirSamples, 128, false);
+const perceptualReservoirProduction = glue.encode_audio_production("mp3", 44100, 1, reservoirSamples);
+if (Buffer.compare(Buffer.from(perceptualReservoirProduction), Buffer.from(perceptualReservoirMp3)) !== 0) {
+  throw new Error("npm MP3 mono production did not use the perceptual reservoir path");
+}
+const perceptualReservoirMainDataBegins = mp3MainDataBegins(perceptualReservoirMp3);
+if (perceptualReservoirMainDataBegins.length * reservoirDetailWidth !== perceptualReservoirDetails.length) {
+  throw new Error("npm MP3 perceptual reservoir frame count did not match selector details");
+}
+for (let frame = 0; frame < perceptualReservoirMainDataBegins.length; frame += 1) {
+  if (perceptualReservoirMainDataBegins[frame] !== perceptualReservoirDetails[frame * reservoirDetailWidth + 6]) {
+    throw new Error("npm MP3 perceptual reservoir side-info did not match selector details");
+  }
 }
 `;
   execFileSync(process.execPath, ["--input-type=module", "-e", smokeScript, path.join(tmp, "package")], {
@@ -3693,6 +6019,7 @@ fn run_python_wheel_output_check() -> Result<(), String> {
     let python = env::var_os("SONARE_PYTHON").unwrap_or_else(|| OsString::from("python"));
     let script = r#"
 import glob
+import math
 import os
 import subprocess
 import sys
@@ -3767,6 +6094,17 @@ with tempfile.TemporaryDirectory(prefix="sonare-codec-wheel-") as target:
         frame_len = (144 * bitrate_kbps * 1000 // sample_rate) + padding
         return bitrate_kbps, sample_rate, channels, frame_len
 
+    def mp3_main_data_begins(stream):
+        begins = []
+        offset = 0
+        while offset < len(stream):
+            _, _, _, frame_len = mp3_frame_info(stream[offset:])
+            begins.append((stream[offset + 4] << 1) | (stream[offset + 5] >> 7))
+            offset += frame_len
+        if offset != len(stream):
+            sys.exit("Python wheel MP3 helper returned non-tiling frames")
+        return begins
+
     if sonare_codec.aac_lc_adts_max_frame_len_for_bitrate(44100, 10000) != 30:
         sys.exit("Python wheel AAC bitrate budget helper returned an unexpected frame length")
     if sonare_codec.aac_lc_default_production_bitrate_bps(1) != 128000 or sonare_codec.aac_lc_default_production_bitrate_bps(2) != 256000:
@@ -3792,6 +6130,24 @@ with tempfile.TemporaryDirectory(prefix="sonare-codec-wheel-") as target:
     pairs7_table = sonare_codec.aac_unsigned_pairs7_table()
     if len(pairs7_table) != 256 or pairs7_table[:4] != [0, 0, 0, 1] or pairs7_table[36:40] != [1, 1, 12, 4] or pairs7_table[-4:] != [7, 7, 4095, 12]:
         sys.exit("Python wheel AAC full codebook 7 helper returned unexpected entries")
+    signed_pairs5 = sonare_codec.aac_signed_pairs5_table()
+    if len(signed_pairs5) != 324 or signed_pairs5[:4] != [-4, -4, 8191, 13] or signed_pairs5[160:164] != [0, 0, 0, 1] or signed_pairs5[-4:] != [4, 4, 8190, 13]:
+        sys.exit("Python wheel AAC signed-pairs codebook 5 helper returned unexpected entries")
+    signed_pairs6 = sonare_codec.aac_signed_pairs6_table()
+    if len(signed_pairs6) != 324 or signed_pairs6[:4] != [-4, -4, 2046, 11] or signed_pairs6[160:164] != [0, 0, 0, 4] or signed_pairs6[-4:] != [4, 4, 2044, 11]:
+        sys.exit("Python wheel AAC signed-pairs codebook 6 helper returned unexpected entries")
+    signed_quads1 = sonare_codec.aac_signed_quads1_table()
+    if len(signed_quads1) != 486 or signed_quads1[:6] != [-1, -1, -1, -1, 2040, 11] or signed_quads1[240:246] != [0, 0, 0, 0, 0, 1] or signed_quads1[-6:] != [1, 1, 1, 1, 2036, 11]:
+        sys.exit("Python wheel AAC signed-quad codebook 1 helper returned unexpected entries")
+    signed_quads2 = sonare_codec.aac_signed_quads2_table()
+    if len(signed_quads2) != 486 or signed_quads2[:6] != [-1, -1, -1, -1, 499, 9] or signed_quads2[240:246] != [0, 0, 0, 0, 0, 3] or signed_quads2[-6:] != [1, 1, 1, 1, 502, 9]:
+        sys.exit("Python wheel AAC signed-quad codebook 2 helper returned unexpected entries")
+    quads3 = sonare_codec.aac_unsigned_quads3_table()
+    if len(quads3) != 486 or quads3[:6] != [0, 0, 0, 0, 0, 1] or quads3[240:246] != [1, 1, 1, 1, 116, 7] or quads3[-6:] != [2, 2, 2, 2, 32762, 15]:
+        sys.exit("Python wheel AAC unsigned-quad codebook 3 helper returned unexpected entries")
+    quads4 = sonare_codec.aac_unsigned_quads4_table()
+    if len(quads4) != 486 or quads4[:6] != [0, 0, 0, 0, 7, 4] or quads4[240:246] != [1, 1, 1, 1, 0, 4] or quads4[-6:] != [2, 2, 2, 2, 2044, 11]:
+        sys.exit("Python wheel AAC unsigned-quad codebook 4 helper returned unexpected entries")
     pairs8_table = sonare_codec.aac_unsigned_pairs8_table()
     if len(pairs8_table) != 256 or pairs8_table[:4] != [0, 0, 14, 5] or pairs8_table[36:40] != [1, 1, 0, 3] or pairs8_table[-4:] != [7, 7, 1023, 10]:
         sys.exit("Python wheel AAC full codebook 8 helper returned unexpected entries")
@@ -3809,6 +6165,68 @@ with tempfile.TemporaryDirectory(prefix="sonare-codec-wheel-") as target:
         sys.exit("Python wheel AAC scale-factor delta helper returned unexpected entries")
     if sonare_codec.aac_codebook6_unit_section_plan([1, -1, 0, 0], 2) != [0, 2, 6, 2, 4, 0]:
         sys.exit("Python wheel AAC codebook 6 section planner returned unexpected sections")
+    if sonare_codec.aac_quad_unit_section_plan([1, -1, 0, 1, 0, 1, -1, 0, 0, 0, 0, 0], 4) != [0, 8, 3, 8, 12, 0]:
+        sys.exit("Python wheel AAC quad section planner returned unexpected sections")
+    if sonare_codec.aac_mixed_unit_section_plan([1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0], 4) != [0, 4, 3, 4, 8, 6, 8, 12, 0]:
+        sys.exit("Python wheel AAC mixed section planner returned unexpected sections")
+    if sonare_codec.aac_mixed_unit_payload_bit_lengths([1, -1, 0, 1, 1, -1, 1, -1, 0, 0, 0, 0], 4) != [27, 11, 38, 29, 11, 40]:
+        sys.exit("Python wheel AAC mixed payload bit lengths returned unexpected values")
+    if sonare_codec.aac_standard_unit_section_plan([1, -1, 17, 0], 2) != [0, 2, 6, 2, 4, 11]:
+        sys.exit("Python wheel AAC standard section planner returned unexpected sections")
+    if sonare_codec.aac_standard_unit_section_plan([0, 1], 2) != [0, 2, 5]:
+        sys.exit("Python wheel AAC standard signed-pairs codebook 5 planner returned unexpected sections")
+    if sonare_codec.aac_standard_unit_section_plan([1, -1, 0, 1, 17, 0, 0, 0], 4) != [0, 4, 4, 4, 8, 11]:
+        sys.exit("Python wheel AAC standard mixed section planner returned unexpected sections")
+    if sonare_codec.aac_standard_offsets_section_plan([1, -1, 0, 1, 17, 0, 0, 0], [0, 4, 8]) != [0, 4, 4, 4, 8, 11]:
+        sys.exit("Python wheel AAC standard mixed offsets section planner returned unexpected sections")
+    if sonare_codec.aac_standard_escape_payload_bit_lengths() != [9, 15, 24]:
+        sys.exit("Python wheel AAC standard escape payload bit lengths returned unexpected values")
+    if sonare_codec.aac_standard_mixed_payload_bit_lengths([1, -1, 0, 1, 17, 0, 0, 0], 4) != [18, 26, 44, 20, 26, 46]:
+        sys.exit("Python wheel AAC standard mixed payload bit lengths returned unexpected values")
+    if sonare_codec.aac_standard_mixed_offsets_payload_bit_lengths([1, -1, 0, 1, 17, 0, 0, 0], [0, 4, 8]) != [18, 26, 44, 20, 26, 46]:
+        sys.exit("Python wheel AAC standard mixed offsets payload bit lengths returned unexpected values")
+    standard_mono_adts = sonare_codec.encode_aac_standard_mono_offsets_with_step(44100, [0.0] * 2048, 20.0, 128)
+    if not isinstance(standard_mono_adts, bytes) or not standard_mono_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_mono_adts) > 16:
+        sys.exit("Python wheel AAC standard mono offsets stream helper returned unexpected ADTS")
+    standard_mono_bitrate_adts = sonare_codec.encode_aac_standard_mono_offsets_with_bitrate(44100, [0.0] * 2048, 128000, 128)
+    if not isinstance(standard_mono_bitrate_adts, bytes) or not standard_mono_bitrate_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_mono_bitrate_adts) > 372:
+        sys.exit("Python wheel AAC standard mono offsets bitrate stream helper returned unexpected ADTS")
+    standard_generic_adts = sonare_codec.encode_aac_with_standard_spectral_offsets_and_bitrate(44100, 1, [0.0] * 2048, 128000, 128)
+    if not isinstance(standard_generic_adts, bytes) or not standard_generic_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_generic_adts) > 372:
+        sys.exit("Python wheel AAC standard spectral-offset bitrate helper returned unexpected ADTS")
+    standard_generic_m4a = sonare_codec.encode_m4a_with_standard_spectral_offsets_and_bitrate(44100, 1, [0.0] * 2048, 128000, 128)
+    if not isinstance(standard_generic_m4a, bytes) or standard_generic_m4a[4:8] != b"ftyp":
+        sys.exit("Python wheel M4A standard spectral-offset bitrate helper returned unexpected container")
+    standard_selected_generic_adts = sonare_codec.encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(44100, 1, [0.0] * 2048, 128000, 128, 16)
+    if not isinstance(standard_selected_generic_adts, bytes) or not standard_selected_generic_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_selected_generic_adts) > 372:
+        sys.exit("Python wheel AAC standard selected spectral-offset bitrate helper returned unexpected ADTS")
+    standard_selected_generic_m4a = sonare_codec.encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(44100, 1, [0.0] * 2048, 128000, 128, 16)
+    if not isinstance(standard_selected_generic_m4a, bytes) or standard_selected_generic_m4a[4:8] != b"ftyp":
+        sys.exit("Python wheel M4A standard selected spectral-offset bitrate helper returned unexpected container")
+    standard_selected_details = sonare_codec.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(44100, 1, [0.0] * 2048, 128000, 128, 16)
+    if len(standard_selected_details) != 8 or standard_selected_details[0] != 0 or standard_selected_details[4] != 1 or standard_selected_details[2] > 372 or standard_selected_details[6] > 372:
+        sys.exit(f"Python wheel AAC standard selected bitrate details returned {standard_selected_details}")
+    production_selected_details = sonare_codec.aac_selected_scale_factor_frame_details_with_bitrate(44100, 1, [0.0] * 2048, 128000)
+    if len(production_selected_details) != 8 or production_selected_details[0] != 0 or production_selected_details[4] != 1 or production_selected_details[2] > 372 or production_selected_details[6] > 372:
+        sys.exit(f"Python wheel AAC production selected bitrate details returned {production_selected_details}")
+    standard_mono_bitrate_details = sonare_codec.aac_standard_mono_offsets_bitrate_frame_details(44100, [0.0] * 2048, 128000, 128)
+    if len(standard_mono_bitrate_details) != 8 or standard_mono_bitrate_details[0] != 0 or standard_mono_bitrate_details[4] != 1 or standard_mono_bitrate_details[2] > 372 or standard_mono_bitrate_details[6] > 372:
+        sys.exit(f"Python wheel AAC standard mono offsets bitrate details returned {standard_mono_bitrate_details}")
+    standard_stereo_adts = sonare_codec.encode_aac_standard_stereo_offsets_with_step(44100, [0.0] * 4096, 20.0, 128)
+    if not isinstance(standard_stereo_adts, bytes) or not standard_stereo_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_stereo_adts) > 28:
+        sys.exit("Python wheel AAC standard stereo offsets stream helper returned unexpected ADTS")
+    standard_stereo_bitrate_adts = sonare_codec.encode_aac_standard_stereo_offsets_with_bitrate(44100, [0.0] * 4096, 256000, 128)
+    if not isinstance(standard_stereo_bitrate_adts, bytes) or not standard_stereo_bitrate_adts.startswith(b"\xff\xf1") or max_adts_frame_len(standard_stereo_bitrate_adts) > 744:
+        sys.exit("Python wheel AAC standard stereo offsets bitrate stream helper returned unexpected ADTS")
+    standard_stereo_bitrate_details = sonare_codec.aac_standard_stereo_offsets_bitrate_frame_details(44100, [0.0] * 4096, 256000, 128)
+    if len(standard_stereo_bitrate_details) != 8 or standard_stereo_bitrate_details[0] != 0 or standard_stereo_bitrate_details[4] != 1 or standard_stereo_bitrate_details[2] > 744 or standard_stereo_bitrate_details[6] > 744:
+        sys.exit(f"Python wheel AAC standard stereo offsets bitrate details returned {standard_stereo_bitrate_details}")
+    standard_selected_stereo_details = sonare_codec.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(44100, 2, [0.0] * 4096, 256000, 128, 16)
+    if len(standard_selected_stereo_details) != 8 or standard_selected_stereo_details[0] != 0 or standard_selected_stereo_details[4] != 1 or standard_selected_stereo_details[2] > 744 or standard_selected_stereo_details[6] > 744:
+        sys.exit(f"Python wheel AAC standard selected stereo bitrate details returned {standard_selected_stereo_details}")
+    production_selected_stereo_details = sonare_codec.aac_selected_scale_factor_frame_details_with_bitrate(44100, 2, [0.0] * 4096, 256000)
+    if len(production_selected_stereo_details) != 8 or production_selected_stereo_details[0] != 0 or production_selected_stereo_details[4] != 1 or production_selected_stereo_details[2] > 744 or production_selected_stereo_details[6] > 744:
+        sys.exit(f"Python wheel AAC production selected stereo bitrate details returned {production_selected_stereo_details}")
     if sonare_codec.mp3_layer3_main_data_capacity_bytes(44100, 1, 128, False, False) != 396:
         sys.exit("Python wheel MP3 capacity byte helper returned an unexpected value")
     if sonare_codec.mp3_layer3_main_data_capacity_bits(44100, 1, 128, False, False) != 3168:
@@ -3832,6 +6250,119 @@ with tempfile.TemporaryDirectory(prefix="sonare-codec-wheel-") as target:
         or len(mp3_cbr_128k) != 1253
     ):
         sys.exit("Python wheel MP3 CBR bitrate helper returned an unexpected padding schedule")
+    perceptual_samples = [math.sin(index * 0.013) * 0.25 for index in range(1152 * 3)]
+    mp3_perceptual_cbr_128k = sonare_codec.encode_mp3_perceptual_active_cbr_with_bitrate(44100, 1, perceptual_samples, 128, False)
+    first_perceptual = mp3_frame_info(mp3_perceptual_cbr_128k)
+    second_perceptual = mp3_frame_info(mp3_perceptual_cbr_128k[first_perceptual[3]:])
+    third_perceptual = mp3_frame_info(mp3_perceptual_cbr_128k[first_perceptual[3] + second_perceptual[3]:])
+    if (
+        not isinstance(mp3_perceptual_cbr_128k, bytes)
+        or first_perceptual != (128, 44100, 1, 417)
+        or second_perceptual != (128, 44100, 1, 418)
+        or third_perceptual != (128, 44100, 1, 418)
+        or len(mp3_perceptual_cbr_128k) != 1253
+    ):
+        sys.exit("Python wheel MP3 perceptual active CBR helper returned an unexpected padding schedule")
+    reservoir_samples = []
+    for index in range(1152 * 8):
+        frame = index // 1152
+        t = index % 1152
+        if frame % 2 == 0:
+            reservoir_samples.append(0.3 * (math.sin(t * 0.043) + math.sin(t * 0.131) + math.sin(t * 0.277) + math.sin(t * 0.611)))
+        else:
+            reservoir_samples.append(0.02 * math.sin(t * 0.05))
+    reservoir_stereo_samples = []
+    for frame in range(8):
+        for t in range(1152):
+            if frame % 2 == 0:
+                reservoir_stereo_samples.append(0.28 * (math.sin(t * 0.037) + math.sin(t * 0.149) + math.sin(t * 0.419)))
+                reservoir_stereo_samples.append(0.24 * (math.sin(t * 0.053) + math.sin(t * 0.173) + math.sin(t * 0.337)))
+            else:
+                reservoir_stereo_samples.append(0.02 * math.sin(t * 0.041))
+                reservoir_stereo_samples.append(0.018 * math.sin(t * 0.047))
+
+    def check_mp3_production_reservoir(label, channels, samples):
+        detail_width = 12
+        granules_per_frame = 2 if channels == 1 else 4
+        detail_helper = sonare_codec.mp3_perceptual_reservoir_frame_details_with_bitrate
+        reservoir_details = detail_helper(44100, channels, samples, 128, False)
+        if len(reservoir_details) != 8 * detail_width or reservoir_details[0] != 0 or reservoir_details[6] != 0:
+            sys.exit(f"Python wheel {label} MP3 reservoir detail helper returned malformed frame details")
+        reservoir_borrowed = False
+        for offset in range(0, len(reservoir_details), detail_width):
+            payload_bits = reservoir_details[offset + 2]
+            frame_len = reservoir_details[offset + 3]
+            padding = reservoir_details[offset + 4]
+            capacity_bytes = reservoir_details[offset + 5]
+            main_data_begin = reservoir_details[offset + 6]
+            perceptual_granules = reservoir_details[offset + 8]
+            calibrated_granules = reservoir_details[offset + 9]
+            quality_guard_compared_granules = reservoir_details[offset + 10]
+            quality_guard_distortion_delta = reservoir_details[offset + 11]
+            if main_data_begin > 0:
+                reservoir_borrowed = True
+            if frame_len not in (417, 418) or padding not in (0, 1):
+                sys.exit(f"Python wheel {label} MP3 reservoir detail helper reported an unexpected CBR frame slot")
+            if payload_bits > (capacity_bytes + main_data_begin) * 8:
+                sys.exit(f"Python wheel {label} MP3 reservoir detail helper reported an over-budget frame")
+            if perceptual_granules + calibrated_granules != granules_per_frame:
+                sys.exit(f"Python wheel {label} MP3 reservoir detail helper reported inconsistent granule telemetry")
+            if perceptual_granules != granules_per_frame or calibrated_granules != 0:
+                sys.exit(f"Python wheel {label} MP3 production reservoir did not report perceptual granules")
+            if quality_guard_compared_granules != 0 or quality_guard_distortion_delta != 0:
+                sys.exit(f"Python wheel {label} MP3 production reservoir unexpectedly reported quality guard telemetry")
+        if not reservoir_borrowed:
+            sys.exit(f"Python wheel {label} MP3 reservoir detail helper never reported main_data_begin borrowing")
+        production_reservoir_mp3 = sonare_codec.encode_audio_production("mp3", 44100, channels, samples)
+        perceptual_production_mp3 = sonare_codec.encode_mp3_perceptual_reservoir_with_bitrate(44100, channels, samples, 128, False)
+        if production_reservoir_mp3 != perceptual_production_mp3:
+            sys.exit(f"Python wheel {label} MP3 production did not use the perceptual reservoir path")
+        production_main_data_begins = mp3_main_data_begins(production_reservoir_mp3)
+        if len(production_main_data_begins) * detail_width != len(reservoir_details):
+            sys.exit(f"Python wheel {label} MP3 production reservoir frame count did not match selector details")
+        for frame, main_data_begin in enumerate(production_main_data_begins):
+            if main_data_begin != reservoir_details[frame * detail_width + 6]:
+                sys.exit(f"Python wheel {label} MP3 production reservoir side-info did not match selector details")
+
+    check_mp3_production_reservoir("mono", 1, reservoir_samples)
+    check_mp3_production_reservoir("stereo", 2, reservoir_stereo_samples)
+    perceptual_reservoir_details = sonare_codec.mp3_perceptual_reservoir_frame_details_with_bitrate(44100, 1, reservoir_samples, 128, False)
+    reservoir_detail_width = 12
+    if len(perceptual_reservoir_details) != 8 * reservoir_detail_width or perceptual_reservoir_details[0] != 0 or perceptual_reservoir_details[6] != 0:
+        sys.exit("Python wheel MP3 perceptual reservoir detail helper returned malformed frame details")
+    perceptual_reservoir_borrowed = False
+    for offset in range(0, len(perceptual_reservoir_details), reservoir_detail_width):
+        payload_bits = perceptual_reservoir_details[offset + 2]
+        frame_len = perceptual_reservoir_details[offset + 3]
+        padding = perceptual_reservoir_details[offset + 4]
+        capacity_bytes = perceptual_reservoir_details[offset + 5]
+        main_data_begin = perceptual_reservoir_details[offset + 6]
+        perceptual_granules = perceptual_reservoir_details[offset + 8]
+        calibrated_granules = perceptual_reservoir_details[offset + 9]
+        quality_guard_compared_granules = perceptual_reservoir_details[offset + 10]
+        quality_guard_distortion_delta = perceptual_reservoir_details[offset + 11]
+        if main_data_begin > 0:
+            perceptual_reservoir_borrowed = True
+        if frame_len not in (417, 418) or padding not in (0, 1):
+            sys.exit("Python wheel MP3 perceptual reservoir detail helper reported an unexpected CBR frame slot")
+        if payload_bits > (capacity_bytes + main_data_begin) * 8:
+            sys.exit("Python wheel MP3 perceptual reservoir detail helper reported an over-budget frame")
+        if perceptual_granules != 2 or calibrated_granules != 0:
+            sys.exit("Python wheel MP3 perceptual reservoir detail helper reported unexpected granule telemetry")
+        if quality_guard_compared_granules != 0 or quality_guard_distortion_delta != 0:
+            sys.exit("Python wheel MP3 perceptual reservoir detail helper unexpectedly reported quality guard telemetry")
+    if not perceptual_reservoir_borrowed:
+        sys.exit("Python wheel MP3 perceptual reservoir detail helper never reported main_data_begin borrowing")
+    perceptual_reservoir_mp3 = sonare_codec.encode_mp3_perceptual_reservoir_with_bitrate(44100, 1, reservoir_samples, 128, False)
+    perceptual_reservoir_production = sonare_codec.encode_audio_production("mp3", 44100, 1, reservoir_samples)
+    if perceptual_reservoir_production != perceptual_reservoir_mp3:
+        sys.exit("Python wheel MP3 mono production did not use the perceptual reservoir path")
+    perceptual_reservoir_main_data_begins = mp3_main_data_begins(perceptual_reservoir_mp3)
+    if len(perceptual_reservoir_main_data_begins) * reservoir_detail_width != len(perceptual_reservoir_details):
+        sys.exit("Python wheel MP3 perceptual reservoir frame count did not match selector details")
+    for frame, main_data_begin in enumerate(perceptual_reservoir_main_data_begins):
+        if main_data_begin != perceptual_reservoir_details[frame * reservoir_detail_width + 6]:
+            sys.exit("Python wheel MP3 perceptual reservoir side-info did not match selector details")
 
     silent = sonare_codec.encode_audio_production("mp3", 44100, 1, [0.0] * 1152)
     if not isinstance(silent, bytes) or not silent:
@@ -4121,12 +6652,17 @@ fn assert_contains(input: &str, needle: &str, label: &str) -> Result<(), String>
 mod tests {
     use super::{
         aac_standard_candidate_is_at_least_as_good, best_normalized_correlation,
-        compatibility_lossy_encode_diagnostics, readiness_pcm, required_qa_tool_in_list,
-        validate_adts_frame_budget, validate_diagnostic_quality_floor,
-        validate_lossy_oracle_pcm_quality, verify_aac_default_production_budget,
-        verify_diagnostic_lossy_encode_readiness, verify_mp3_default_production_budget,
+        compatibility_lossy_encode_diagnostics, production_lossy_min_correlation, readiness_pcm,
+        required_qa_tool_in_list, run_ffmpeg_clean_acceptance, run_ffmpeg_decode_f32le,
+        validate_aac_standard_id_mixed_workbench,
+        validate_aac_standard_id_production_correlation_gap, validate_adts_frame_budget,
+        validate_diagnostic_quality_floor, validate_lossy_oracle_pcm_quality,
+        validate_mp3_perceptual_reservoir_production_correlation_gap,
+        verify_aac_default_production_budget, verify_diagnostic_lossy_encode_readiness,
+        verify_mp3_default_production_budget, verify_mp3_production_reservoir,
         verify_production_lossy_oracle_acceptance, AacStandardDiagnosticCandidate,
-        LossyOraclePcmQuality, ProductionArtifactKind,
+        LossyOraclePcmQuality, ProductionArtifactKind, AAC_PRODUCTION_MIN_CORRELATION,
+        MP3_PRODUCTION_MONO_MIN_CORRELATION, MP3_PRODUCTION_STEREO_MIN_CORRELATION,
     };
 
     #[test]
@@ -4174,6 +6710,121 @@ mod tests {
     }
 
     #[test]
+    fn production_lossy_min_correlation_matches_release_floors() {
+        assert_eq!(
+            production_lossy_min_correlation(ProductionArtifactKind::Mp3, 1).unwrap(),
+            MP3_PRODUCTION_MONO_MIN_CORRELATION
+        );
+        assert_eq!(
+            production_lossy_min_correlation(ProductionArtifactKind::Mp3, 2).unwrap(),
+            MP3_PRODUCTION_STEREO_MIN_CORRELATION
+        );
+        assert_eq!(
+            production_lossy_min_correlation(ProductionArtifactKind::Aac, 1).unwrap(),
+            AAC_PRODUCTION_MIN_CORRELATION
+        );
+        assert_eq!(
+            production_lossy_min_correlation(ProductionArtifactKind::M4a, 2).unwrap(),
+            AAC_PRODUCTION_MIN_CORRELATION
+        );
+
+        let err = production_lossy_min_correlation(ProductionArtifactKind::Mp3, 3).unwrap_err();
+        assert!(err.contains("mono/stereo only"));
+    }
+
+    #[test]
+    fn aac_standard_id_production_gap_is_release_gated() {
+        let standard_id = LossyOraclePcmQuality {
+            decoded_rms: 0.1709,
+            best_correlation: 0.550,
+        };
+        let production = LossyOraclePcmQuality {
+            decoded_rms: 0.7004,
+            best_correlation: 0.762,
+        };
+        validate_aac_standard_id_production_correlation_gap(
+            "AAC standard-id mono",
+            standard_id,
+            production,
+        )
+        .unwrap();
+
+        let regressed = LossyOraclePcmQuality {
+            decoded_rms: 0.1709,
+            best_correlation: 0.490,
+        };
+        let err = validate_aac_standard_id_production_correlation_gap(
+            "AAC standard-id mono",
+            regressed,
+            production,
+        )
+        .unwrap_err();
+        assert!(err.contains("correlation gap to production exceeded diagnostic limit"));
+    }
+
+    #[test]
+    fn aac_standard_id_rms_control_advantage_is_release_gated() {
+        let standard_id = LossyOraclePcmQuality {
+            decoded_rms: 0.1709,
+            best_correlation: 0.550,
+        };
+        let production = LossyOraclePcmQuality {
+            decoded_rms: 0.7004,
+            best_correlation: 0.762,
+        };
+        super::validate_aac_standard_id_rms_control_advantage(
+            "AAC standard-id mono",
+            standard_id,
+            production,
+            0.1750,
+        )
+        .unwrap();
+
+        let regressed = LossyOraclePcmQuality {
+            decoded_rms: 0.9100,
+            best_correlation: 0.570,
+        };
+        let err = super::validate_aac_standard_id_rms_control_advantage(
+            "AAC standard-id mono",
+            regressed,
+            production,
+            0.1750,
+        )
+        .unwrap_err();
+        assert!(err.contains("RMS control regressed behind production"));
+    }
+
+    #[test]
+    fn mp3_perceptual_reservoir_production_gap_is_release_gated() {
+        let reservoir = LossyOraclePcmQuality {
+            decoded_rms: 0.9290,
+            best_correlation: 0.572,
+        };
+        let production = LossyOraclePcmQuality {
+            decoded_rms: 0.9290,
+            best_correlation: 0.572,
+        };
+        validate_mp3_perceptual_reservoir_production_correlation_gap(
+            "MP3 perceptual reservoir stereo",
+            reservoir,
+            production,
+        )
+        .unwrap();
+
+        let regressed = LossyOraclePcmQuality {
+            decoded_rms: 0.8403,
+            best_correlation: 0.450,
+        };
+        let err = validate_mp3_perceptual_reservoir_production_correlation_gap(
+            "MP3 perceptual reservoir stereo",
+            regressed,
+            production,
+        )
+        .unwrap_err();
+        assert!(err.contains("correlation gap to production exceeded diagnostic limit"));
+    }
+
+    #[test]
     fn aac_standard_candidate_tiebreak_prefers_expected_rms() {
         let selected = sonare_codec::AacPcmFrameStepSelection {
             step: 0.005,
@@ -4204,6 +6855,105 @@ mod tests {
         ));
         assert!(aac_standard_candidate_is_at_least_as_good(
             &matched, &quiet, 0.1750
+        ));
+    }
+
+    #[test]
+    fn aac_selected_scale_factor_gain_sweep_prefers_rms_controlled_candidate() {
+        let controlled = LossyOraclePcmQuality {
+            decoded_rms: 0.2014,
+            best_correlation: 0.548,
+        };
+        let over_amplified = LossyOraclePcmQuality {
+            decoded_rms: 1.6111,
+            best_correlation: 0.548,
+        };
+
+        assert!(!super::lossy_oracle_quality_is_at_least_as_good(
+            &over_amplified,
+            &controlled,
+            0.1750
+        ));
+        assert!(super::lossy_oracle_quality_is_at_least_as_good(
+            &controlled,
+            &over_amplified,
+            0.1750
+        ));
+
+        let stereo_controlled = LossyOraclePcmQuality {
+            decoded_rms: 0.1030,
+            best_correlation: 0.601,
+        };
+        let stereo_over_amplified = LossyOraclePcmQuality {
+            decoded_rms: 1.6473,
+            best_correlation: 0.601,
+        };
+
+        assert!(!super::lossy_oracle_quality_is_at_least_as_good(
+            &stereo_over_amplified,
+            &stereo_controlled,
+            0.1468
+        ));
+        assert!(super::lossy_oracle_quality_is_at_least_as_good(
+            &stereo_controlled,
+            &stereo_over_amplified,
+            0.1468
+        ));
+    }
+
+    #[test]
+    fn aac_selected_scale_factor_bias_sweep_keeps_fixed_like_candidates() {
+        assert!(super::AAC_STANDARD_DIAGNOSTIC_GLOBAL_GAIN_CANDIDATES
+            .contains(&super::AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_GLOBAL_GAIN));
+        assert!(
+            super::AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_GLOBAL_GAIN_CANDIDATES
+                .contains(&super::AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_GLOBAL_GAIN)
+        );
+        assert!(
+            super::AAC_STANDARD_HIGH_LEVEL_FIXED_SURFACE_GLOBAL_GAIN_CANDIDATES
+                .contains(&super::AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_GLOBAL_GAIN)
+        );
+        assert!(
+            super::AAC_STANDARD_HIGH_LEVEL_SELECTED_SURFACE_MAGNITUDE_BIAS_CANDIDATES
+                .contains(&super::AAC_STANDARD_DIAGNOSTIC_SELECTED_SURFACE_MAGNITUDE_BIAS)
+        );
+
+        let low_bias_mono = LossyOraclePcmQuality {
+            decoded_rms: 0.1693,
+            best_correlation: 0.548,
+        };
+        let fixed_like_mono = LossyOraclePcmQuality {
+            decoded_rms: 0.1709,
+            best_correlation: 0.550,
+        };
+        assert!(super::lossy_oracle_quality_is_at_least_as_good(
+            &fixed_like_mono,
+            &low_bias_mono,
+            0.1750
+        ));
+        assert!(!super::lossy_oracle_quality_is_at_least_as_good(
+            &low_bias_mono,
+            &fixed_like_mono,
+            0.1750
+        ));
+
+        let low_bias_stereo = LossyOraclePcmQuality {
+            decoded_rms: 0.2059,
+            best_correlation: 0.602,
+        };
+        let fixed_like_stereo = LossyOraclePcmQuality {
+            decoded_rms: 0.1743,
+            best_correlation: 0.607,
+        };
+        assert!(super::lossy_oracle_quality_is_at_least_as_good(
+            &fixed_like_stereo,
+            &low_bias_stereo,
+            0.1468
+        ));
+        assert!(!super::lossy_oracle_quality_is_at_least_as_good(
+            &low_bias_stereo,
+            &fixed_like_stereo,
+            0.1468
         ));
     }
 
@@ -4277,6 +7027,11 @@ mod tests {
     }
 
     #[test]
+    fn aac_standard_id_mixed_workbench_is_publish_readiness_gated() {
+        validate_aac_standard_id_mixed_workbench().unwrap();
+    }
+
+    #[test]
     fn correlation_search_handles_decoder_delay() {
         let expected = (0..128)
             .map(|sample| ((sample as f32) * 0.1).sin())
@@ -4299,7 +7054,7 @@ mod tests {
 
         let diagnostics = compatibility_lossy_encode_diagnostics(&ffmpeg, &pcm).unwrap();
 
-        assert_eq!(diagnostics.len(), 6);
+        assert_eq!(diagnostics.len(), 7);
         assert!(
             diagnostics.iter().any(|diagnostic| diagnostic
                 .contains("MP3 compatibility scaffold passes current oracle")
@@ -4321,6 +7076,12 @@ mod tests {
             diagnostics
                 .iter()
                 .any(|diagnostic| diagnostic.contains("MP3 perceptual-scale-factor scaffold")),
+            "{diagnostics:?}"
+        );
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("MP3 perceptual reservoir scaffold")),
             "{diagnostics:?}"
         );
         assert!(
@@ -4374,6 +7135,165 @@ mod tests {
     }
 
     #[test]
+    fn mp3_stereo_perceptual_reservoir_candidate_catches_up_with_production_when_ffmpeg_is_available(
+    ) {
+        let Some(ffmpeg) = std::env::var_os("SONARE_FFMPEG") else {
+            return;
+        };
+        let pcm = readiness_pcm(44_100, 2).unwrap();
+        let out_dir = std::env::temp_dir().join(format!(
+            "sonare-codec-stereo-perceptual-reservoir-diagnostic-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        let calibrated_details =
+            sonare_codec::select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
+                &pcm,
+                sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                sonare_codec::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let perceptual_details =
+            sonare_codec::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+                &pcm,
+                super::MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES,
+                128,
+                false,
+                sonare_codec::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let guarded_details = sonare_codec::select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+            &pcm,
+            super::MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES,
+            128,
+            false,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .unwrap();
+        assert!(calibrated_details
+            .iter()
+            .all(|detail| { detail.perceptual_granules == 0 && detail.calibrated_granules == 4 }));
+        assert!(perceptual_details
+            .iter()
+            .all(|detail| { detail.perceptual_granules == 4 && detail.calibrated_granules == 0 }));
+        assert!(guarded_details
+            .iter()
+            .all(|detail| { detail.perceptual_granules + detail.calibrated_granules == 4 }));
+        assert!(guarded_details
+            .iter()
+            .all(|detail| { detail.quality_guard_compared_granules == 4 }));
+        assert!(
+            guarded_details
+                .iter()
+                .all(|detail| detail.quality_guard_distortion_delta.is_finite()),
+            "quality guard reported a non-finite encoder-side distortion delta"
+        );
+        let calibrated_max_payload = calibrated_details
+            .iter()
+            .map(|detail| detail.payload_bit_len)
+            .max()
+            .unwrap_or(0);
+        let perceptual_max_payload = perceptual_details
+            .iter()
+            .map(|detail| detail.payload_bit_len)
+            .max()
+            .unwrap_or(0);
+        let perceptual_min_step = perceptual_details
+            .iter()
+            .map(|detail| detail.step)
+            .fold(f32::INFINITY, f32::min);
+        let guarded_max_payload = guarded_details
+            .iter()
+            .map(|detail| detail.payload_bit_len)
+            .max()
+            .unwrap_or(0);
+
+        let candidate_quality =
+            super::mp3_perceptual_reservoir_nonzero_encode_diagnostic(&ffmpeg, &pcm, &out_dir)
+                .unwrap();
+        let guarded =
+            sonare_codec::encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
+                &pcm,
+                super::MP3_PERCEPTUAL_DIAGNOSTIC_STEP_CANDIDATES,
+                128,
+                false,
+                sonare_codec::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let guarded_path = out_dir.join("mp3-stereo-guarded-perceptual-reservoir.mp3");
+        std::fs::write(&guarded_path, guarded).unwrap();
+        super::run_ffmpeg_acceptance(&ffmpeg, &guarded_path).unwrap();
+        let guarded_decoded =
+            super::run_ffmpeg_decode_f32le(&ffmpeg, &guarded_path, pcm.sample_rate, pcm.channels)
+                .unwrap();
+        let guarded_quality =
+            super::validate_lossy_oracle_pcm_quality(&pcm.samples, &guarded_decoded).unwrap();
+        let production = sonare_codec::encode_with_mode(
+            sonare_codec::Format::Mp3,
+            &pcm,
+            sonare_codec::EncodeMode::ProductionOnly,
+        )
+        .unwrap();
+        let production_path = out_dir.join("mp3-stereo-production.mp3");
+        std::fs::write(&production_path, production).unwrap();
+        super::run_ffmpeg_acceptance(&ffmpeg, &production_path).unwrap();
+        let production_decoded = super::run_ffmpeg_decode_f32le(
+            &ffmpeg,
+            &production_path,
+            pcm.sample_rate,
+            pcm.channels,
+        )
+        .unwrap();
+        let production_quality =
+            super::validate_lossy_oracle_pcm_quality(&pcm.samples, &production_decoded).unwrap();
+        std::fs::remove_dir_all(&out_dir).unwrap();
+
+        assert!(
+            candidate_quality.best_correlation >= 0.49,
+            "stereo perceptual reservoir should pass the tightened basic oracle before production re-evaluation: {candidate_quality:?}"
+        );
+        assert!(
+            perceptual_details
+                .iter()
+                .any(|detail| detail.main_data_begin > 0),
+            "stereo perceptual reservoir should exercise reservoir borrowing"
+        );
+        assert!(
+            perceptual_max_payload <= calibrated_max_payload,
+            "stereo perceptual reservoir is not being held back by payload size: perceptual={perceptual_max_payload}, calibrated={calibrated_max_payload}"
+        );
+        assert!(
+            guarded_details
+                .iter()
+                .any(|detail| detail.main_data_begin > 0),
+            "quality-guarded stereo perceptual reservoir should exercise reservoir borrowing"
+        );
+        assert!(
+            guarded_max_payload <= calibrated_max_payload,
+            "quality-guarded stereo perceptual reservoir should stay within the calibrated payload envelope: guarded={guarded_max_payload}, calibrated={calibrated_max_payload}"
+        );
+        assert!(
+            perceptual_min_step <= 1.0,
+            "stereo perceptual reservoir did not select an active fine step: min_step={perceptual_min_step}"
+        );
+        assert!(
+            guarded_quality.best_correlation + 0.01 >= production_quality.best_correlation,
+            "quality-guarded stereo perceptual reservoir regressed production quality: guarded={guarded_quality:?}, production={production_quality:?}"
+        );
+        assert!(
+            candidate_quality.best_correlation + 0.001 >= production_quality.best_correlation,
+            "stereo perceptual reservoir should now match the production bridge: candidate={candidate_quality:?}, production={production_quality:?}"
+        );
+        assert!(
+            production_quality.best_correlation + 0.001 >= candidate_quality.best_correlation,
+            "stereo perceptual reservoir unexpectedly exceeded the production bridge enough to require floor re-tuning: candidate={candidate_quality:?}, production={production_quality:?}"
+        );
+    }
+
+    #[test]
     fn mp3_production_artifacts_respect_default_frame_budget() {
         for (sample_rate, channels) in [(44_100, 1), (44_100, 2)] {
             let pcm = readiness_pcm(sample_rate, channels).unwrap();
@@ -4400,6 +7320,58 @@ mod tests {
     }
 
     #[test]
+    fn mp3_production_artifacts_pass_focused_ffmpeg_quality_gate() {
+        let Some(ffmpeg) = std::env::var_os("SONARE_FFMPEG") else {
+            eprintln!("skipping MP3 production quality gate: set SONARE_FFMPEG=/path/to/ffmpeg");
+            return;
+        };
+        let out_dir = std::env::temp_dir().join(format!(
+            "sonare-codec-mp3-production-quality-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        for (sample_rate, channels) in [(44_100, 1), (44_100, 2)] {
+            let pcm = readiness_pcm(sample_rate, channels).unwrap();
+            let encoded = sonare_codec::encode_with_mode(
+                sonare_codec::Format::Mp3,
+                &pcm,
+                sonare_codec::EncodeMode::ProductionOnly,
+            )
+            .unwrap();
+            let label = if channels == 1 {
+                "MP3 44.1kHz mono"
+            } else {
+                "MP3 44.1kHz stereo"
+            };
+
+            verify_mp3_default_production_budget(
+                label,
+                ProductionArtifactKind::Mp3,
+                &pcm,
+                &encoded,
+            )
+            .unwrap();
+            let artifact_path = out_dir.join(format!("mp3-production-quality-{}ch.mp3", channels));
+            std::fs::write(&artifact_path, &encoded).unwrap();
+            run_ffmpeg_clean_acceptance(&ffmpeg, &artifact_path).unwrap();
+            let decoded =
+                run_ffmpeg_decode_f32le(&ffmpeg, &artifact_path, sample_rate, channels).unwrap();
+            let quality = validate_lossy_oracle_pcm_quality(&pcm.samples, &decoded).unwrap();
+            let min_correlation =
+                production_lossy_min_correlation(ProductionArtifactKind::Mp3, channels).unwrap();
+            assert!(
+                quality.best_correlation >= min_correlation,
+                "{label} production quality regressed below floor {min_correlation}: {quality:?}"
+            );
+            eprintln!(
+                "{label} production quality: decoded_rms={:.4}, best_correlation={:.3}",
+                quality.decoded_rms, quality.best_correlation
+            );
+        }
+    }
+
+    #[test]
     fn mp3_default_frame_budget_rejects_truncated_frame() {
         let pcm = readiness_pcm(44_100, 1).unwrap();
         let encoded = sonare_codec::encode_with_mode(
@@ -4417,6 +7389,27 @@ mod tests {
         .unwrap_err();
 
         assert!(err.contains("extends past stream length"));
+    }
+
+    #[test]
+    fn mp3_production_reservoir_check_rejects_self_contained_perceptual_stream() {
+        let pcm = readiness_pcm(44_100, 1).unwrap();
+        let perceptual =
+            sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
+                &pcm,
+                sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                sonare_codec::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let err = verify_mp3_production_reservoir("MP3 perceptual diagnostic", &pcm, &perceptual)
+            .unwrap_err();
+
+        assert!(
+            err.contains("never used main_data_begin")
+                || err.contains("does not match selector detail")
+        );
     }
 
     #[test]
@@ -4441,6 +7434,59 @@ mod tests {
             let m4a = sonare_codec::mux_aac_adts_as_m4a(&adts).unwrap();
             verify_aac_default_production_budget(label, ProductionArtifactKind::M4a, &pcm, &m4a)
                 .unwrap();
+        }
+    }
+
+    #[test]
+    fn aac_production_artifacts_pass_focused_ffmpeg_quality_gate() {
+        let Some(ffmpeg) = std::env::var_os("SONARE_FFMPEG") else {
+            eprintln!("skipping AAC production quality gate: set SONARE_FFMPEG=/path/to/ffmpeg");
+            return;
+        };
+        let out_dir = std::env::temp_dir().join(format!(
+            "sonare-codec-aac-production-quality-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&out_dir).unwrap();
+
+        for (sample_rate, channels) in [(44_100, 1), (44_100, 2)] {
+            let pcm = readiness_pcm(sample_rate, channels).unwrap();
+            let adts = sonare_codec::encode_with_mode(
+                sonare_codec::Format::Aac,
+                &pcm,
+                sonare_codec::EncodeMode::ProductionOnly,
+            )
+            .unwrap();
+            let m4a = sonare_codec::mux_aac_adts_as_m4a(&adts).unwrap();
+            let label = if channels == 1 {
+                "AAC-LC 44.1kHz mono"
+            } else {
+                "AAC-LC 44.1kHz stereo"
+            };
+
+            for (kind, bytes, extension) in [
+                (ProductionArtifactKind::Aac, adts.as_slice(), "aac"),
+                (ProductionArtifactKind::M4a, m4a.as_slice(), "m4a"),
+            ] {
+                verify_aac_default_production_budget(label, kind, &pcm, bytes).unwrap();
+                let artifact_path =
+                    out_dir.join(format!("aac-production-quality-{}ch.{extension}", channels));
+                std::fs::write(&artifact_path, bytes).unwrap();
+                run_ffmpeg_clean_acceptance(&ffmpeg, &artifact_path).unwrap();
+                let decoded =
+                    run_ffmpeg_decode_f32le(&ffmpeg, &artifact_path, sample_rate, channels)
+                        .unwrap();
+                let quality = validate_lossy_oracle_pcm_quality(&pcm.samples, &decoded).unwrap();
+                let min_correlation = production_lossy_min_correlation(kind, channels).unwrap();
+                assert!(
+                    quality.best_correlation >= min_correlation,
+                    "{label} {kind:?} production quality regressed below floor {min_correlation}: {quality:?}"
+                );
+                eprintln!(
+                    "{label} {kind:?} production quality: decoded_rms={:.4}, best_correlation={:.3}",
+                    quality.decoded_rms, quality.best_correlation
+                );
+            }
         }
     }
 

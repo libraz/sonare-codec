@@ -8,9 +8,6 @@
 //! are masking thresholds in dB; -999 marks "no measurable masking".
 //! Derivative work of libvorbis/aoTuV (BSD-3-Clause); see `LICENSE-THIRDPARTY`.
 
-// Consumed by the tone-curve setup; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::masking::P_BANDS;
 use crate::psy::EHMER_MAX;
 

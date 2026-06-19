@@ -5,7 +5,8 @@
 //! 0.99 spectral damping) and `vorbis_lpc_predict`. Derivative work of
 //! libvorbis/aoTuV (BSD-3-Clause); see `LICENSE-THIRDPARTY`.
 
-// Consumed by later Vorbis port stages; the live encoder still ships via FFI.
+// LPC analysis primitives, exercised by this module's tests; unused by the
+// current encoder path.
 #![allow(dead_code)]
 
 /// Computes `m` LPC coefficients from `data` via autocorrelation and the

@@ -20,12 +20,21 @@ true-polyphase path is brought up to the FFmpeg readiness oracle. Step search
 evaluates all candidates and can report payload bit length against frame
 capacity for the future rate-control path; the default non-silent auto-step
 encode path also schedules CBR padding slots per frame, and the default
-non-silent mono production path uses the CBR bit-reservoir packer. `layer3_header_for_capacity`,
+non-silent mono/stereo production path uses the CBR bit-reservoir packer. `layer3_header_for_capacity`,
 `layer3_main_data_capacity_bytes`, and `layer3_main_data_capacity_bits` expose
 the per-frame Layer III payload budget from a parsed or constructed header, and
 the bitrate-selected stream helpers derive MPEG headers and per-frame capacity
 from a caller-selected Layer III bitrate, including CBR and reservoir variants.
-The clean-room psychoacoustic model is wired to a low-level long-block scale-factor selector and self-contained perceptual scale-factor frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors while analyzing zero-padded PCM and the sign-inverted hybrid MDCT spectrum for the scale-factor quantizer workbench; production encode keeps the calibrated global-gain path until rate-control integration is validated.
+The reservoir detail helper exposes the same pass-1 rate-control state as the
+production reservoir encoder, including selected step, payload bits,
+frame length, padding, per-frame capacity, `main_data_begin`, and post-frame
+reservoir bytes, perceptual-vs-calibrated granule counts, quality-guard
+comparison counts, and encoder-side distortion delta for guarded
+psychoacoustic bridge diagnostics.
+The clean-room psychoacoustic model is wired to a low-level long-block scale-factor selector and self-contained perceptual scale-factor frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors while analyzing zero-padded PCM and the sign-inverted hybrid MDCT spectrum for the scale-factor quantizer workbench. Non-silent mono/stereo production encode now uses the perceptual reservoir path; the quality-guarded perceptual reservoir path remains available as a comparison diagnostic.
+The perceptual active reservoir helper combines that scale-factor path with
+the CBR bit reservoir layout and exposes matching selector telemetry for
+production and diagnostic candidates.
 The remaining standard big-values tables, stereo true-polyphase readiness,
-stereo reservoir promotion, production psychoacoustic bit allocation, and full
-rate control are still pending.
+production psychoacoustic bit allocation, and full rate control are still
+pending.

@@ -14,7 +14,8 @@
 //!
 //! [`seed_curve`]: crate::seed::seed_curve
 
-// Supplies the coordinates seed_loop needs; the live encoder still ships via FFI.
+// `band_of` and `seed_pos` are accessors exercised by this module's tests,
+// not the encoder.
 #![allow(dead_code)]
 
 use crate::masking::P_BANDS;

@@ -101,6 +101,22 @@ pub struct Layer3PcmFrameStepSelection {
     pub frame_capacity_bits: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3ReservoirFrameSelection {
+    pub frame_index: usize,
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_len: usize,
+    pub padding: bool,
+    pub frame_capacity_bytes: usize,
+    pub main_data_begin: usize,
+    pub reservoir_after: usize,
+    pub perceptual_granules: usize,
+    pub calibrated_granules: usize,
+    pub quality_guard_compared_granules: usize,
+    pub quality_guard_distortion_delta: f64,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FrameHeader {
     pub version: MpegVersion,
@@ -456,12 +472,13 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 /// Encodes mono/stereo PCM as MPEG-1 Layer III frames.
 ///
 /// Silent input routes through the compact zero-spectral frame scaffold.
-/// Non-silent input currently uses the experimental long-block scaffold with a
-/// constant-bitrate padding schedule. Mono also uses the bit-reservoir packer;
-/// stereo keeps the compatibility path until its reservoir/analysis interaction
-/// reaches the FFmpeg readiness oracle. The quantizer and table/rate selection
-/// are still intentionally coarse, so production-quality psychoacoustic
-/// modeling, complete standard Huffman coverage, and VBR are still incomplete.
+/// Non-silent mono input uses the psychoacoustic scale-factor long-block
+/// scaffold with a constant-bitrate padding schedule and the bit-reservoir
+/// packer. Non-silent stereo now uses the same perceptual reservoir path after
+/// the FFmpeg-gated readiness PCM caught up with the guarded bridge. The
+/// quantizer and table/rate selection are still intentionally coarse, so full
+/// rate control, complete standard Huffman coverage, and VBR are still
+/// incomplete.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(
@@ -470,21 +487,13 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     }
 
     if pcm.samples.iter().any(|sample| *sample != 0.0) {
-        if pcm.channels == 1 {
-            encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
-                pcm,
-                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-                128,
-                false,
-                mpeg1_layer3_standard_table_provider(),
-            )
-        } else {
-            encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider(
-                pcm,
-                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-                mpeg1_layer3_standard_table_provider(),
-            )
-        }
+        encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+            pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            mpeg1_layer3_standard_table_provider(),
+        )
     } else {
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
             pcm,
@@ -879,8 +888,49 @@ struct Layer3ReservoirFrame {
     header: FrameHeader,
     side_info: Layer3SideInfo,
     payload: Vec<u8>,
+    payload_bit_len: usize,
     capacity: usize,
     main_data_begin: usize,
+    reservoir_after: usize,
+    step: f32,
+    perceptual_granules: usize,
+    calibrated_granules: usize,
+    quality_guard_compared_granules: usize,
+    quality_guard_distortion_delta: f64,
+}
+
+#[derive(Clone)]
+struct Layer3ReservoirPackedFrame {
+    step: f32,
+    side_info: Layer3SideInfo,
+    main_data: PackedBits,
+    perceptual_granules: usize,
+    calibrated_granules: usize,
+    quality_guard_compared_granules: usize,
+    quality_guard_distortion_delta: f64,
+}
+
+struct Layer3QualityGuardGranulePayload {
+    bits: PackedBits,
+    used_perceptual: bool,
+    compared_granules: usize,
+    distortion_delta: f64,
+}
+
+#[derive(Clone)]
+struct Layer3QualityGuardPerceptualCandidate {
+    scale_factors: [u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    quantized: Vec<i32>,
+    scalefac_scale: bool,
+    global_gain: u8,
+    distortion: f64,
+}
+
+#[derive(Clone, Copy)]
+enum Layer3ReservoirPayloadMode {
+    Calibrated,
+    PerceptualActive,
+    PerceptualQualityGuarded,
 }
 
 /// Packs one Layer III frame at the finest quantizer step whose byte-padded
@@ -895,47 +945,335 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
     candidates: &[f32],
     budget_bytes: usize,
     provider: Layer3EntropyTableProvider<'_>,
-) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    mode: Layer3ReservoirPayloadMode,
+) -> Result<Layer3ReservoirPackedFrame, Error> {
     if candidates.is_empty() {
         return Err(Error::InvalidInput(
             "MP3 quantizer step candidate list is empty",
         ));
     }
-    let mut best: Option<(f32, Layer3SideInfo, PackedBits)> = None;
+    let frame_granules = header.layer3_granule_count() * header.channel_count();
+    let mut best: Option<Layer3ReservoirPackedFrame> = None;
+    let mut best_active: Option<Layer3ReservoirPackedFrame> = None;
     for &step in candidates {
         if !step.is_finite() || step <= 0.0 {
             return Err(Error::InvalidInput(
                 "MP3 quantizer step must be positive and finite",
             ));
         }
-        let Ok((side_info, main_data)) = pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
-            header,
-            pcm,
-            start_frame,
-            step,
-            provider,
-        ) else {
+        let candidate_result: Result<Layer3ReservoirPackedFrame, Error> = match mode {
+            Layer3ReservoirPayloadMode::Calibrated => {
+                pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
+                    header,
+                    pcm,
+                    start_frame,
+                    step,
+                    provider,
+                )
+                .map(|(side_info, main_data)| Layer3ReservoirPackedFrame {
+                    step,
+                    side_info,
+                    main_data,
+                    perceptual_granules: 0,
+                    calibrated_granules: frame_granules,
+                    quality_guard_compared_granules: 0,
+                    quality_guard_distortion_delta: 0.0,
+                })
+            }
+            Layer3ReservoirPayloadMode::PerceptualActive => {
+                pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
+                    header,
+                    pcm,
+                    start_frame,
+                    step,
+                    provider,
+                )
+                .map(|(side_info, main_data)| Layer3ReservoirPackedFrame {
+                    step,
+                    side_info,
+                    main_data,
+                    perceptual_granules: frame_granules,
+                    calibrated_granules: 0,
+                    quality_guard_compared_granules: 0,
+                    quality_guard_distortion_delta: 0.0,
+                })
+            }
+            Layer3ReservoirPayloadMode::PerceptualQualityGuarded => {
+                pack_mpeg1_layer3_pcm_frame_perceptual_quality_guard_payloads_with_table_provider(
+                    header,
+                    pcm,
+                    start_frame,
+                    step,
+                    provider,
+                )
+                .map(
+                    |(
+                        side_info,
+                        main_data,
+                        perceptual_granules,
+                        calibrated_granules,
+                        quality_guard_compared_granules,
+                        quality_guard_distortion_delta,
+                    )| {
+                        Layer3ReservoirPackedFrame {
+                            step,
+                            side_info,
+                            main_data,
+                            perceptual_granules,
+                            calibrated_granules,
+                            quality_guard_compared_granules,
+                            quality_guard_distortion_delta,
+                        }
+                    },
+                )
+            }
+        };
+        let Ok(candidate) = candidate_result else {
             continue;
         };
-        if main_data.bytes.len() > budget_bytes {
+        if candidate.main_data.bytes.len() > budget_bytes {
             continue;
         }
         // The reservoir can widen the byte budget past the point where one
         // granule's part2_3_length overflows its 12-bit side-info field; reject
         // any step that does, so a finer step never produces an unpackable frame.
-        if layer3_side_info_exceeds_part2_3_limit(&side_info, header) {
+        if layer3_side_info_exceeds_part2_3_limit(&candidate.side_info, header) {
             continue;
         }
+        let active_candidate = matches!(mode, Layer3ReservoirPayloadMode::PerceptualActive)
+            && header.channel_count() == 1
+            && count_mpeg1_layer3_pcm_frame_perceptual_nonzero_scale_factors(
+                header,
+                pcm,
+                start_frame,
+                step,
+            )? > 0;
+        if active_candidate {
+            best_active =
+                select_better_mpeg1_layer3_reservoir_candidate(best_active, candidate.clone());
+        }
         // Prefer the smallest fitting step (finest quantization, best quality).
-        best = match best {
-            Some((best_step, best_side_info, best_main_data)) if step >= best_step => {
-                Some((best_step, best_side_info, best_main_data))
-            }
-            _ => Some((step, side_info, main_data)),
-        };
+        best = select_better_mpeg1_layer3_reservoir_candidate(best, candidate);
     }
-    best.map(|(_, side_info, main_data)| (side_info, main_data))
+    best_active
+        .or(best)
         .ok_or(Error::UnsupportedFeature("MP3 reservoir step search"))
+}
+
+fn select_better_mpeg1_layer3_reservoir_candidate(
+    selected: Option<Layer3ReservoirPackedFrame>,
+    candidate: Layer3ReservoirPackedFrame,
+) -> Option<Layer3ReservoirPackedFrame> {
+    match selected {
+        Some(best) if candidate.step >= best.step => Some(best),
+        _ => Some(candidate),
+    }
+}
+
+fn collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+    mode: Layer3ReservoirPayloadMode,
+) -> Result<Vec<Layer3ReservoirFrame>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, pcm)?;
+    let mut padding = Layer3PaddingSchedule::new(base_header)?;
+
+    let mut frames: Vec<Layer3ReservoirFrame> = Vec::with_capacity(frame_count);
+    let mut reservoir = 0_usize;
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(base_header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        let frame_header = padding.next_header();
+        let capacity = layer3_main_data_capacity_bytes(frame_header)?;
+        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
+        let budget_bytes = capacity
+            .checked_add(main_data_begin)
+            .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
+        let packed = pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+            frame_header,
+            pcm,
+            start_frame,
+            candidates,
+            budget_bytes,
+            provider,
+            mode,
+        )?;
+        let Layer3ReservoirPackedFrame {
+            step,
+            mut side_info,
+            main_data,
+            perceptual_granules,
+            calibrated_granules,
+            quality_guard_compared_granules,
+            quality_guard_distortion_delta,
+        } = packed;
+        side_info.main_data_begin = u16::try_from(main_data_begin)
+            .map_err(|_| Error::InvalidInput("MP3 main_data_begin exceeds field width"))?;
+        let payload_bit_len = main_data.bit_len;
+        let payload = main_data.bytes;
+        let reservoir_after = main_data_begin
+            .checked_add(capacity)
+            .ok_or(Error::InvalidInput("MP3 reservoir overflows"))?
+            .checked_sub(payload.len())
+            .ok_or(Error::InvalidInput("MP3 reservoir underflows"))?;
+        reservoir = reservoir_after;
+        frames.push(Layer3ReservoirFrame {
+            header: frame_header,
+            side_info,
+            payload,
+            payload_bit_len,
+            capacity,
+            main_data_begin,
+            reservoir_after,
+            step,
+            perceptual_granules,
+            calibrated_granules,
+            quality_guard_compared_granules,
+            quality_guard_distortion_delta,
+        });
+    }
+
+    Ok(frames)
+}
+
+/// Selects reservoir-aware CBR frame steps and reports the rate-control state.
+///
+/// This uses the same pass-1 selection as
+/// [`encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider`] without
+/// assembling the final bytestream, so callers can inspect whether CBR capacity,
+/// borrowed main data, and selected quantizer steps are behaving as expected.
+pub fn select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3ReservoirFrameSelection>, Error> {
+    collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::Calibrated,
+    )?
+    .into_iter()
+    .enumerate()
+    .map(|(frame_index, frame)| {
+        Ok(Layer3ReservoirFrameSelection {
+            frame_index,
+            step: frame.step,
+            payload_bit_len: frame.payload_bit_len,
+            frame_len: frame.header.frame_len(),
+            padding: frame.header.padding,
+            frame_capacity_bytes: frame.capacity,
+            main_data_begin: frame.main_data_begin,
+            reservoir_after: frame.reservoir_after,
+            perceptual_granules: frame.perceptual_granules,
+            calibrated_granules: frame.calibrated_granules,
+            quality_guard_compared_granules: frame.quality_guard_compared_granules,
+            quality_guard_distortion_delta: frame.quality_guard_distortion_delta,
+        })
+    })
+    .collect()
+}
+
+/// Selects perceptual-scale-factor reservoir-aware CBR frame steps and reports
+/// the rate-control state.
+///
+/// This keeps the bit-reservoir layout used by production MP3 candidates while
+/// packing each frame through the psychoacoustic scale-factor path. It is a
+/// diagnostic promotion candidate; the default production encoder still uses
+/// the calibrated-gain reservoir path for stereo, while non-silent mono now
+/// uses this path directly.
+pub fn select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3ReservoirFrameSelection>, Error> {
+    collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .enumerate()
+    .map(|(frame_index, frame)| {
+        Ok(Layer3ReservoirFrameSelection {
+            frame_index,
+            step: frame.step,
+            payload_bit_len: frame.payload_bit_len,
+            frame_len: frame.header.frame_len(),
+            padding: frame.header.padding,
+            frame_capacity_bytes: frame.capacity,
+            main_data_begin: frame.main_data_begin,
+            reservoir_after: frame.reservoir_after,
+            perceptual_granules: frame.perceptual_granules,
+            calibrated_granules: frame.calibrated_granules,
+            quality_guard_compared_granules: frame.quality_guard_compared_granules,
+            quality_guard_distortion_delta: frame.quality_guard_distortion_delta,
+        })
+    })
+    .collect()
+}
+
+/// Selects quality-guarded perceptual reservoir CBR frame steps.
+///
+/// Granules are evaluated with both calibrated zero-scale-factor quantization
+/// and perceptual scale-factor quantization at the same selected step. The
+/// perceptual payload is used only when its encoder-side spectral distortion is
+/// not worse, so stereo production can exercise the psychoacoustic bridge
+/// without dropping below the FFmpeg-gated calibrated baseline.
+pub fn select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3ReservoirFrameSelection>, Error> {
+    collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualQualityGuarded,
+    )?
+    .into_iter()
+    .enumerate()
+    .map(|(frame_index, frame)| {
+        Ok(Layer3ReservoirFrameSelection {
+            frame_index,
+            step: frame.step,
+            payload_bit_len: frame.payload_bit_len,
+            frame_len: frame.header.frame_len(),
+            padding: frame.header.padding,
+            frame_capacity_bytes: frame.capacity,
+            main_data_begin: frame.main_data_begin,
+            reservoir_after: frame.reservoir_after,
+            perceptual_granules: frame.perceptual_granules,
+            calibrated_granules: frame.calibrated_granules,
+            quality_guard_compared_granules: frame.quality_guard_compared_granules,
+            quality_guard_distortion_delta: frame.quality_guard_distortion_delta,
+        })
+    })
+    .collect()
 }
 
 /// Encodes PCM as constant-bitrate MPEG-1 Layer III using a bit reservoir.
@@ -953,57 +1291,76 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
     crc_protected: bool,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<Vec<u8>, Error> {
-    let base_header = layer3_header_for_capacity(
-        pcm.sample_rate,
-        pcm.channels,
+    let frames = collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
         bitrate_kbps,
-        false,
         crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::Calibrated,
     )?;
-    let frame_count = layer3_frame_count(base_header, pcm)?;
-    let mut padding = Layer3PaddingSchedule::new(base_header)?;
 
-    // Pass 1: choose each frame's step, pack its payload, and record how far the
-    // running reservoir lets its main data begin before its own slot.
-    let mut frames: Vec<Layer3ReservoirFrame> = Vec::with_capacity(frame_count);
-    let mut reservoir = 0_usize;
-    for frame_index in 0..frame_count {
-        let start_frame = frame_index
-            .checked_mul(usize::from(base_header.samples_per_frame()))
-            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
-        let frame_header = padding.next_header();
-        let capacity = layer3_main_data_capacity_bytes(frame_header)?;
-        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
-        let budget_bytes = capacity
-            .checked_add(main_data_begin)
-            .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
-        let (mut side_info, main_data) = pack_mpeg1_layer3_reservoir_frame_with_table_provider(
-            frame_header,
-            pcm,
-            start_frame,
-            candidates,
-            budget_bytes,
-            provider,
-        )?;
-        side_info.main_data_begin = u16::try_from(main_data_begin)
-            .map_err(|_| Error::InvalidInput("MP3 main_data_begin exceeds field width"))?;
-        let payload = main_data.bytes;
-        // Surplus beyond the 511-byte pointer range can never be referenced, so
-        // it is dropped here (those slot bytes stay zero padding in the file).
-        reservoir = main_data_begin
-            .checked_add(capacity)
-            .ok_or(Error::InvalidInput("MP3 reservoir overflows"))?
-            .checked_sub(payload.len())
-            .ok_or(Error::InvalidInput("MP3 reservoir underflows"))?;
-        frames.push(Layer3ReservoirFrame {
-            header: frame_header,
-            side_info,
-            payload,
-            capacity,
-            main_data_begin,
-        });
-    }
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
 
+/// Encodes PCM as constant-bitrate MPEG-1 Layer III using psychoacoustic
+/// scale-factor payloads plus a bit reservoir.
+///
+/// This is exposed as a diagnostic path toward production rate-control work:
+/// it preserves the shared main-data reservoir layout, keeps mono on the
+/// nonzero scale-factor diagnostic path, and lets stereo choose the finest
+/// fitting perceptual payload instead of forcing a coarser active candidate.
+/// Non-silent production MP3 now uses this path for both mono and stereo.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frames = collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?;
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes PCM as constant-bitrate MPEG-1 Layer III using a quality-guarded
+/// perceptual reservoir path.
+///
+/// This is the production-promotion bridge for the psychoacoustic workbench: it
+/// preserves the bit reservoir and bitrate schedule of the calibrated path, but
+/// only accepts perceptual scale-factor payloads when the current guard says
+/// they are safe. Stereo now runs through the same guard instead of bypassing
+/// perceptual evaluation entirely; full production promotion still depends on a
+/// stronger psychoacoustic quality proxy and rate-control loop.
+pub fn encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frames = collect_mpeg1_layer3_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualQualityGuarded,
+    )?;
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+fn assemble_mpeg1_layer3_reservoir_frames(
+    frames: Vec<Layer3ReservoirFrame>,
+) -> Result<Vec<u8>, Error> {
     // Pass 2: lay each payload into the shared main-data stream at the byte its
     // `main_data_begin` resolves to, then slice the stream back into frame slots.
     let mut total_slots = 0_usize;
@@ -2038,6 +2395,24 @@ pub fn quantize_pcm_long_block(
     let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
     let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
     quantize_spectrum(&inverted, step, 8191)
+}
+
+fn layer3_perceptual_quantizer_spectrum(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+) -> Result<Vec<f32>, Error> {
+    if pcm.channels == 2 {
+        let mut spectrum = Vec::with_capacity(576);
+        for subband in 0..32 {
+            let block = layer3_analysis_subband_block(pcm, channel, start_frame, subband)?;
+            spectrum.extend(mdct_long_block(&block)?);
+        }
+        return Ok(spectrum);
+    }
+
+    let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
+    Ok(spectrum.into_iter().map(|line| -line).collect())
 }
 
 /// Per-band scale-factor gain applied to a long-block line before rounding.
@@ -8323,20 +8698,18 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_
     step: f32,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<PackedBits, Error> {
-    let spectrum = layer3_long_block_spectrum(pcm, channel, start_frame)?;
-    // The chain quantizes the sign-negated spectrum (see `quantize_pcm_long_block`).
-    let negated: Vec<f32> = spectrum.iter().map(|&line| -line).collect();
+    let quantizer_spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
     let scalefac_scale = false;
     let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
         pcm,
         channel,
         start_frame,
-        &negated,
+        &quantizer_spectrum,
         step,
         scalefac_scale,
     )?;
     let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
-        &negated,
+        &quantizer_spectrum,
         step,
         &scale_factors,
         scalefac_scale,
@@ -8353,6 +8726,285 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_
     Ok(packed)
 }
 
+fn requantize_mpeg1_layer3_long_line_with_scalefactors(
+    quantized: i32,
+    line: usize,
+    global_gain: u8,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<f32, Error> {
+    let magnitude = (quantized.unsigned_abs() as f32).powf(4.0 / 3.0);
+    let sign = if quantized < 0 { -1.0 } else { 1.0 };
+    let gain = 2.0_f32.powf(0.25 * (f32::from(global_gain) - 210.0));
+    let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate)?;
+    let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
+    let attenuation = match index[1..=MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
+        .iter()
+        .position(|&boundary| line < usize::from(boundary))
+    {
+        Some(band) => 2.0_f32.powf(-multiplier * f32::from(scale_factors[band])),
+        None => 1.0,
+    };
+    Ok(sign * magnitude * gain * attenuation)
+}
+
+fn mpeg1_layer3_long_perceptual_distortion_with_scalefactors(
+    spectrum: &[f32],
+    quantized: &[i32],
+    global_gain: u8,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    scalefac_scale: bool,
+    sample_rate: u32,
+    allowed_noise: &[f64; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> Result<f64, Error> {
+    if spectrum.len() != quantized.len() {
+        return Err(Error::InvalidInput(
+            "MP3 perceptual distortion inputs must match",
+        ));
+    }
+
+    let mut distortion = 0.0_f64;
+    for (band, &allowed) in allowed_noise.iter().enumerate() {
+        let (start, end) = mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        let mut noise = 0.0_f64;
+        for line in start..end.min(spectrum.len()) {
+            let reconstructed = requantize_mpeg1_layer3_long_line_with_scalefactors(
+                quantized[line],
+                line,
+                global_gain,
+                scale_factors,
+                scalefac_scale,
+                sample_rate,
+            )?;
+            let error = f64::from(reconstructed - spectrum[line]);
+            noise += error * error;
+        }
+        if allowed.is_finite() {
+            distortion += noise / allowed.max(1.0e-12);
+        }
+    }
+    Ok(distortion)
+}
+
+fn relaxed_mpeg1_layer3_scale_factor_candidates(
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> [[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]; 4] {
+    let mut minus_one = *scale_factors;
+    let mut half = *scale_factors;
+    let mut capped_one = *scale_factors;
+    for band in 0..MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+        minus_one[band] = minus_one[band].saturating_sub(1);
+        half[band] /= 2;
+        capped_one[band] = capped_one[band].min(1);
+    }
+    [*scale_factors, minus_one, half, capped_one]
+}
+
+fn mpeg1_layer3_scale_factor_complexity(
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> (usize, u32) {
+    (
+        scale_factors
+            .iter()
+            .filter(|&&scale_factor| scale_factor != 0)
+            .count(),
+        scale_factors
+            .iter()
+            .map(|&scale_factor| u32::from(scale_factor))
+            .sum(),
+    )
+}
+
+fn mpeg1_layer3_quality_guard_candidate_is_better(
+    previous: &Layer3QualityGuardPerceptualCandidate,
+    candidate: &Layer3QualityGuardPerceptualCandidate,
+) -> bool {
+    const DISTORTION_TIE_EPSILON: f64 = 1.0e-9;
+    if candidate.distortion + DISTORTION_TIE_EPSILON < previous.distortion {
+        return true;
+    }
+    if (candidate.distortion - previous.distortion).abs() <= DISTORTION_TIE_EPSILON {
+        return mpeg1_layer3_scale_factor_complexity(&candidate.scale_factors)
+            < mpeg1_layer3_scale_factor_complexity(&previous.scale_factors);
+    }
+    false
+}
+
+fn select_mpeg1_layer3_quality_guard_perceptual_candidate(
+    spectrum: &[f32],
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    step: f32,
+    scalefac_scale: bool,
+    sample_rate: u32,
+    allowed_noise: &[f64; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> Result<Layer3QualityGuardPerceptualCandidate, Error> {
+    let mut selected: Option<Layer3QualityGuardPerceptualCandidate> = None;
+    let mut last_error: Option<Error> = None;
+    for candidate_scale_factors in relaxed_mpeg1_layer3_scale_factor_candidates(scale_factors) {
+        let perceptual_quantized = match quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+            spectrum,
+            step,
+            &candidate_scale_factors,
+            scalefac_scale,
+            sample_rate,
+        ) {
+            Ok(quantized) => quantized,
+            Err(err) => {
+                last_error = Some(err);
+                continue;
+            }
+        };
+        let perceptual_global_gain =
+            calibrated_global_gain_for_granule(&perceptual_quantized, step);
+        let perceptual_distortion = mpeg1_layer3_long_perceptual_distortion_with_scalefactors(
+            spectrum,
+            &perceptual_quantized,
+            perceptual_global_gain,
+            &candidate_scale_factors,
+            scalefac_scale,
+            sample_rate,
+            allowed_noise,
+        )?;
+        let candidate = Layer3QualityGuardPerceptualCandidate {
+            scale_factors: candidate_scale_factors,
+            quantized: perceptual_quantized,
+            scalefac_scale,
+            global_gain: perceptual_global_gain,
+            distortion: perceptual_distortion,
+        };
+        selected = match selected {
+            Some(previous)
+                if !mpeg1_layer3_quality_guard_candidate_is_better(&previous, &candidate) =>
+            {
+                Some(previous)
+            }
+            _ => Some(candidate),
+        };
+    }
+    selected.ok_or_else(|| {
+        last_error.unwrap_or(Error::UnsupportedFeature(
+            "MP3 quality guard perceptual candidate",
+        ))
+    })
+}
+
+fn centered_mpeg1_layer3_psychoacoustic_pcm_window(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    spectrum_len: usize,
+) -> Vec<f64> {
+    let offset = (MPEG1_LAYER3_PSY_FFT_LEN.saturating_sub(spectrum_len)) / 2;
+    let window_start = start_frame as isize - offset as isize;
+    (0..MPEG1_LAYER3_PSY_FFT_LEN)
+        .map(|n| {
+            f64::from(channel_sample_or_zero(
+                pcm,
+                channel,
+                window_start + n as isize,
+            ))
+        })
+        .collect()
+}
+
+fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_quality_guard_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Layer3QualityGuardGranulePayload, Error> {
+    let spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
+    let pcm_window =
+        centered_mpeg1_layer3_psychoacoustic_pcm_window(pcm, channel, start_frame, spectrum.len());
+    let allowed_noise = psychoacoustic::perceptual_long_block_allowed_noise(
+        &spectrum,
+        &pcm_window,
+        pcm.sample_rate,
+    )?;
+    let zero_scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    let calibrated_quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+        &spectrum,
+        step,
+        &zero_scale_factors,
+        false,
+        pcm.sample_rate,
+    )?;
+    let calibrated_global_gain = calibrated_global_gain_for_granule(&calibrated_quantized, step);
+    let calibrated_distortion = mpeg1_layer3_long_perceptual_distortion_with_scalefactors(
+        &spectrum,
+        &calibrated_quantized,
+        calibrated_global_gain,
+        &zero_scale_factors,
+        false,
+        pcm.sample_rate,
+        &allowed_noise,
+    )?;
+
+    let perceptual_candidate: Result<Layer3QualityGuardPerceptualCandidate, Error> = (|| {
+        let perceptual_scalefac_scale = false;
+        let perceptual_scale_factors =
+            select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
+                pcm,
+                channel,
+                start_frame,
+                &spectrum,
+                step,
+                perceptual_scalefac_scale,
+            )?;
+        select_mpeg1_layer3_quality_guard_perceptual_candidate(
+            &spectrum,
+            &perceptual_scale_factors,
+            step,
+            perceptual_scalefac_scale,
+            pcm.sample_rate,
+            &allowed_noise,
+        )
+    })();
+
+    let (quality_guard_compared_granules, quality_guard_distortion_delta) =
+        match perceptual_candidate.as_ref() {
+            Ok(candidate) => (1, calibrated_distortion - candidate.distortion),
+            Err(_) => (0, 0.0),
+        };
+    let used_perceptual = perceptual_candidate
+        .as_ref()
+        .is_ok_and(|candidate| candidate.distortion <= calibrated_distortion);
+    let (scale_factors, quantized, scalefac_scale, global_gain) =
+        if let (true, Ok(candidate)) = (used_perceptual, perceptual_candidate) {
+            (
+                candidate.scale_factors,
+                candidate.quantized,
+                candidate.scalefac_scale,
+                candidate.global_gain,
+            )
+        } else {
+            (
+                zero_scale_factors,
+                calibrated_quantized,
+                false,
+                calibrated_global_gain,
+            )
+        };
+
+    granule.scalefac_scale = scalefac_scale;
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = global_gain;
+    Ok(Layer3QualityGuardGranulePayload {
+        bits: packed,
+        used_perceptual,
+        compared_granules: quality_guard_compared_granules,
+        distortion_delta: quality_guard_distortion_delta,
+    })
+}
+
 fn select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
     pcm: &AudioBuffer,
     channel: usize,
@@ -8362,17 +9014,12 @@ fn select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
     scalefac_scale: bool,
 ) -> Result<[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
     // Centre the analysis FFT on the granule, zero-padding past stream edges.
-    let offset = (MPEG1_LAYER3_PSY_FFT_LEN.saturating_sub(mdct_spectrum.len())) / 2;
-    let window_start = start_frame as isize - offset as isize;
-    let pcm_window: Vec<f64> = (0..MPEG1_LAYER3_PSY_FFT_LEN)
-        .map(|n| {
-            f64::from(channel_sample_or_zero(
-                pcm,
-                channel,
-                window_start + n as isize,
-            ))
-        })
-        .collect();
+    let pcm_window = centered_mpeg1_layer3_psychoacoustic_pcm_window(
+        pcm,
+        channel,
+        start_frame,
+        mdct_spectrum.len(),
+    );
 
     psychoacoustic::perceptual_long_block_scalefactors(
         mdct_spectrum,
@@ -8399,13 +9046,13 @@ fn count_mpeg1_layer3_pcm_frame_perceptual_nonzero_scale_factors(
             )
             .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
         for channel in 0..header.channel_count() {
-            let spectrum = layer3_long_block_spectrum(pcm, channel, granule_start)?;
-            let negated: Vec<f32> = spectrum.iter().map(|&line| -line).collect();
+            let quantizer_spectrum =
+                layer3_perceptual_quantizer_spectrum(pcm, channel, granule_start)?;
             let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
                 pcm,
                 channel,
                 granule_start,
-                &negated,
+                &quantizer_spectrum,
                 step,
                 false,
             )?;
@@ -8544,6 +9191,58 @@ fn pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
     }
     let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
     Ok((side_info, main_data))
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_quality_guard_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits, usize, usize, usize, f64), Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    let mut perceptual_granules = 0_usize;
+    let mut calibrated_granules = 0_usize;
+    let mut quality_guard_compared_granules = 0_usize;
+    let mut quality_guard_distortion_delta = 0.0_f64;
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_quality_guard_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    provider,
+                )?;
+            if payload.used_perceptual {
+                perceptual_granules += 1;
+            } else {
+                calibrated_granules += 1;
+            }
+            quality_guard_compared_granules += payload.compared_granules;
+            quality_guard_distortion_delta += payload.distortion_delta;
+            payloads.push(payload.bits);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    Ok((
+        side_info,
+        main_data,
+        perceptual_granules,
+        calibrated_granules,
+        quality_guard_compared_granules,
+        quality_guard_distortion_delta,
+    ))
 }
 
 fn pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
@@ -9229,6 +9928,7 @@ mod tests {
         encode_mpeg1_layer3_pcm_frames_with_perceptual_bitrate_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_perceptual_cbr_bitrate_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_perceptual_max_payload_bits_and_table_provider,
+        encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
@@ -9237,6 +9937,7 @@ mod tests {
         layer3_header_for_capacity, layer3_long_block_spectrum, layer3_main_data_capacity_bits,
         layer3_main_data_capacity_bytes, mdct_long_block, mpeg1_layer3_global_gain_for_step,
         mpeg1_layer3_long_scalefactor_band_index, mpeg1_layer3_long_scalefactor_band_range,
+        mpeg1_layer3_quality_guard_candidate_is_better,
         mpeg1_layer3_standard_big_value_table_provider, mpeg1_layer3_standard_table_provider,
         pack_big_value_pairs_with_linbits, pack_big_value_pairs_with_region_tables_and_provider,
         pack_big_value_pairs_with_sign_bits, pack_big_value_pairs_with_table,
@@ -9270,15 +9971,18 @@ mod tests {
         select_mpeg1_layer3_pcm_frame_step_details_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
         select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
-        select_mpeg1_layer3_pcm_frame_step_with_table_provider, BitWriter, ChannelMode,
+        select_mpeg1_layer3_pcm_frame_step_with_table_provider,
+        select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider,
+        select_mpeg1_layer3_reservoir_frame_details_with_table_provider, BitWriter, ChannelMode,
         FrameHeader, Layer, Layer3BigValueMagnitude, Layer3BigValuePair,
         Layer3BigValueRegionTableSelection, Layer3BigValueTableSelection,
         Layer3Count1MagnitudeQuad, Layer3Count1Quad, Layer3Count1TableSelection,
         Layer3EntropyTableProvider, Layer3EntropyTables, Layer3GranuleChannelInfo,
-        Layer3PcmFrameStepSelection, Layer3ScaleFactorCompress, Layer3SideInfo,
-        Layer3SpectralRegions, Layer3WindowSwitching, MpegVersion, ALIAS_REDUCTION_C,
-        LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES,
-        MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        Layer3PcmFrameStepSelection, Layer3QualityGuardPerceptualCandidate,
+        Layer3ScaleFactorCompress, Layer3SideInfo, Layer3SpectralRegions, Layer3WindowSwitching,
+        MpegVersion, ALIAS_REDUCTION_C, LONG_BLOCK_GRANULE_SAMPLES,
+        MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
+        MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     };
     use sc_core::{
         detect, quantize_spectrum, AudioBuffer, BitReader, Error, Format, HuffmanCode,
@@ -12732,6 +13436,197 @@ mod tests {
     }
 
     #[test]
+    fn reservoir_frame_details_match_encoded_main_data_begin() {
+        let frames = 8_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame);
+        for frame in 0..frames {
+            let loud = frame % 2 == 0;
+            for n in 0..samples_per_frame {
+                let t = n as f32;
+                samples.push(if loud {
+                    0.3 * ((t * 0.043).sin()
+                        + (t * 0.131).sin()
+                        + (t * 0.277).sin()
+                        + (t * 0.611).sin())
+                } else {
+                    0.02 * (t * 0.05).sin()
+                });
+            }
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let details = select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+        let stream = encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+
+        assert_eq!(details.len(), frames);
+        assert_eq!(details[0].frame_index, 0);
+        assert_eq!(details[0].main_data_begin, 0);
+        assert!(
+            details.iter().any(|detail| detail.main_data_begin > 0),
+            "reservoir details never reported borrowing"
+        );
+        assert!(
+            details.iter().any(|detail| detail.reservoir_after > 0),
+            "reservoir details never accumulated spare data"
+        );
+        assert!(details.iter().all(|detail| {
+            detail.payload_bit_len <= (detail.frame_capacity_bytes + detail.main_data_begin) * 8
+        }));
+        assert!(details
+            .iter()
+            .all(|detail| { detail.perceptual_granules == 0 && detail.calibrated_granules == 2 }));
+
+        let mut offset = 0_usize;
+        for detail in &details {
+            let header = FrameHeader::parse(&stream[offset..offset + 4]).unwrap();
+            assert_eq!(detail.frame_len, header.frame_len());
+            assert_eq!(detail.padding, header.padding);
+            let mut reader = BitReader::new(&stream[offset + 4..]);
+            assert_eq!(detail.main_data_begin as u32, reader.read_bits(9).unwrap());
+            offset += header.frame_len();
+        }
+        assert_eq!(offset, stream.len());
+    }
+
+    #[test]
+    fn perceptual_reservoir_frame_details_match_encoded_main_data_begin() {
+        let frames = 8_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame);
+        for frame in 0..frames {
+            let loud = frame % 2 == 0;
+            for n in 0..samples_per_frame {
+                let t = n as f32;
+                samples.push(if loud {
+                    0.24 * ((t * 0.043).sin() + 0.7 * (t * 0.131).sin() + 0.4 * (t * 0.277).sin())
+                } else {
+                    0.02 * (t * 0.05).sin()
+                });
+            }
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let details = select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+        let stream = encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+        let calibrated = encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+            &pcm,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            provider,
+        )
+        .unwrap();
+        let self_contained =
+            encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                provider,
+            )
+            .unwrap();
+
+        assert_eq!(details.len(), frames);
+        assert_ne!(stream, calibrated);
+        assert_ne!(stream, self_contained);
+        assert!(
+            details.iter().any(|detail| detail.main_data_begin > 0),
+            "perceptual reservoir details never reported borrowing"
+        );
+        assert!(
+            details.iter().any(|detail| detail.reservoir_after > 0),
+            "perceptual reservoir details never accumulated spare data"
+        );
+        assert!(details.iter().all(|detail| {
+            detail.payload_bit_len <= (detail.frame_capacity_bytes + detail.main_data_begin) * 8
+        }));
+        assert!(details
+            .iter()
+            .all(|detail| { detail.perceptual_granules == 2 && detail.calibrated_granules == 0 }));
+
+        let mut offset = 0_usize;
+        for detail in &details {
+            let header = FrameHeader::parse(&stream[offset..offset + 4]).unwrap();
+            assert_eq!(detail.frame_len, header.frame_len());
+            assert_eq!(detail.padding, header.padding);
+            let mut reader = BitReader::new(&stream[offset + 4..]);
+            assert_eq!(detail.main_data_begin as u32, reader.read_bits(9).unwrap());
+            offset += header.frame_len();
+        }
+        assert_eq!(offset, stream.len());
+    }
+
+    #[test]
+    fn quality_guard_candidate_tiebreak_prefers_simpler_scale_factors() {
+        let mut complex_scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        complex_scale_factors[0] = 4;
+        complex_scale_factors[7] = 2;
+        let mut simple_scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        simple_scale_factors[0] = 1;
+
+        let previous = Layer3QualityGuardPerceptualCandidate {
+            scale_factors: complex_scale_factors,
+            quantized: vec![1, 0, -1],
+            scalefac_scale: false,
+            global_gain: 180,
+            distortion: 12.0,
+        };
+        let same_distortion_simpler = Layer3QualityGuardPerceptualCandidate {
+            scale_factors: simple_scale_factors,
+            quantized: vec![1, 0, -1],
+            scalefac_scale: false,
+            global_gain: 180,
+            distortion: 12.0,
+        };
+        let lower_distortion_complex = Layer3QualityGuardPerceptualCandidate {
+            distortion: 11.9,
+            ..previous.clone()
+        };
+
+        assert!(mpeg1_layer3_quality_guard_candidate_is_better(
+            &previous,
+            &same_distortion_simpler
+        ));
+        assert!(mpeg1_layer3_quality_guard_candidate_is_better(
+            &same_distortion_simpler,
+            &lower_distortion_complex
+        ));
+        assert!(!mpeg1_layer3_quality_guard_candidate_is_better(
+            &same_distortion_simpler,
+            &previous
+        ));
+    }
+
+    #[test]
     fn default_nonzero_mono_encode_uses_bit_reservoir() {
         let frames = 8_usize;
         let samples_per_frame = 1152_usize;
@@ -12766,6 +13661,48 @@ mod tests {
         assert!(
             max_main_data_begin > 0,
             "default nonzero mono MP3 encode never used the bit reservoir"
+        );
+    }
+
+    #[test]
+    fn default_nonzero_stereo_encode_uses_bit_reservoir() {
+        let frames = 8_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame * 2);
+        for frame in 0..frames {
+            let loud = frame % 2 == 0;
+            for n in 0..samples_per_frame {
+                let t = n as f32;
+                let left = if loud {
+                    0.28 * ((t * 0.037).sin() + (t * 0.149).sin() + (t * 0.419).sin())
+                } else {
+                    0.02 * (t * 0.041).sin()
+                };
+                let right = if loud {
+                    0.24 * ((t * 0.053).sin() + (t * 0.173).sin() + (t * 0.337).sin())
+                } else {
+                    0.018 * (t * 0.047).sin()
+                };
+                samples.push(left);
+                samples.push(right);
+            }
+        }
+        let pcm = AudioBuffer::new(44_100, 2, samples).unwrap();
+        let stream = encode(&pcm).unwrap();
+
+        let mut offset = 0_usize;
+        let mut max_main_data_begin = 0_u32;
+        while offset < stream.len() {
+            let header = FrameHeader::parse(&stream[offset..offset + 4]).unwrap();
+            let mut reader = BitReader::new(&stream[offset + 4..]);
+            max_main_data_begin = max_main_data_begin.max(reader.read_bits(9).unwrap());
+            offset += header.frame_len();
+        }
+
+        assert_eq!(offset, stream.len());
+        assert!(
+            max_main_data_begin > 0,
+            "default nonzero stereo MP3 encode never used the bit reservoir"
         );
     }
 

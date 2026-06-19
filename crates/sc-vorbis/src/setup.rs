@@ -13,9 +13,6 @@
 //! single framing-flag bit. The layout is fully deterministic, so each packer
 //! is verified bit-exact by round-tripping through a matching reader.
 
-// Consumed by the Vorbis stream assembler; the live encoder still ships via FFI.
-#![allow(dead_code)]
-
 use crate::codebook::{maptype1_quantvals, ov_ilog};
 use crate::oggpack::BitWriter;
 

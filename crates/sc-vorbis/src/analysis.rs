@@ -12,7 +12,8 @@
 //! tone mask by the caller; the AoTuV noise-companding refinement is a separate
 //! stage.
 
-// Drives the analysis stages; the live encoder still ships via FFI.
+// `mdct_analysis` is the non-windowed convenience used by tests; the encoder
+// calls the windowed variant.
 #![allow(dead_code)]
 
 use crate::masking::{build_bin_ath, P_BANDS};
@@ -102,11 +103,25 @@ impl PsyAnalysis {
     /// `None` unless `pcm` is exactly `2 * n` samples.
     #[must_use]
     pub fn mdct_analysis(&self, pcm: &[f32]) -> Option<(Vec<f32>, Vec<f32>)> {
-        if self.n == 0 || pcm.len() != 2 * self.n {
+        let window = vorbis_window(2 * self.n);
+        self.mdct_analysis_windowed(pcm, &window)
+    }
+
+    /// Like [`mdct_analysis`](Self::mdct_analysis) but with a caller-supplied
+    /// analysis window (length `2 * n`). Block switching uses this to apply a
+    /// long block's left/right transition window so the forward transform matches
+    /// the window the decoder synthesizes with (and TDAC holds). Returns `None`
+    /// unless `pcm` and `window` are both exactly `2 * n` samples.
+    #[must_use]
+    pub fn mdct_analysis_windowed(
+        &self,
+        pcm: &[f32],
+        window: &[f32],
+    ) -> Option<(Vec<f32>, Vec<f32>)> {
+        if self.n == 0 || pcm.len() != 2 * self.n || window.len() != pcm.len() {
             return None;
         }
-        let window = vorbis_window(pcm.len());
-        let windowed: Vec<f32> = pcm.iter().zip(&window).map(|(&s, &w)| s * w).collect();
+        let windowed: Vec<f32> = pcm.iter().zip(window).map(|(&s, &w)| s * w).collect();
         let mdct = mdct_forward(&windowed);
         let logmdct: Vec<f32> = mdct.iter().map(|&c| to_db(c)).collect();
         Some((mdct, logmdct))
