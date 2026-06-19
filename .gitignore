@@ -1,6 +1,10 @@
 # Local-only planning / design docs (never referenced from source, commits, or PRs)
 backup/
 
+# Local-only upstream source checkouts, kept solely as a porting reference for the
+# BSD-licensed Vorbis/Opus encoders (never referenced from source, commits, or PRs)
+ref/
+
 # Rust
 /target
 **/target/

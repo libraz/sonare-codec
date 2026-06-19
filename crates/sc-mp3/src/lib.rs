@@ -7,6 +7,7 @@ use sc_core::{
     AudioBuffer, BitWriter as CoreBitWriter, Decoder, Encoder, Error, HuffmanCode, HuffmanEntry,
     PackedBits,
 };
+use std::sync::OnceLock;
 
 mod filterbank;
 pub mod psychoacoustic;
@@ -102,6 +103,25 @@ pub struct Layer3PcmFrameStepSelection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3PerceptualCandidateProfile {
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_capacity_bits: usize,
+    pub nonzero_scale_factors: usize,
+    pub scale_factor_bands: usize,
+    pub max_scale_factor: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3PerceptualBitAllocation {
+    pub frame_index: usize,
+    pub granule: usize,
+    pub channel: usize,
+    pub perceptual_entropy: f64,
+    pub target_bits: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layer3ReservoirFrameSelection {
     pub frame_index: usize,
     pub step: f32,
@@ -115,6 +135,24 @@ pub struct Layer3ReservoirFrameSelection {
     pub calibrated_granules: usize,
     pub quality_guard_compared_granules: usize,
     pub quality_guard_distortion_delta: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3EntropyTargetedReservoirFrameSelection {
+    pub frame_index: usize,
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_len: usize,
+    pub padding: bool,
+    pub frame_capacity_bytes: usize,
+    pub main_data_begin: usize,
+    pub reservoir_after: usize,
+    pub perceptual_granules: usize,
+    pub calibrated_granules: usize,
+    pub quality_guard_compared_granules: usize,
+    pub quality_guard_distortion_delta: f64,
+    pub entropy_target_bits: usize,
+    pub used_entropy_target_budget: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -474,11 +512,11 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 /// Silent input routes through the compact zero-spectral frame scaffold.
 /// Non-silent mono input uses the psychoacoustic scale-factor long-block
 /// scaffold with a constant-bitrate padding schedule and the bit-reservoir
-/// packer. Non-silent stereo now uses the same perceptual reservoir path after
-/// the FFmpeg-gated readiness PCM caught up with the guarded bridge. The
-/// quantizer and table/rate selection are still intentionally coarse, so full
-/// rate control, complete standard Huffman coverage, and VBR are still
-/// incomplete.
+/// packer. Non-silent mono/stereo now route through the entropy-targeted
+/// perceptual reservoir selector, which feeds the existing FFT masking-based
+/// perceptual-entropy allocation into the frame budget. The quantizer and
+/// quality proxy are still intentionally coarse, so full rate control,
+/// stereo true-polyphase readiness, and VBR are still incomplete.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(
@@ -487,11 +525,12 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     }
 
     if pcm.samples.iter().any(|sample| *sample != 0.0) {
-        encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
+        encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
             pcm,
             MPEG1_LAYER3_PCM_STEP_CANDIDATES,
             128,
             false,
+            0,
             mpeg1_layer3_standard_table_provider(),
         )
     } else {
@@ -1147,6 +1186,145 @@ fn collect_mpeg1_layer3_reservoir_frames_with_table_provider(
     Ok(frames)
 }
 
+fn layer3_entropy_target_bits_by_frame(
+    pcm: &AudioBuffer,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+) -> Result<Vec<usize>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, pcm)?;
+    let mut frame_targets = vec![0usize; frame_count];
+    for allocation in select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(
+        pcm,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+    )? {
+        if let Some(slot) = frame_targets.get_mut(allocation.frame_index) {
+            *slot = slot
+                .checked_add(allocation.target_bits)
+                .ok_or(Error::InvalidInput("MP3 entropy frame target overflows"))?;
+        }
+    }
+    Ok(frame_targets)
+}
+
+fn collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+    mode: Layer3ReservoirPayloadMode,
+) -> Result<Vec<(Layer3ReservoirFrame, usize, bool)>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, pcm)?;
+    let frame_target_bits = layer3_entropy_target_bits_by_frame(
+        pcm,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+    )?;
+    let mut padding = Layer3PaddingSchedule::new(base_header)?;
+
+    let mut frames: Vec<(Layer3ReservoirFrame, usize, bool)> = Vec::with_capacity(frame_count);
+    let mut reservoir = 0_usize;
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(base_header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        let frame_header = padding.next_header();
+        let capacity = layer3_main_data_capacity_bytes(frame_header)?;
+        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
+        let full_budget_bytes = capacity
+            .checked_add(main_data_begin)
+            .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
+        let entropy_target_bits = *frame_target_bits.get(frame_index).unwrap_or(&0);
+        let entropy_budget_bytes = entropy_target_bits
+            .saturating_add(7)
+            .checked_div(8)
+            .unwrap_or(0)
+            .clamp(1, full_budget_bytes);
+        let entropy_packed = pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+            frame_header,
+            pcm,
+            start_frame,
+            candidates,
+            entropy_budget_bytes,
+            provider,
+            mode,
+        );
+        let (packed, used_entropy_target_budget) = match entropy_packed {
+            Ok(packed) => (packed, true),
+            Err(_) => (
+                pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+                    frame_header,
+                    pcm,
+                    start_frame,
+                    candidates,
+                    full_budget_bytes,
+                    provider,
+                    mode,
+                )?,
+                false,
+            ),
+        };
+        let Layer3ReservoirPackedFrame {
+            step,
+            mut side_info,
+            main_data,
+            perceptual_granules,
+            calibrated_granules,
+            quality_guard_compared_granules,
+            quality_guard_distortion_delta,
+        } = packed;
+        side_info.main_data_begin = u16::try_from(main_data_begin)
+            .map_err(|_| Error::InvalidInput("MP3 main_data_begin exceeds field width"))?;
+        let payload_bit_len = main_data.bit_len;
+        let payload = main_data.bytes;
+        let reservoir_after = main_data_begin
+            .checked_add(capacity)
+            .ok_or(Error::InvalidInput("MP3 reservoir overflows"))?
+            .checked_sub(payload.len())
+            .ok_or(Error::InvalidInput("MP3 reservoir underflows"))?;
+        reservoir = reservoir_after;
+        frames.push((
+            Layer3ReservoirFrame {
+                header: frame_header,
+                side_info,
+                payload,
+                payload_bit_len,
+                capacity,
+                main_data_begin,
+                reservoir_after,
+                step,
+                perceptual_granules,
+                calibrated_granules,
+                quality_guard_compared_granules,
+                quality_guard_distortion_delta,
+            },
+            entropy_target_bits,
+            used_entropy_target_budget,
+        ));
+    }
+
+    Ok(frames)
+}
+
 /// Selects reservoir-aware CBR frame steps and reports the rate-control state.
 ///
 /// This uses the same pass-1 selection as
@@ -1230,6 +1408,55 @@ pub fn select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provide
             quality_guard_distortion_delta: frame.quality_guard_distortion_delta,
         })
     })
+    .collect()
+}
+
+/// Selects perceptual reservoir frame steps using entropy-derived frame targets.
+///
+/// The target bits come from
+/// [`select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate`] and are summed
+/// per frame before selecting a payload. If no candidate fits the entropy
+/// target budget, the selector falls back to the ordinary reservoir budget and
+/// marks `used_entropy_target_budget=false` in the returned detail.
+pub fn select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3EntropyTargetedReservoirFrameSelection>, Error> {
+    collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .enumerate()
+    .map(
+        |(frame_index, (frame, entropy_target_bits, used_entropy_target_budget))| {
+            Ok(Layer3EntropyTargetedReservoirFrameSelection {
+                frame_index,
+                step: frame.step,
+                payload_bit_len: frame.payload_bit_len,
+                frame_len: frame.header.frame_len(),
+                padding: frame.header.padding,
+                frame_capacity_bytes: frame.capacity,
+                main_data_begin: frame.main_data_begin,
+                reservoir_after: frame.reservoir_after,
+                perceptual_granules: frame.perceptual_granules,
+                calibrated_granules: frame.calibrated_granules,
+                quality_guard_compared_granules: frame.quality_guard_compared_granules,
+                quality_guard_distortion_delta: frame.quality_guard_distortion_delta,
+                entropy_target_bits,
+                used_entropy_target_budget,
+            })
+        },
+    )
     .collect()
 }
 
@@ -1326,6 +1553,38 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provid
         provider,
         Layer3ReservoirPayloadMode::PerceptualActive,
     )?;
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes PCM as constant-bitrate Layer III using entropy-targeted perceptual
+/// reservoir step selection.
+///
+/// This diagnostic encoder uses the same frame choices reported by
+/// [`select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider`]
+/// and then assembles those frames into a bytestream. It is kept separate from
+/// production until FFmpeg oracle quality is checked against the current
+/// production path.
+pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frames = collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .map(|(frame, _, _)| frame)
+    .collect();
 
     assemble_mpeg1_layer3_reservoir_frames(frames)
 }
@@ -1826,6 +2085,184 @@ pub fn select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_p
     active.or(fallback).ok_or(Error::UnsupportedFeature(
         "MP3 perceptual quantizer step search",
     ))
+}
+
+/// Reports first-frame perceptual candidate cost and scale-factor activation.
+///
+/// This helper uses the same first-frame perceptual payload evaluator and
+/// psychoacoustic scale-factor selector as the active CBR diagnostic path. It
+/// is intended to explain whether a candidate set is failing because of CBR
+/// capacity or because scale-factor allocation never activates.
+pub fn select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3PerceptualCandidateProfile>, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let samples_per_frame = usize::from(header.samples_per_frame());
+    let mut profiles = Vec::new();
+    for &candidate in candidates {
+        if !candidate.is_finite() || candidate <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        let Ok(selection) =
+            select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_table_provider(
+                header,
+                pcm,
+                0,
+                &[candidate],
+                provider,
+            )
+        else {
+            continue;
+        };
+        let mut nonzero_scale_factors = 0usize;
+        let mut scale_factor_bands = 0usize;
+        let mut max_scale_factor = 0u8;
+        for granule in 0..(samples_per_frame / 576).max(1) {
+            let granule_start = granule
+                .checked_mul(576)
+                .ok_or(Error::InvalidInput("MP3 granule start overflows"))?;
+            for channel in 0..usize::from(pcm.channels) {
+                let scale_factors = select_mpeg1_layer3_psychoacoustic_long_scale_factors(
+                    pcm,
+                    channel,
+                    granule_start,
+                    selection.step,
+                    false,
+                    MPEG1_LAYER3_PSY_FFT_LEN,
+                )?;
+                for scale_factor in scale_factors {
+                    nonzero_scale_factors += usize::from(scale_factor != 0);
+                    scale_factor_bands += 1;
+                    max_scale_factor = max_scale_factor.max(scale_factor);
+                }
+            }
+        }
+        profiles.push(Layer3PerceptualCandidateProfile {
+            step: selection.step,
+            payload_bit_len: selection.payload_bit_len,
+            frame_capacity_bits: selection.frame_capacity_bits,
+            nonzero_scale_factors,
+            scale_factor_bands,
+            max_scale_factor,
+        });
+    }
+    if profiles.is_empty() {
+        return Err(Error::UnsupportedFeature(
+            "MP3 first-frame perceptual candidate profile",
+        ));
+    }
+    Ok(profiles)
+}
+
+fn mpeg1_layer3_granule_perceptual_entropy(
+    pcm: &AudioBuffer,
+    channel: usize,
+    granule_start: usize,
+) -> Result<f64, Error> {
+    let pcm_window =
+        centered_mpeg1_layer3_psychoacoustic_pcm_window(pcm, channel, granule_start, 576);
+    let window = psychoacoustic::hann_window(MPEG1_LAYER3_PSY_FFT_LEN)?;
+    let windowed: Vec<f64> = pcm_window
+        .iter()
+        .zip(window.iter())
+        .map(|(&sample, &scale)| sample * scale)
+        .collect();
+    let energy = psychoacoustic::power_spectrum(&windowed)?;
+    let tonality = psychoacoustic::windowed_tonality(&energy, 17)?;
+    let barks = psychoacoustic::bin_barks(energy.len(), pcm.sample_rate, MPEG1_LAYER3_PSY_FFT_LEN)?;
+    let threshold = psychoacoustic::spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
+    psychoacoustic::perceptual_entropy(&energy, &threshold)
+}
+
+/// Computes perceptual-entropy weighted target bits for each granule/channel.
+///
+/// The total target is the same CBR main-data capacity used by the Layer III
+/// frame builder for the stream. This does not change encoding decisions yet;
+/// it exposes the psychoacoustic rate-control signal that a later reservoir
+/// selector can use to spend bits where the current PCM demands them.
+pub fn select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(
+    pcm: &AudioBuffer,
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+) -> Result<Vec<Layer3PerceptualBitAllocation>, Error> {
+    let base_header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, pcm)?;
+    let mut padding = Layer3PaddingSchedule::new(base_header)?;
+    let samples_per_frame = usize::from(base_header.samples_per_frame());
+    let mut entropies = Vec::new();
+    let mut positions = Vec::new();
+    let mut total_capacity_bits = 0usize;
+
+    for frame_index in 0..frame_count {
+        let frame_header = padding.next_header();
+        total_capacity_bits = total_capacity_bits
+            .checked_add(layer3_main_data_capacity_bits(frame_header)?)
+            .ok_or(Error::InvalidInput(
+                "MP3 perceptual bit allocation budget overflows",
+            ))?;
+        let frame_start = frame_index
+            .checked_mul(samples_per_frame)
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        for granule in 0..base_header.layer3_granule_count() {
+            let granule_start = frame_start
+                .checked_add(granule * 576)
+                .ok_or(Error::InvalidInput("MP3 granule start overflows"))?;
+            for channel in 0..base_header.channel_count() {
+                entropies.push(mpeg1_layer3_granule_perceptual_entropy(
+                    pcm,
+                    channel,
+                    granule_start,
+                )?);
+                positions.push((frame_index, granule, channel));
+            }
+        }
+    }
+
+    let targets = psychoacoustic::distribute_bits_by_perceptual_entropy(
+        &entropies,
+        total_capacity_bits,
+        min_bits_per_granule_channel,
+    )?;
+    Ok(positions
+        .into_iter()
+        .zip(entropies)
+        .zip(targets)
+        .map(
+            |(((frame_index, granule, channel), perceptual_entropy), target_bits)| {
+                Layer3PerceptualBitAllocation {
+                    frame_index,
+                    granule,
+                    channel,
+                    perceptual_entropy,
+                    target_bits,
+                }
+            },
+        )
+        .collect())
 }
 
 /// Selects the finest quantizer step and reports the payload cost relative to a
@@ -2640,14 +3077,29 @@ pub struct Layer3EntropyTables<'a> {
 pub struct Layer3EntropyTableProvider<'a> {
     pub big_value_table_1: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_2: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_3: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_5: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_6: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_7: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_8: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_9: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_10: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_11: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_12: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_13: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_15: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub big_value_table_16: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
+    pub big_value_table_24: &'a [HuffmanEntry<Layer3BigValueMagnitude>],
     pub count1_table_0: &'a [HuffmanEntry<Layer3Count1MagnitudeQuad>],
     pub count1_table_1: &'a [HuffmanEntry<Layer3Count1MagnitudeQuad>],
 }
+
+pub const MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS: &[u8] = &[
+    1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28,
+    29, 30, 31,
+];
+pub const MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS: &[u8] = &[];
+pub const MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS: &[bool] = &[false, true];
 
 impl<'a> Layer3EntropyTableProvider<'a> {
     pub fn big_value_table(
@@ -2658,12 +3110,21 @@ impl<'a> Layer3EntropyTableProvider<'a> {
             0 => &[],
             1 => self.big_value_table_1,
             2 => self.big_value_table_2,
+            3 => self.big_value_table_3,
             5 => self.big_value_table_5,
+            6 => self.big_value_table_6,
             7 => self.big_value_table_7,
+            8 => self.big_value_table_8,
+            9 => self.big_value_table_9,
             10 => self.big_value_table_10,
+            11 => self.big_value_table_11,
+            12 => self.big_value_table_12,
             13 => self.big_value_table_13,
+            15 => self.big_value_table_15,
             // Tables 16..=23 share the table-16 codeword tree (different linbits).
             16..=23 => self.big_value_table_16,
+            // Tables 24..=31 share the table-24 codeword tree (different linbits).
+            24..=31 => self.big_value_table_24,
             _ => return Err(Error::UnsupportedFeature("MP3 big-values Huffman table")),
         };
         if selection.table_select != 0 && table.is_empty() {
@@ -2749,6 +3210,60 @@ const MPEG1_LAYER3_BIG_VALUE_TABLE_2: &[HuffmanEntry<Layer3BigValueMagnitude>] =
             bits: 0b001,
             len: 3,
         },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00001,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b00011,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00010,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000000,
+            len: 6,
+        },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_3: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0b11, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode { bits: 0b10, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000001,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode { bits: 0b01, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode { bits: 0b1, len: 2 },
     },
     HuffmanEntry {
         symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
@@ -3279,6 +3794,118 @@ const MPEG1_LAYER3_BIG_VALUE_TABLE_5: &[HuffmanEntry<Layer3BigValueMagnitude>] =
     },
 ];
 
+const MPEG1_LAYER3_BIG_VALUE_TABLE_6: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode {
+            bits: 0b111,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode {
+            bits: 0b011,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00101,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000001,
+            len: 7,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode {
+            bits: 0b110,
+            len: 3,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode { bits: 0b10, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode {
+            bits: 0b0011,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode {
+            bits: 0b00010,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode {
+            bits: 0b0101,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode {
+            bits: 0b0100,
+            len: 4,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode {
+            bits: 0b00100,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode {
+            bits: 0b000001,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode {
+            bits: 0b000011,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode {
+            bits: 0b00011,
+            len: 5,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode {
+            bits: 0b000010,
+            len: 6,
+        },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode {
+            bits: 0b0000000,
+            len: 7,
+        },
+    },
+];
+
 const MPEG1_LAYER3_BIG_VALUE_TABLE_7: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
     HuffmanEntry {
         symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
@@ -3530,6 +4157,379 @@ const MPEG1_LAYER3_BIG_VALUE_TABLE_7: &[HuffmanEntry<Layer3BigValueMagnitude>] =
         },
     },
 ];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_8: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0x3, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode { bits: 0x4, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode { bits: 0x6, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode { bits: 0x12, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode { bits: 0xc, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode { bits: 0x5, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode { bits: 0x5, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode { bits: 0x1, len: 2 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode { bits: 0x2, len: 4 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode { bits: 0x10, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode { bits: 0x9, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode { bits: 0x3, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode { bits: 0x7, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode { bits: 0x3, len: 4 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode { bits: 0x5, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode { bits: 0xe, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode { bits: 0x7, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode { bits: 0x3, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode { bits: 0x13, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode { bits: 0x11, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode { bits: 0xf, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode { bits: 0xd, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode { bits: 0xa, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode { bits: 0x4, len: 10 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode { bits: 0xd, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode { bits: 0x5, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode { bits: 0x8, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode { bits: 0xb, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode { bits: 0x5, len: 10 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode { bits: 0x1, len: 10 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode { bits: 0xc, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode { bits: 0x4, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode { bits: 0x4, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode { bits: 0x1, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode { bits: 0x1, len: 11 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode { bits: 0x0, len: 11 },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_9: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
+        code: HuffmanCode { bits: 0x7, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 1 },
+        code: HuffmanCode { bits: 0x5, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 2 },
+        code: HuffmanCode { bits: 0x9, len: 5 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 3 },
+        code: HuffmanCode { bits: 0xe, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 4 },
+        code: HuffmanCode { bits: 0xf, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 0, y: 5 },
+        code: HuffmanCode { bits: 0x7, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 0 },
+        code: HuffmanCode { bits: 0x6, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 1 },
+        code: HuffmanCode { bits: 0x4, len: 3 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 2 },
+        code: HuffmanCode { bits: 0x5, len: 4 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 3 },
+        code: HuffmanCode { bits: 0x5, len: 5 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 4 },
+        code: HuffmanCode { bits: 0x6, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 1, y: 5 },
+        code: HuffmanCode { bits: 0x7, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 0 },
+        code: HuffmanCode { bits: 0x7, len: 4 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 1 },
+        code: HuffmanCode { bits: 0x6, len: 4 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 2 },
+        code: HuffmanCode { bits: 0x8, len: 5 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 3 },
+        code: HuffmanCode { bits: 0x8, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 4 },
+        code: HuffmanCode { bits: 0x8, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 2, y: 5 },
+        code: HuffmanCode { bits: 0x5, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 0 },
+        code: HuffmanCode { bits: 0xf, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 1 },
+        code: HuffmanCode { bits: 0x6, len: 5 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 2 },
+        code: HuffmanCode { bits: 0x9, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 3 },
+        code: HuffmanCode { bits: 0xa, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 4 },
+        code: HuffmanCode { bits: 0x5, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 3, y: 5 },
+        code: HuffmanCode { bits: 0x1, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 0 },
+        code: HuffmanCode { bits: 0xb, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 1 },
+        code: HuffmanCode { bits: 0x7, len: 6 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 2 },
+        code: HuffmanCode { bits: 0x9, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 3 },
+        code: HuffmanCode { bits: 0x6, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 4 },
+        code: HuffmanCode { bits: 0x4, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 4, y: 5 },
+        code: HuffmanCode { bits: 0x1, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 0 },
+        code: HuffmanCode { bits: 0xe, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 1 },
+        code: HuffmanCode { bits: 0x4, len: 7 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 2 },
+        code: HuffmanCode { bits: 0x6, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 3 },
+        code: HuffmanCode { bits: 0x2, len: 8 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 4 },
+        code: HuffmanCode { bits: 0x6, len: 9 },
+    },
+    HuffmanEntry {
+        symbol: Layer3BigValueMagnitude { x: 5, y: 5 },
+        code: HuffmanCode { bits: 0x0, len: 9 },
+    },
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_11_CODES: [u32; 64] = [
+    0x0003, 0x0004, 0x000a, 0x0018, 0x0022, 0x0021, 0x0015, 0x000f, 0x0005, 0x0003, 0x0004, 0x000a,
+    0x0020, 0x0011, 0x000b, 0x000a, 0x000b, 0x0007, 0x000d, 0x0012, 0x001e, 0x001f, 0x0014, 0x0005,
+    0x0019, 0x000b, 0x0013, 0x003b, 0x001b, 0x0012, 0x000c, 0x0005, 0x0023, 0x0021, 0x001f, 0x003a,
+    0x001e, 0x0010, 0x0007, 0x0005, 0x001c, 0x001a, 0x0020, 0x0013, 0x0011, 0x000f, 0x0008, 0x000e,
+    0x000e, 0x000c, 0x0009, 0x000d, 0x000e, 0x0009, 0x0004, 0x0001, 0x000b, 0x0004, 0x0006, 0x0006,
+    0x0006, 0x0003, 0x0002, 0x0000,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_11_BITS: [u8; 64] = [
+    2, 3, 5, 7, 8, 9, 8, 9, 3, 3, 4, 6, 8, 8, 7, 8, 5, 5, 6, 7, 8, 9, 8, 8, 7, 6, 7, 9, 8, 10, 8,
+    9, 8, 8, 8, 9, 9, 10, 9, 10, 8, 8, 9, 10, 10, 11, 10, 11, 8, 7, 7, 8, 9, 10, 10, 10, 8, 7, 8,
+    9, 10, 10, 10, 10,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_12_CODES: [u32; 64] = [
+    0x0009, 0x0006, 0x0010, 0x0021, 0x0029, 0x0027, 0x0026, 0x001a, 0x0007, 0x0005, 0x0006, 0x0009,
+    0x0017, 0x0010, 0x001a, 0x000b, 0x0011, 0x0007, 0x000b, 0x000e, 0x0015, 0x001e, 0x000a, 0x0007,
+    0x0011, 0x000a, 0x000f, 0x000c, 0x0012, 0x001c, 0x000e, 0x0005, 0x0020, 0x000d, 0x0016, 0x0013,
+    0x0012, 0x0010, 0x0009, 0x0005, 0x0028, 0x0011, 0x001f, 0x001d, 0x0011, 0x000d, 0x0004, 0x0002,
+    0x001b, 0x000c, 0x000b, 0x000f, 0x000a, 0x0007, 0x0004, 0x0001, 0x001b, 0x000c, 0x0008, 0x000c,
+    0x0006, 0x0003, 0x0001, 0x0000,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_12_BITS: [u8; 64] = [
+    4, 3, 5, 7, 8, 9, 9, 9, 3, 3, 4, 5, 7, 7, 8, 8, 5, 4, 5, 6, 7, 8, 7, 8, 6, 5, 6, 6, 7, 8, 8, 8,
+    7, 6, 7, 7, 8, 8, 8, 9, 8, 7, 8, 8, 8, 9, 8, 9, 8, 7, 7, 8, 8, 9, 9, 10, 9, 8, 8, 9, 9, 9, 9,
+    10,
+];
+
+static MPEG1_LAYER3_BIG_VALUE_TABLE_11: OnceLock<Vec<HuffmanEntry<Layer3BigValueMagnitude>>> =
+    OnceLock::new();
+static MPEG1_LAYER3_BIG_VALUE_TABLE_12: OnceLock<Vec<HuffmanEntry<Layer3BigValueMagnitude>>> =
+    OnceLock::new();
+
+fn build_mpeg1_layer3_big_value_table(
+    wrap: u8,
+    codes: &[u32],
+    bits: &[u8],
+) -> Vec<HuffmanEntry<Layer3BigValueMagnitude>> {
+    assert_eq!(codes.len(), bits.len());
+    codes
+        .iter()
+        .zip(bits.iter())
+        .enumerate()
+        .map(|(index, (&code, &len))| HuffmanEntry {
+            symbol: Layer3BigValueMagnitude {
+                x: u16::try_from(index / usize::from(wrap)).expect("MP3 table x index fits u16"),
+                y: u16::try_from(index % usize::from(wrap)).expect("MP3 table y index fits u16"),
+            },
+            code: HuffmanCode { bits: code, len },
+        })
+        .collect()
+}
+
+fn mpeg1_layer3_big_value_table_11() -> &'static [HuffmanEntry<Layer3BigValueMagnitude>] {
+    MPEG1_LAYER3_BIG_VALUE_TABLE_11
+        .get_or_init(|| {
+            build_mpeg1_layer3_big_value_table(
+                8,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_11_CODES,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_11_BITS,
+            )
+        })
+        .as_slice()
+}
+
+fn mpeg1_layer3_big_value_table_12() -> &'static [HuffmanEntry<Layer3BigValueMagnitude>] {
+    MPEG1_LAYER3_BIG_VALUE_TABLE_12
+        .get_or_init(|| {
+            build_mpeg1_layer3_big_value_table(
+                8,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_12_CODES,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_12_BITS,
+            )
+        })
+        .as_slice()
+}
 
 const MPEG1_LAYER3_BIG_VALUE_TABLE_10: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
     HuffmanEntry {
@@ -5771,6 +6771,111 @@ const MPEG1_LAYER3_BIG_VALUE_TABLE_13: &[HuffmanEntry<Layer3BigValueMagnitude>] 
     },
 ];
 
+const MPEG1_LAYER3_BIG_VALUE_TABLE_15_CODES: [u32; 256] = [
+    0x0007, 0x000c, 0x0012, 0x0035, 0x002f, 0x004c, 0x007c, 0x006c, 0x0059, 0x007b, 0x006c, 0x0077,
+    0x006b, 0x0051, 0x007a, 0x003f, 0x000d, 0x0005, 0x0010, 0x001b, 0x002e, 0x0024, 0x003d, 0x0033,
+    0x002a, 0x0046, 0x0034, 0x0053, 0x0041, 0x0029, 0x003b, 0x0024, 0x0013, 0x0011, 0x000f, 0x0018,
+    0x0029, 0x0022, 0x003b, 0x0030, 0x0028, 0x0040, 0x0032, 0x004e, 0x003e, 0x0050, 0x0038, 0x0021,
+    0x001d, 0x001c, 0x0019, 0x002b, 0x0027, 0x003f, 0x0037, 0x005d, 0x004c, 0x003b, 0x005d, 0x0048,
+    0x0036, 0x004b, 0x0032, 0x001d, 0x0034, 0x0016, 0x002a, 0x0028, 0x0043, 0x0039, 0x005f, 0x004f,
+    0x0048, 0x0039, 0x0059, 0x0045, 0x0031, 0x0042, 0x002e, 0x001b, 0x004d, 0x0025, 0x0023, 0x0042,
+    0x003a, 0x0034, 0x005b, 0x004a, 0x003e, 0x0030, 0x004f, 0x003f, 0x005a, 0x003e, 0x0028, 0x0026,
+    0x007d, 0x0020, 0x003c, 0x0038, 0x0032, 0x005c, 0x004e, 0x0041, 0x0037, 0x0057, 0x0047, 0x0033,
+    0x0049, 0x0033, 0x0046, 0x001e, 0x006d, 0x0035, 0x0031, 0x005e, 0x0058, 0x004b, 0x0042, 0x007a,
+    0x005b, 0x0049, 0x0038, 0x002a, 0x0040, 0x002c, 0x0015, 0x0019, 0x005a, 0x002b, 0x0029, 0x004d,
+    0x0049, 0x003f, 0x0038, 0x005c, 0x004d, 0x0042, 0x002f, 0x0043, 0x0030, 0x0035, 0x0024, 0x0014,
+    0x0047, 0x0022, 0x0043, 0x003c, 0x003a, 0x0031, 0x0058, 0x004c, 0x0043, 0x006a, 0x0047, 0x0036,
+    0x0026, 0x0027, 0x0017, 0x000f, 0x006d, 0x0035, 0x0033, 0x002f, 0x005a, 0x0052, 0x003a, 0x0039,
+    0x0030, 0x0048, 0x0039, 0x0029, 0x0017, 0x001b, 0x003e, 0x0009, 0x0056, 0x002a, 0x0028, 0x0025,
+    0x0046, 0x0040, 0x0034, 0x002b, 0x0046, 0x0037, 0x002a, 0x0019, 0x001d, 0x0012, 0x000b, 0x000b,
+    0x0076, 0x0044, 0x001e, 0x0037, 0x0032, 0x002e, 0x004a, 0x0041, 0x0031, 0x0027, 0x0018, 0x0010,
+    0x0016, 0x000d, 0x000e, 0x0007, 0x005b, 0x002c, 0x0027, 0x0026, 0x0022, 0x003f, 0x0034, 0x002d,
+    0x001f, 0x0034, 0x001c, 0x0013, 0x000e, 0x0008, 0x0009, 0x0003, 0x007b, 0x003c, 0x003a, 0x0035,
+    0x002f, 0x002b, 0x0020, 0x0016, 0x0025, 0x0018, 0x0011, 0x000c, 0x000f, 0x000a, 0x0002, 0x0001,
+    0x0047, 0x0025, 0x0022, 0x001e, 0x001c, 0x0014, 0x0011, 0x001a, 0x0015, 0x0010, 0x000a, 0x0006,
+    0x0008, 0x0006, 0x0002, 0x0000,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_15_BITS: [u8; 256] = [
+    3, 4, 5, 7, 7, 8, 9, 9, 9, 10, 10, 11, 11, 11, 12, 13, 4, 3, 5, 6, 7, 7, 8, 8, 8, 9, 9, 10, 10,
+    10, 11, 11, 5, 5, 5, 6, 7, 7, 8, 8, 8, 9, 9, 10, 10, 11, 11, 11, 6, 6, 6, 7, 7, 8, 8, 9, 9, 9,
+    10, 10, 10, 11, 11, 11, 7, 6, 7, 7, 8, 8, 9, 9, 9, 9, 10, 10, 10, 11, 11, 11, 8, 7, 7, 8, 8, 8,
+    9, 9, 9, 9, 10, 10, 11, 11, 11, 12, 9, 7, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 11, 11, 12, 12, 9,
+    8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 10, 11, 11, 11, 12, 9, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 11,
+    11, 12, 12, 12, 9, 8, 9, 9, 9, 9, 10, 10, 10, 11, 11, 11, 11, 12, 12, 12, 10, 9, 9, 9, 10, 10,
+    10, 10, 10, 11, 11, 11, 11, 12, 13, 12, 10, 9, 9, 9, 10, 10, 10, 10, 11, 11, 11, 11, 12, 12,
+    12, 13, 11, 10, 9, 10, 10, 10, 11, 11, 11, 11, 11, 11, 12, 12, 13, 13, 11, 10, 10, 10, 10, 11,
+    11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 12, 11, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 13, 13,
+    12, 13, 12, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 13, 13, 13, 13,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_24_CODES: [u32; 256] = [
+    0x000f, 0x000d, 0x002e, 0x0050, 0x0092, 0x0106, 0x00f8, 0x01b2, 0x01aa, 0x029d, 0x028d, 0x0289,
+    0x026d, 0x0205, 0x0408, 0x0058, 0x000e, 0x000c, 0x0015, 0x0026, 0x0047, 0x0082, 0x007a, 0x00d8,
+    0x00d1, 0x00c6, 0x0147, 0x0159, 0x013f, 0x0129, 0x0117, 0x002a, 0x002f, 0x0016, 0x0029, 0x004a,
+    0x0044, 0x0080, 0x0078, 0x00dd, 0x00cf, 0x00c2, 0x00b6, 0x0154, 0x013b, 0x0127, 0x021d, 0x0012,
+    0x0051, 0x0027, 0x004b, 0x0046, 0x0086, 0x007d, 0x0074, 0x00dc, 0x00cc, 0x00be, 0x00b2, 0x0145,
+    0x0137, 0x0125, 0x010f, 0x0010, 0x0093, 0x0048, 0x0045, 0x0087, 0x007f, 0x0076, 0x0070, 0x00d2,
+    0x00c8, 0x00bc, 0x0160, 0x0143, 0x0132, 0x011d, 0x021c, 0x000e, 0x0107, 0x0042, 0x0081, 0x007e,
+    0x0077, 0x0072, 0x00d6, 0x00ca, 0x00c0, 0x00b4, 0x0155, 0x013d, 0x012d, 0x0119, 0x0106, 0x000c,
+    0x00f9, 0x007b, 0x0079, 0x0075, 0x0071, 0x00d7, 0x00ce, 0x00c3, 0x00b9, 0x015b, 0x014a, 0x0134,
+    0x0123, 0x0110, 0x0208, 0x000a, 0x01b3, 0x0073, 0x006f, 0x006d, 0x00d3, 0x00cb, 0x00c4, 0x00bb,
+    0x0161, 0x014c, 0x0139, 0x012a, 0x011b, 0x0213, 0x017d, 0x0011, 0x01ab, 0x00d4, 0x00d0, 0x00cd,
+    0x00c9, 0x00c1, 0x00ba, 0x00b1, 0x00a9, 0x0140, 0x012f, 0x011e, 0x010c, 0x0202, 0x0179, 0x0010,
+    0x014f, 0x00c7, 0x00c5, 0x00bf, 0x00bd, 0x00b5, 0x00ae, 0x014d, 0x0141, 0x0131, 0x0121, 0x0113,
+    0x0209, 0x017b, 0x0173, 0x000b, 0x029c, 0x00b8, 0x00b7, 0x00b3, 0x00af, 0x0158, 0x014b, 0x013a,
+    0x0130, 0x0122, 0x0115, 0x0212, 0x017f, 0x0175, 0x016e, 0x000a, 0x028c, 0x015a, 0x00ab, 0x00a8,
+    0x00a4, 0x013e, 0x0135, 0x012b, 0x011f, 0x0114, 0x0107, 0x0201, 0x0177, 0x0170, 0x016a, 0x0006,
+    0x0288, 0x0142, 0x013c, 0x0138, 0x0133, 0x012e, 0x0124, 0x011c, 0x010d, 0x0105, 0x0200, 0x0178,
+    0x0172, 0x016c, 0x0167, 0x0004, 0x026c, 0x012c, 0x0128, 0x0126, 0x0120, 0x011a, 0x0111, 0x010a,
+    0x0203, 0x017c, 0x0176, 0x0171, 0x016d, 0x0169, 0x0165, 0x0002, 0x0409, 0x0118, 0x0116, 0x0112,
+    0x010b, 0x0108, 0x0103, 0x017e, 0x017a, 0x0174, 0x016f, 0x016b, 0x0168, 0x0166, 0x0164, 0x0000,
+    0x002b, 0x0014, 0x0013, 0x0011, 0x000f, 0x000d, 0x000b, 0x0009, 0x0007, 0x0006, 0x0004, 0x0007,
+    0x0005, 0x0003, 0x0001, 0x0003,
+];
+
+const MPEG1_LAYER3_BIG_VALUE_TABLE_24_BITS: [u8; 256] = [
+    4, 4, 6, 7, 8, 9, 9, 10, 10, 11, 11, 11, 11, 11, 12, 9, 4, 4, 5, 6, 7, 8, 8, 9, 9, 9, 10, 10,
+    10, 10, 10, 8, 6, 5, 6, 7, 7, 8, 8, 9, 9, 9, 9, 10, 10, 10, 11, 7, 7, 6, 7, 7, 8, 8, 8, 9, 9,
+    9, 9, 10, 10, 10, 10, 7, 8, 7, 7, 8, 8, 8, 8, 9, 9, 9, 10, 10, 10, 10, 11, 7, 9, 7, 8, 8, 8, 8,
+    9, 9, 9, 9, 10, 10, 10, 10, 10, 7, 9, 8, 8, 8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 10, 11, 7, 10, 8,
+    8, 8, 9, 9, 9, 9, 10, 10, 10, 10, 10, 11, 11, 8, 10, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10,
+    11, 11, 8, 10, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 11, 11, 11, 8, 11, 9, 9, 9, 9, 10, 10, 10,
+    10, 10, 10, 11, 11, 11, 11, 8, 11, 10, 9, 9, 9, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 8, 11,
+    10, 10, 10, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 8, 11, 10, 10, 10, 10, 10, 10, 10, 11,
+    11, 11, 11, 11, 11, 11, 8, 12, 10, 10, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 11, 11, 8, 8, 7,
+    7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 4,
+];
+
+static MPEG1_LAYER3_BIG_VALUE_TABLE_15: OnceLock<Vec<HuffmanEntry<Layer3BigValueMagnitude>>> =
+    OnceLock::new();
+static MPEG1_LAYER3_BIG_VALUE_TABLE_24: OnceLock<Vec<HuffmanEntry<Layer3BigValueMagnitude>>> =
+    OnceLock::new();
+
+fn mpeg1_layer3_big_value_table_15() -> &'static [HuffmanEntry<Layer3BigValueMagnitude>] {
+    MPEG1_LAYER3_BIG_VALUE_TABLE_15
+        .get_or_init(|| {
+            build_mpeg1_layer3_big_value_table(
+                16,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_15_CODES,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_15_BITS,
+            )
+        })
+        .as_slice()
+}
+
+fn mpeg1_layer3_big_value_table_24() -> &'static [HuffmanEntry<Layer3BigValueMagnitude>] {
+    MPEG1_LAYER3_BIG_VALUE_TABLE_24
+        .get_or_init(|| {
+            build_mpeg1_layer3_big_value_table(
+                16,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_24_CODES,
+                &MPEG1_LAYER3_BIG_VALUE_TABLE_24_BITS,
+            )
+        })
+        .as_slice()
+}
+
 const MPEG1_LAYER3_BIG_VALUE_TABLE_16: &[HuffmanEntry<Layer3BigValueMagnitude>] = &[
     HuffmanEntry {
         symbol: Layer3BigValueMagnitude { x: 0, y: 0 },
@@ -7565,20 +8670,29 @@ const MPEG1_LAYER3_BIG_VALUE_TABLE_16: &[HuffmanEntry<Layer3BigValueMagnitude>] 
 
 /// Returns the implemented MPEG-1 Layer III standard Huffman tables.
 ///
-/// This provider currently exposes big-values tables 1/2/5/7/10/13 plus the
-/// table-16 codeword tree used by escape-class tables 16..=23, and count1
-/// tables 32/33. The remaining standard big-values tables are filled in
-/// incrementally as the clean-room encoder grows.
+/// This provider currently exposes the big-values table ids listed by
+/// [`MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS`] and both count1 table
+/// selectors listed by [`MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS`]. The
+/// remaining standard big-values tables are filled in incrementally as the
+/// clean-room encoder grows.
 #[must_use]
 pub fn mpeg1_layer3_standard_table_provider() -> Layer3EntropyTableProvider<'static> {
     Layer3EntropyTableProvider {
         big_value_table_1: MPEG1_LAYER3_BIG_VALUE_TABLE_1,
         big_value_table_2: MPEG1_LAYER3_BIG_VALUE_TABLE_2,
+        big_value_table_3: MPEG1_LAYER3_BIG_VALUE_TABLE_3,
         big_value_table_5: MPEG1_LAYER3_BIG_VALUE_TABLE_5,
+        big_value_table_6: MPEG1_LAYER3_BIG_VALUE_TABLE_6,
         big_value_table_7: MPEG1_LAYER3_BIG_VALUE_TABLE_7,
+        big_value_table_8: MPEG1_LAYER3_BIG_VALUE_TABLE_8,
+        big_value_table_9: MPEG1_LAYER3_BIG_VALUE_TABLE_9,
         big_value_table_10: MPEG1_LAYER3_BIG_VALUE_TABLE_10,
+        big_value_table_11: mpeg1_layer3_big_value_table_11(),
+        big_value_table_12: mpeg1_layer3_big_value_table_12(),
         big_value_table_13: MPEG1_LAYER3_BIG_VALUE_TABLE_13,
+        big_value_table_15: mpeg1_layer3_big_value_table_15(),
         big_value_table_16: MPEG1_LAYER3_BIG_VALUE_TABLE_16,
+        big_value_table_24: mpeg1_layer3_big_value_table_24(),
         count1_table_0: MPEG1_LAYER3_COUNT1_TABLE_32,
         count1_table_1: MPEG1_LAYER3_COUNT1_TABLE_33,
     }
@@ -7860,6 +8974,26 @@ fn escape_table_select_for_magnitude(max_magnitude: u16) -> Result<(u8, u8), Err
         ))
 }
 
+fn escape_table_24_select_for_magnitude(max_magnitude: u16) -> Result<(u8, u8), Error> {
+    const ESCAPE_TABLES: [(u8, u8); 8] = [
+        (24, 4),
+        (25, 5),
+        (26, 6),
+        (27, 7),
+        (28, 8),
+        (29, 9),
+        (30, 11),
+        (31, 13),
+    ];
+    let required = linbits_for_big_value_magnitude(max_magnitude)?;
+    ESCAPE_TABLES
+        .into_iter()
+        .find(|&(_, linbits)| linbits >= required)
+        .ok_or(Error::InvalidInput(
+            "MP3 big-values magnitude exceeds table range",
+        ))
+}
+
 /// Selects the smallest implemented Layer III big-values table class.
 pub fn select_big_value_table(
     pairs: &[Layer3BigValuePair],
@@ -7898,17 +9032,31 @@ pub fn select_big_value_table_by_bit_cost(
     }
 
     let (escape_table_select, escape_linbits) = escape_table_select_for_magnitude(max_magnitude)?;
+    let (escape_table_24_select, escape_table_24_linbits) =
+        escape_table_24_select_for_magnitude(max_magnitude)?;
     let candidates = [
         (1, 0, provider.big_value_table_1),
         (2, 0, provider.big_value_table_2),
+        (3, 0, provider.big_value_table_3),
         (5, 0, provider.big_value_table_5),
+        (6, 0, provider.big_value_table_6),
         (7, 0, provider.big_value_table_7),
+        (8, 0, provider.big_value_table_8),
+        (9, 0, provider.big_value_table_9),
         (10, 0, provider.big_value_table_10),
+        (11, 0, provider.big_value_table_11),
+        (12, 0, provider.big_value_table_12),
         (13, 0, provider.big_value_table_13),
+        (15, 0, provider.big_value_table_15),
         (
             escape_table_select,
             escape_linbits,
             provider.big_value_table_16,
+        ),
+        (
+            escape_table_24_select,
+            escape_table_24_linbits,
+            provider.big_value_table_24,
         ),
     ];
     let mut best: Option<(Layer3BigValueTableSelection, usize)> = None;
@@ -9982,7 +11130,8 @@ mod tests {
         Layer3ScaleFactorCompress, Layer3SideInfo, Layer3SpectralRegions, Layer3WindowSwitching,
         MpegVersion, ALIAS_REDUCTION_C, LONG_BLOCK_GRANULE_SAMPLES,
         MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
-        MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS,
     };
     use sc_core::{
         detect, quantize_spectrum, AudioBuffer, BitReader, Error, Format, HuffmanCode,
@@ -12509,14 +13658,29 @@ mod tests {
             Layer3BigValuePair::new(-1, 0),
             Layer3BigValuePair::new(1, -1),
         ];
-        let selection = select_big_value_region_tables_by_bit_cost(&pairs, 4, 0, provider).unwrap();
-        let packed =
-            pack_big_value_pairs_with_region_tables_and_provider(&pairs, selection, provider)
-                .unwrap();
+        let table_1_selection = Layer3BigValueTableSelection {
+            table_select: 1,
+            linbits: 0,
+            max_magnitude: 1,
+        };
+        let packed = pack_big_value_pairs_with_linbits(
+            &pairs,
+            provider.big_value_table(table_1_selection).unwrap(),
+            table_1_selection.linbits,
+        )
+        .unwrap();
 
-        assert_eq!(selection.regions[0].table_select, 1);
         assert_eq!(packed.bit_len, 13);
         assert_eq!(packed.bytes, [0b1001_0011, 0b0000_1000]);
+
+        let x_only = pack_big_value_pairs_with_linbits(
+            &[Layer3BigValuePair::new(-1, 0)],
+            provider.big_value_table(table_1_selection).unwrap(),
+            table_1_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(x_only.bit_len, 3);
+        assert_eq!(x_only.bytes, [0b0110_0000]);
 
         let sparse_count1 = [Layer3Count1Quad::new(1, 0, 0, 0)];
         let sparse_selection = select_count1_table_by_bit_cost(&sparse_count1, provider).unwrap();
@@ -12549,17 +13713,153 @@ mod tests {
             Layer3BigValuePair::new(0, -2),
             Layer3BigValuePair::new(-2, 2),
         ];
+        let table_2_selection = Layer3BigValueTableSelection {
+            table_select: 2,
+            linbits: 0,
+            max_magnitude: 2,
+        };
 
-        let selection = select_big_value_region_tables_by_bit_cost(&pairs, 3, 0, provider).unwrap();
-        let packed =
-            pack_big_value_pairs_with_region_tables_and_provider(&pairs, selection, provider)
-                .unwrap();
+        let packed = pack_big_value_pairs_with_linbits(
+            &pairs,
+            provider.big_value_table(table_2_selection).unwrap(),
+            table_2_selection.linbits,
+        )
+        .unwrap();
 
-        assert_eq!(selection.regions[0].table_select, 2);
-        assert_eq!(selection.regions[0].linbits, 0);
-        assert_eq!(selection.regions[0].max_magnitude, 2);
         assert_eq!(packed.bit_len, 5 + 1 + 6 + 1 + 6 + 2);
         assert_eq!(packed.bytes, [0b0001_1000, 0b0001_1000, 0b0001_0000]);
+    }
+
+    #[test]
+    fn standard_provider_selects_tables_3_and_6_by_bit_cost() {
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        let table_3_pairs = [Layer3BigValuePair::new(1, -1)];
+        let table_3_selection =
+            select_big_value_table_by_bit_cost(&table_3_pairs, provider).unwrap();
+        let table_3_packed = pack_big_value_pairs_with_linbits(
+            &table_3_pairs,
+            provider.big_value_table(table_3_selection).unwrap(),
+            table_3_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_3_selection.table_select, 3);
+        assert_eq!(table_3_selection.linbits, 0);
+        assert_eq!(table_3_packed.bit_len, 4);
+        assert_eq!(table_3_packed.bytes, [0b0101_0000]);
+
+        let table_6_pairs = [Layer3BigValuePair::new(3, -1)];
+        let table_6_selection =
+            select_big_value_table_by_bit_cost(&table_6_pairs, provider).unwrap();
+        let table_6_packed = pack_big_value_pairs_with_linbits(
+            &table_6_pairs,
+            provider.big_value_table(table_6_selection).unwrap(),
+            table_6_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_6_selection.table_select, 6);
+        assert_eq!(table_6_selection.linbits, 0);
+        assert_eq!(table_6_packed.bit_len, 7);
+        assert_eq!(table_6_packed.bytes, [0b0001_1010]);
+    }
+
+    #[test]
+    fn standard_provider_packs_tables_8_and_9_codewords() {
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        let table_8_selection = Layer3BigValueTableSelection {
+            table_select: 8,
+            linbits: 0,
+            max_magnitude: 5,
+        };
+        let table_8_packed = pack_big_value_pairs_with_linbits(
+            &[Layer3BigValuePair::new(1, -1)],
+            provider.big_value_table(table_8_selection).unwrap(),
+            table_8_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_8_packed.bit_len, 4);
+        assert_eq!(table_8_packed.bytes, [0b0101_0000]);
+
+        let table_9_pairs = [Layer3BigValuePair::new(0, -3)];
+        let table_9_selection =
+            select_big_value_table_by_bit_cost(&table_9_pairs, provider).unwrap();
+        let table_9_packed = pack_big_value_pairs_with_linbits(
+            &table_9_pairs,
+            provider.big_value_table(table_9_selection).unwrap(),
+            table_9_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_9_selection.table_select, 9);
+        assert_eq!(table_9_selection.linbits, 0);
+        assert_eq!(table_9_packed.bit_len, 7);
+        assert_eq!(table_9_packed.bytes, [0b0011_1010]);
+    }
+
+    #[test]
+    fn standard_provider_selects_tables_11_and_12_by_bit_cost() {
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        let table_11_pairs = [Layer3BigValuePair::new(0, -6)];
+        let table_11_selection =
+            select_big_value_table_by_bit_cost(&table_11_pairs, provider).unwrap();
+        let table_11_packed = pack_big_value_pairs_with_linbits(
+            &table_11_pairs,
+            provider.big_value_table(table_11_selection).unwrap(),
+            table_11_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_11_selection.table_select, 11);
+        assert_eq!(table_11_selection.linbits, 0);
+        assert_eq!(table_11_packed.bit_len, 9);
+        assert_eq!(table_11_packed.bytes, [0x15, 0x80]);
+
+        let table_12_pairs = [Layer3BigValuePair::new(1, -5)];
+        let table_12_selection =
+            select_big_value_table_by_bit_cost(&table_12_pairs, provider).unwrap();
+        let table_12_packed = pack_big_value_pairs_with_linbits(
+            &table_12_pairs,
+            provider.big_value_table(table_12_selection).unwrap(),
+            table_12_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_12_selection.table_select, 12);
+        assert_eq!(table_12_selection.linbits, 0);
+        assert_eq!(table_12_packed.bit_len, 9);
+        assert_eq!(table_12_packed.bytes, [0x20, 0x80]);
+    }
+
+    #[test]
+    fn standard_provider_selects_tables_15_and_24_by_bit_cost() {
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        let table_15_pairs = [Layer3BigValuePair::new(0, -4)];
+        let table_15_selection =
+            select_big_value_table_by_bit_cost(&table_15_pairs, provider).unwrap();
+        let table_15_packed = pack_big_value_pairs_with_linbits(
+            &table_15_pairs,
+            provider.big_value_table(table_15_selection).unwrap(),
+            table_15_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_15_selection.table_select, 15);
+        assert_eq!(table_15_selection.linbits, 0);
+        assert_eq!(table_15_packed.bit_len, 8);
+        assert_eq!(table_15_packed.bytes, [0x5f]);
+
+        let table_24_pairs = [Layer3BigValuePair::new(1, -14)];
+        let table_24_selection =
+            select_big_value_table_by_bit_cost(&table_24_pairs, provider).unwrap();
+        let table_24_packed = pack_big_value_pairs_with_linbits(
+            &table_24_pairs,
+            provider.big_value_table(table_24_selection).unwrap(),
+            table_24_selection.linbits,
+        )
+        .unwrap();
+        assert_eq!(table_24_selection.table_select, 24);
+        assert_eq!(table_24_selection.linbits, 4);
+        assert_eq!(table_24_packed.bit_len, 12);
+        assert_eq!(table_24_packed.bytes, [0x45, 0xd0]);
     }
 
     #[test]
@@ -12587,6 +13887,73 @@ mod tests {
 
         assert!(selection.table_select);
         assert!(provider.count1_table(selection).is_ok());
+    }
+
+    #[test]
+    fn standard_provider_advertises_resolvable_table_selects() {
+        let provider = mpeg1_layer3_standard_table_provider();
+
+        assert_eq!(
+            MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS,
+            &[
+                1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                26, 27, 28, 29, 30, 31
+            ]
+        );
+        for &table_select in MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS {
+            let linbits = match table_select {
+                16 => 1,
+                17 => 2,
+                18 => 3,
+                19 => 4,
+                20 => 6,
+                21 => 8,
+                22 => 10,
+                23 => 13,
+                24 => 4,
+                25 => 5,
+                26 => 6,
+                27 => 7,
+                28 => 8,
+                29 => 9,
+                30 => 11,
+                31 => 13,
+                _ => 0,
+            };
+            let table = provider
+                .big_value_table(Layer3BigValueTableSelection {
+                    table_select,
+                    linbits,
+                    max_magnitude: if table_select >= 16 { 16 } else { 1 },
+                })
+                .unwrap();
+            assert!(!table.is_empty());
+        }
+        assert_eq!(MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS, &[]);
+        for &table_select in MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS {
+            let err = provider
+                .big_value_table(Layer3BigValueTableSelection {
+                    table_select,
+                    linbits: 0,
+                    max_magnitude: 1,
+                })
+                .unwrap_err();
+            assert!(matches!(
+                err,
+                Error::UnsupportedFeature("MP3 big-values Huffman table")
+            ));
+        }
+
+        assert_eq!(MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS, &[false, true]);
+        for &table_select in MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS {
+            let table = provider
+                .count1_table(Layer3Count1TableSelection {
+                    table_select,
+                    max_nonzero_values: 1,
+                })
+                .unwrap();
+            assert!(!table.is_empty());
+        }
     }
 
     #[test]

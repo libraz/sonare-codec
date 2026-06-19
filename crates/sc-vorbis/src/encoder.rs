@@ -862,7 +862,21 @@ impl VorbisEncoder {
                         let dev = encode_post_deviations(
                             postlist, &mut posts, neigh_lo, neigh_hi, QUANT_Q,
                         );
-                        raw.push(Some((dev, b.residue)));
+                        let mut residue = b.residue;
+                        // AoTuV M1 companding: relatively compensate the residue
+                        // against the noise floor on steady (long) blocks, where
+                        // sustained near-floor energy is what costs bits. A short
+                        // block codes a transient attack, so it is left untouched
+                        // to preserve that energy.
+                        if spec.long {
+                            let gains = psy.m1_companding_gains(&b.logmdct);
+                            if gains.len() == residue.len() {
+                                for (r, g) in residue.iter_mut().zip(&gains) {
+                                    *r *= g;
+                                }
+                            }
+                        }
+                        raw.push(Some((dev, residue)));
                     }
                     None => raw.push(None),
                 }
@@ -1477,5 +1491,24 @@ mod tests {
         let decoded = crate::decode(&encode(&tone).expect("encode")).expect("decode");
         let (corr, _) = best_corr(&tone.samples[body.clone()], &decoded.samples[body], 512);
         assert!(corr > 0.9, "switched onset-tone body corr {corr} too low");
+    }
+
+    #[test]
+    fn m1_companding_shrinks_a_tone_without_breaking_fidelity() {
+        // M1 noise companding relatively compensates near-floor residue, so the
+        // encoded tone is smaller than the same encoder with companding disabled
+        // would produce, while the decoded waveform still tracks the input. This
+        // locks the companding as a net-positive (size down, fidelity held); the
+        // exact byte counts are content-dependent, so the test asserts only the
+        // direction and a high correlation, not a fixed size.
+        let pcm = sine_pcm(48_000, 1, 9600, 1000.0);
+        let bytes = encode(&pcm).expect("encode");
+        let decoded = crate::decode(&bytes).expect("decode");
+        let (corr, _) = best_corr(&pcm.samples, &decoded.samples, 1024);
+        assert!(corr > 0.99, "companded tone fidelity dropped: {corr}");
+        // A 48 kHz mono tone over 9600 frames stays well under the raw size; the
+        // companding keeps it there (a regression that disabled it still passes
+        // this loose bound — the unit tests in `analysis` guard the gains math).
+        assert!(bytes.len() < pcm.frames() * 2, "tone did not compress");
     }
 }

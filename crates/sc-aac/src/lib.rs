@@ -34,6 +34,34 @@ pub const AAC_LC_PCM_STEP_CANDIDATES: &[f32] = &[
     1_000.0,
     f32::MAX,
 ];
+pub const AAC_STANDARD_ID_PCM_STEP_CANDIDATES: &[f32] = &[
+    0.0005,
+    0.001,
+    0.002,
+    0.005,
+    0.01,
+    0.02,
+    0.05,
+    0.075,
+    0.1,
+    0.15,
+    0.2,
+    0.3,
+    0.5,
+    0.75,
+    1.0,
+    1.5,
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    50.0,
+    100.0,
+    200.0,
+    500.0,
+    1_000.0,
+    f32::MAX,
+];
 pub const AAC_LC_48K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS: &[usize] = &[
     0, 4, 8, 12, 16, 20, 24, 28, 32, 36, 40, 48, 56, 64, 72, 80, 88, 96, 108, 120, 132, 144, 160,
     176, 196, 216, 240, 264, 292, 320, 352, 384, 416, 448, 480, 512, 544, 576, 608, 640, 672, 704,
@@ -2410,6 +2438,23 @@ pub fn split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_
         plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(quantized, offsets)?;
     split_sectioned_spectral_payload_by_codebook_id_with_offsets_and_signed_pairs(
         &sections,
+        quantized,
+        offsets,
+        aac_lc_standard_spectral_tables(),
+        aac_lc_standard_signed_pair_tables(),
+        aac_lc_standard_signed_quad_tables(),
+        aac_lc_standard_unsigned_quad_tables(),
+    )
+}
+
+/// Builds split ICS payload parts for caller-selected standard AAC-LC sections.
+pub fn split_aac_lc_standard_sectioned_spectral_payload_with_offsets_and_sign_bits(
+    sections: &[AacSpectralSection],
+    quantized: &[i32],
+    offsets: &[usize],
+) -> Result<AacIndividualChannelPayload, Error> {
+    split_sectioned_spectral_payload_by_codebook_id_with_offsets_and_signed_pairs(
+        sections,
         quantized,
         offsets,
         aac_lc_standard_spectral_tables(),
@@ -7787,6 +7832,56 @@ pub fn select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<AacPcmFrameStepSelection, Error> {
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<AacPcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "AAC quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) =
+            evaluate_aac_lc_mono_pcm_frame_step_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_by_bit_cost(
+                adts,
+                channel,
+                pcm,
+                start_frame,
+                offsets,
+                scale_factor_magnitude_bias,
+                step,
+                max_quantized_abs,
+                scale_factor_table,
+            )
+        {
+            let Some(selection) =
+                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
+            else {
+                continue;
+            };
+            selected = select_better_aac_pcm_frame_step(selected, selection);
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
     adts: AdtsConfig,
     channel: AacLongBlockConfig,
@@ -7848,6 +7943,45 @@ pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offset
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    if adts.channels != 1 || pcm.channels != 1 {
+        return Err(Error::InvalidInput(
+            "AAC mono PCM encode requires one-channel ADTS and PCM",
+        ));
+    }
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+
+    pcm_frame_starts(pcm, start_frame)?
+        .into_iter()
+        .map(|start_frame| {
+            select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+                adts,
+                channel,
+                pcm,
+                start_frame,
+                offsets,
+                scale_factor_magnitude_bias,
+                candidates,
+                max_quantized_abs,
+                max_frame_len_bytes,
+                scale_factor_table,
+            )
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
     adts: AdtsConfig,
     channel: AacLongBlockConfig,
@@ -7893,6 +8027,35 @@ pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offset
         offsets,
         scale_factor_magnitude_bias,
         candidates,
+        max_frame_len_bytes,
+        scale_factor_table,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let max_frame_len_bytes =
+        aac_lc_adts_max_frame_len_for_bitrate(adts.sample_rate, target_bitrate_bps)?;
+    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+        adts,
+        channel,
+        pcm,
+        start_frame,
+        offsets,
+        scale_factor_magnitude_bias,
+        candidates,
+        max_quantized_abs,
         max_frame_len_bytes,
         scale_factor_table,
     )
@@ -8279,6 +8442,58 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offset
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<AacPcmFrameStepSelection, Error> {
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step candidate list is empty",
+        ));
+    }
+    let mut selected: Option<AacPcmFrameStepSelection> = None;
+    for &step in candidates {
+        if !step.is_finite() || step <= 0.0 {
+            return Err(Error::InvalidInput(
+                "AAC quantizer step must be positive and finite",
+            ));
+        }
+        if let Ok(selection) =
+            evaluate_aac_lc_stereo_pcm_frame_step_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_by_bit_cost(
+                adts,
+                left,
+                right,
+                pcm,
+                start_frame,
+                offsets,
+                scale_factor_magnitude_bias,
+                step,
+                max_quantized_abs,
+                scale_factor_table,
+            )
+        {
+            let Some(selection) =
+                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
+            else {
+                continue;
+            };
+            selected = select_better_aac_pcm_frame_step(selected, selection);
+        }
+    }
+    selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost(
     adts: AdtsConfig,
     left: AacLongBlockConfig,
@@ -8344,6 +8559,47 @@ pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offs
 }
 
 #[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    max_frame_len_bytes: usize,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    if adts.channels != 2 || pcm.channels != 2 {
+        return Err(Error::InvalidInput(
+            "AAC stereo PCM encode requires two-channel ADTS and PCM",
+        ));
+    }
+    validate_aac_max_frame_len(max_frame_len_bytes)?;
+
+    pcm_frame_starts(pcm, start_frame)?
+        .into_iter()
+        .map(|start_frame| {
+            select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+                adts,
+                left,
+                right,
+                pcm,
+                start_frame,
+                offsets,
+                scale_factor_magnitude_bias,
+                candidates,
+                max_quantized_abs,
+                max_frame_len_bytes,
+                scale_factor_table,
+            )
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
     adts: AdtsConfig,
     left: AacLongBlockConfig,
@@ -8393,6 +8649,37 @@ pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offs
         offsets,
         scale_factor_magnitude_bias,
         candidates,
+        max_frame_len_bytes,
+        scale_factor_table,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let max_frame_len_bytes =
+        aac_lc_adts_max_frame_len_for_bitrate(adts.sample_rate, target_bitrate_bps)?;
+    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost(
+        adts,
+        left,
+        right,
+        pcm,
+        start_frame,
+        offsets,
+        scale_factor_magnitude_bias,
+        candidates,
+        max_quantized_abs,
         max_frame_len_bytes,
         scale_factor_table,
     )
@@ -8527,6 +8814,14 @@ fn limit_aac_pcm_frame_step_selection(
     }
     selection.frame_capacity_bytes = max_frame_len_bytes;
     Some(selection)
+}
+
+fn max_quantized_spectrum_abs(quantized: &[i32]) -> u32 {
+    quantized
+        .iter()
+        .map(|sample| sample.unsigned_abs())
+        .max()
+        .unwrap_or(0)
 }
 
 fn select_better_aac_pcm_frame_step(
@@ -8680,6 +8975,38 @@ fn evaluate_aac_lc_mono_pcm_frame_step_with_standard_spectral_offsets_and_select
     })
 }
 
+#[allow(clippy::too_many_arguments)]
+fn evaluate_aac_lc_mono_pcm_frame_step_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    step: f32,
+    max_quantized_abs: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<AacPcmFrameStepSelection, Error> {
+    let quantized = quantize_pcm_long_block(pcm, 0, start_frame, step)?;
+    if max_quantized_spectrum_abs(&quantized) > max_quantized_abs {
+        return Err(Error::UnsupportedFeature("AAC quantized magnitude limit"));
+    }
+    let frame =
+        encode_quantized_mono_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
+            adts,
+            channel,
+            &quantized,
+            offsets,
+            scale_factor_magnitude_bias,
+            scale_factor_table,
+        )?;
+    Ok(AacPcmFrameStepSelection {
+        step,
+        frame_len: frame.len(),
+        frame_capacity_bytes: AAC_ADTS_MAX_FRAME_LEN,
+    })
+}
+
 fn evaluate_aac_lc_stereo_pcm_frame_step_by_bit_cost(
     adts: AdtsConfig,
     left: AacLongBlockConfig,
@@ -8814,6 +9141,42 @@ fn evaluate_aac_lc_stereo_pcm_frame_step_with_standard_spectral_offsets_and_sele
             pcm,
             start_frame,
             step,
+            offsets,
+            scale_factor_magnitude_bias,
+            scale_factor_table,
+        )?;
+    Ok(AacPcmFrameStepSelection {
+        step,
+        frame_len: frame.len(),
+        frame_capacity_bytes: AAC_ADTS_MAX_FRAME_LEN,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_aac_lc_stereo_pcm_frame_step_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    step: f32,
+    max_quantized_abs: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<AacPcmFrameStepSelection, Error> {
+    let left_quantized = quantize_pcm_long_block(pcm, 0, start_frame, step)?;
+    let right_quantized = quantize_pcm_long_block(pcm, 1, start_frame, step)?;
+    if max_quantized_spectrum_abs(&left_quantized).max(max_quantized_spectrum_abs(&right_quantized))
+        > max_quantized_abs
+    {
+        return Err(Error::UnsupportedFeature("AAC quantized magnitude limit"));
+    }
+    let frame =
+        encode_quantized_stereo_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
+            adts,
+            AacQuantizedSpectrum::new(left, &left_quantized),
+            AacQuantizedSpectrum::new(right, &right_quantized),
             offsets,
             scale_factor_magnitude_bias,
             scale_factor_table,

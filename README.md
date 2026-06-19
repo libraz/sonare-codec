@@ -59,8 +59,9 @@ magnitude-table codewords can be followed by the required non-zero coefficient
 sign bits. Byte-padded packed bit buffers can be concatenated without
 preserving padding bits, allowing AAC section payloads and MP3 big-values/count1
 entropy regions to form continuous payloads. Minimal experimental unit-magnitude
-tables are available to exercise those non-zero payload paths; complete standard
-AAC/MP3 Huffman tables remain pending. With the `aac` feature enabled,
+tables are available to exercise those non-zero payload paths; standard
+MP3 big-values/count1 Huffman selector coverage is now exposed, while AAC production
+quality control and MP3/AAC full rate control remain pending. With the `aac` feature enabled,
 raw AAC access units can be wrapped as ADTS via `frame_aac_adts`, and ADTS AAC
 frames can be muxed as a minimal M4A container through `mux_aac_adts_as_m4a`.
 The locally supported M4A layout can also be demuxed back to ADTS through
@@ -214,8 +215,8 @@ workbench for mono and keeps stereo on a compatibility cosine-modulated
 subband scaffold while the stereo true-polyphase path is brought up to that
 oracle. The default non-silent mono/stereo production path now uses the CBR
 bit-reservoir packer and is checked against the same selector telemetry in the
-publish-readiness gate. MP3 also exposes clean-room psychoacoustic long-block scale-factor helpers that wire zero-padded PCM analysis, the sign-inverted hybrid MDCT spectrum, masking thresholds, and per-band allocation into the scale-factor quantizer workbench, plus frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors. Non-silent mono/stereo production encode now uses the perceptual scale-factor reservoir path; the quality-guarded perceptual reservoir helper remains available as a comparison diagnostic. Remaining Huffman-table coverage and full rate
-control are still pending; interleaved PCM can now be extracted into
+publish-readiness gate. MP3 also exposes clean-room psychoacoustic long-block scale-factor helpers that wire zero-padded PCM analysis, the sign-inverted hybrid MDCT spectrum, masking thresholds, and per-band allocation into the scale-factor quantizer workbench, plus frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors. Non-silent mono/stereo production encode now uses the entropy-targeted perceptual scale-factor reservoir path; the raw and quality-guarded perceptual reservoir helpers remain available as comparison diagnostics. Standard Huffman selector coverage is exposed, while full rate
+control is still pending; interleaved PCM can now be extracted into
 zero-padded analysis blocks and classified into Layer III entropy regions for
 those stages. Region metadata can be written into side-info, and
 preselected main-data codewords can now update `part2_3_length` with the exact
@@ -274,7 +275,7 @@ state from the same selection pass used by the production reservoir encoder,
 including per-frame perceptual-vs-calibrated granule counts for the guarded
 psychoacoustic bridge plus quality-guard comparison count and encoder-side
 distortion delta telemetry.
-The umbrella crate re-exports the MP3 scaffold helpers, psychoacoustic
+The umbrella crate re-exports the MP3 scaffold helpers, standard Huffman selector lists, psychoacoustic
 long-block scale-factor selector, perceptual scale-factor frame/stream helpers
 with payload-budget and bitrate-derived capacity search, the perceptual active
 CBR diagnostic stream helper, the perceptual active reservoir candidate helper,
@@ -297,14 +298,16 @@ API. `format` accepts `wav`, `flac`, `mp3`, `vorbis`, `opus`, `aac`, `m4a`, or
 `StreamDecoder`, which buffers chunked input and returns PCM once the
 accumulated bytes form a complete stream. Small lossy diagnostic helpers are
 available on both package surfaces for AAC-LC ADTS bitrate frame budgets, the
-AAC default production bitrate budget, AAC signed-pairs codebook 5/6 tables,
+AAC default production bitrate budget, AAC production and standard-id step
+candidates, AAC signed-pairs codebook 5/6 tables,
 unsigned-pairs codebook 7/8/9/10 tables, escape codebook 11 table, codebook 6 section planning, mixed
 standard-id payload bit lengths, standard table-set section planning, standard
 escape and mixed standard-id payload bit lengths, standard-id AAC-LC mono/stereo
 offsets ADTS diagnostic stream helpers with fixed-step and bitrate-derived step
-search modes plus frame-selection telemetry, and MP3 Layer III main-data capacity/reservoir
-telemetry for the mono/stereo production perceptual reservoir path and the
-quality-guarded comparison helper. WASM and Python also expose
+search modes plus frame-selection telemetry, and MP3 Layer III step candidates,
+main-data capacity/reservoir
+telemetry for the mono/stereo production entropy-targeted perceptual reservoir
+path and the raw/quality-guarded comparison helpers. WASM and Python also expose
 caller-selected AAC/M4A bitrate encode helpers for fixed and internally
 selected scale-factor paths, plus MP3 fixed-padding and CBR padding-scheduled
 bitrate encode helpers for the current lossy scaffolds.
@@ -440,8 +443,10 @@ standard-id AAC/M4A bitrate helpers for mono and stereo, including the selected
 scale-factor plus magnitude-bias variants, checking ADTS frame budgets, FFmpeg
 decode, decoded RMS, and correlation while leaving the default production AAC
 path on the higher-quality selected-scale-factor table set. Python/WASM also
-expose flattened frame-selection telemetry for the same selected standard-id
-path as `[frame_index, step, frame_len, frame_capacity_bytes, ...]`. The local
+expose recommended standard-id selected-scale-factor gain/bias parameters, a
+combined parameter helper, and convenience ADTS/M4A encode helpers plus
+flattened frame-selection telemetry for the same selected standard-id path as
+`[frame_index, step, frame_len, frame_capacity_bytes, ...]`. The local
 oracle also rejects extremely over-amplified output, not just silent or
 uncorrelated PCM.
 `mp3-perceptual-diagnostic` uses the same local FFmpeg oracle to decode the
@@ -451,7 +456,22 @@ payload bit usage, and frame capacity so rate-control work can distinguish
 capacity pressure from the current psychoacoustic/scale-factor quality limit.
 The diagnostic uses the allocation-active selector over the normal candidate
 set so the reported quality exercises non-zero perceptual scale factors instead
-of the finest zero-scale-factor fallback.
+of the finest zero-scale-factor fallback. Python/WASM also expose the first-frame
+perceptual candidate profile as flattened
+`[step, payload_bits, capacity_bits, nonzero_scale_factors, scale_factor_bands,
+max_scale_factor, ...]` telemetry so package smoke tests can detect whether
+future MP3 rate-control changes alter scale-factor activation. A companion
+perceptual bit-allocation helper exposes flattened
+`[frame_index, granule, channel, perceptual_entropy, target_bits, ...]`
+telemetry using the same CBR main-data capacity and psychoacoustic entropy
+distribution that future reservoir rate-control work will consume. An
+entropy-targeted perceptual reservoir details helper then applies those frame
+targets to diagnostic step selection and reports whether each frame fit the
+entropy budget or fell back to the ordinary borrowed-reservoir budget; the
+matching diagnostic encode helper assembles the same selected frames into MP3
+bytes. The non-silent mono/stereo MP3 production path now uses that
+entropy-targeted selector directly, and publish-readiness verifies production
+side-info against its telemetry.
 
 `oracle-smoke` is an optional local-only black-box decoder acceptance check. Set
 `SONARE_FFMPEG=/path/to/ffmpeg` to run it; without that environment variable it

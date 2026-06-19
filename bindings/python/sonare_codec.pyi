@@ -81,6 +81,15 @@ def encode_mp3_perceptual_reservoir_with_bitrate(
     crc_protected: bool,
 ) -> bytes: ...
 
+def encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    bitrate_kbps: int,
+    crc_protected: bool,
+    min_bits_per_granule_channel: int,
+) -> bytes: ...
+
 def encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
     sample_rate: int,
     channels: int,
@@ -103,6 +112,15 @@ def mp3_perceptual_reservoir_frame_details_with_bitrate(
     samples: Sequence[float],
     bitrate_kbps: int,
     crc_protected: bool,
+) -> list[float]: ...
+
+def mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    bitrate_kbps: int,
+    crc_protected: bool,
+    min_bits_per_granule_channel: int,
 ) -> list[float]: ...
 
 def mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
@@ -150,6 +168,19 @@ def encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_ma
     scale_factor_magnitude_bias: int,
 ) -> bytes: ...
 
+def encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    target_bitrate_bps: int,
+) -> bytes: ...
+
+def aac_standard_id_selected_scale_factor_global_gain(channels: int) -> int: ...
+
+def aac_standard_id_selected_scale_factor_magnitude_bias() -> int: ...
+
+def aac_standard_id_selected_scale_factor_parameters(channels: int) -> list[float]: ...
+
 def encode_m4a(sample_rate: int, channels: int, samples: Sequence[float]) -> bytes: ...
 
 def encode_m4a_with_bitrate(
@@ -183,6 +214,13 @@ def encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_ma
     scale_factor_magnitude_bias: int,
 ) -> bytes: ...
 
+def encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    target_bitrate_bps: int,
+) -> bytes: ...
+
 def demux_m4a_as_aac_adts(input: BytesLike) -> bytes: ...
 
 def aac_lc_adts_max_frame_len_for_bitrate(
@@ -191,6 +229,10 @@ def aac_lc_adts_max_frame_len_for_bitrate(
 ) -> int: ...
 
 def aac_lc_default_production_bitrate_bps(channels: int) -> int: ...
+
+def aac_lc_pcm_step_candidates() -> list[float]: ...
+
+def aac_standard_id_pcm_step_candidates() -> list[float]: ...
 
 def aac_unsigned_pairs7_unit_magnitude_table() -> list[int]: ...
 
@@ -311,6 +353,13 @@ def aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bit
     scale_factor_magnitude_bias: int,
 ) -> list[float]: ...
 
+def aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: list[float],
+    target_bitrate_bps: int,
+) -> list[float]: ...
+
 def aac_selected_scale_factor_frame_details_with_bitrate(
     sample_rate: int,
     channels: int,
@@ -333,3 +382,28 @@ def mp3_layer3_main_data_capacity_bits(
     padding: bool,
     crc_protected: bool,
 ) -> int: ...
+
+def mp3_pcm_step_candidates() -> list[float]: ...
+
+def mp3_first_frame_perceptual_candidate_profile_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    bitrate_kbps: int,
+    crc_protected: bool,
+) -> list[float]: ...
+
+def mp3_perceptual_bit_allocation_with_bitrate(
+    sample_rate: int,
+    channels: int,
+    samples: Sequence[float],
+    bitrate_kbps: int,
+    crc_protected: bool,
+    min_bits_per_granule_channel: int,
+) -> list[float]: ...
+
+def mp3_standard_big_value_table_selects() -> list[int]: ...
+
+def mp3_missing_standard_big_value_table_selects() -> list[int]: ...
+
+def mp3_standard_count1_table_selects() -> list[int]: ...

@@ -31,10 +31,16 @@ frame length, padding, per-frame capacity, `main_data_begin`, and post-frame
 reservoir bytes, perceptual-vs-calibrated granule counts, quality-guard
 comparison counts, and encoder-side distortion delta for guarded
 psychoacoustic bridge diagnostics.
-The clean-room psychoacoustic model is wired to a low-level long-block scale-factor selector and self-contained perceptual scale-factor frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors while analyzing zero-padded PCM and the sign-inverted hybrid MDCT spectrum for the scale-factor quantizer workbench. Non-silent mono/stereo production encode now uses the perceptual reservoir path; the quality-guarded perceptual reservoir path remains available as a comparison diagnostic.
+The clean-room psychoacoustic model is wired to a low-level long-block scale-factor selector and self-contained perceptual scale-factor frame/stream helpers with payload-budget step search, bitrate-derived frame capacity, and an allocation-active CBR selector that prefers fitting candidates with non-zero scale factors while analyzing zero-padded PCM and the sign-inverted hybrid MDCT spectrum for the scale-factor quantizer workbench. Non-silent mono/stereo production encode now uses the entropy-targeted perceptual reservoir path; the raw and quality-guarded perceptual reservoir paths remain available as comparison diagnostics.
 The perceptual active reservoir helper combines that scale-factor path with
 the CBR bit reservoir layout and exposes matching selector telemetry for
 production and diagnostic candidates.
-The remaining standard big-values tables, stereo true-polyphase readiness,
-production psychoacoustic bit allocation, and full rate control are still
-pending.
+The implemented standard big-values table selectors are exposed as
+`MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS`, including tables
+1/2/3/5/6/7/8/9/10/11/12/13/15, the table-16 codeword tree aliases for 16..=23,
+and the table-24 codeword tree aliases for 24..=31; count1 selector coverage is
+exposed as `MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS`. The valid standard
+big-values selectors still missing from the provider are exposed as
+`MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS` and are currently empty.
+Stereo true-polyphase readiness, production psychoacoustic bit allocation, and
+full rate control are still pending.

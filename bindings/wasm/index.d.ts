@@ -104,6 +104,15 @@ export function encode_mp3_perceptual_reservoir_with_bitrate(
   crc_protected: boolean
 ): Uint8Array;
 
+export function encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean,
+  min_bits_per_granule_channel: number
+): Uint8Array;
+
 export function encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
   sample_rate: number,
   channels: number,
@@ -134,6 +143,19 @@ export function mp3_perceptual_reservoir_frame_details_with_bitrate(
   samples: Float32Array,
   bitrate_kbps: number,
   crc_protected: boolean
+): Float64Array;
+
+/**
+ * Returns flattened per-frame entropy-targeted perceptual reservoir telemetry:
+ * [frame_index, step, payload_bit_len, frame_len, padding, frame_capacity_bytes, main_data_begin, reservoir_after, perceptual_granules, calibrated_granules, quality_guard_compared_granules, quality_guard_distortion_delta, entropy_target_bits, used_entropy_target_budget]...
+ */
+export function mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean,
+  min_bits_per_granule_channel: number
 ): Float64Array;
 
 /**
@@ -185,6 +207,23 @@ export function encode_aac_with_standard_spectral_offsets_and_selected_scale_fac
   scale_factor_magnitude_bias: number
 ): Uint8Array;
 
+export function encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
+export function aac_standard_id_selected_scale_factor_global_gain(
+  channels: number
+): number;
+
+export function aac_standard_id_selected_scale_factor_magnitude_bias(): number;
+
+export function aac_standard_id_selected_scale_factor_parameters(
+  channels: number
+): Float64Array;
+
 export function encode_m4a(
   sample_rate: number,
   channels: number,
@@ -222,6 +261,13 @@ export function encode_m4a_with_standard_spectral_offsets_and_selected_scale_fac
   scale_factor_magnitude_bias: number
 ): Uint8Array;
 
+export function encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
 export function demux_m4a_as_aac_adts(input: Uint8Array): Uint8Array;
 
 export function aac_lc_adts_max_frame_len_for_bitrate(
@@ -232,6 +278,10 @@ export function aac_lc_adts_max_frame_len_for_bitrate(
 export function aac_lc_default_production_bitrate_bps(
   channels: number
 ): number;
+
+export function aac_lc_pcm_step_candidates(): Float32Array;
+
+export function aac_standard_id_pcm_step_candidates(): Float32Array;
 
 /**
  * Returns flattened entries as [x, y, bits, len, ...].
@@ -443,6 +493,16 @@ export function aac_standard_selected_scale_factor_frame_details_with_magnitude_
 ): Float64Array;
 
 /**
+ * Returns flattened recommended standard-id selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
  * Returns flattened production selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
  */
 export function aac_selected_scale_factor_frame_details_with_bitrate(
@@ -467,3 +527,28 @@ export function mp3_layer3_main_data_capacity_bits(
   padding: boolean,
   crc_protected: boolean
 ): number;
+
+export function mp3_pcm_step_candidates(): Float32Array;
+
+export function mp3_first_frame_perceptual_candidate_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+export function mp3_perceptual_bit_allocation_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean,
+  min_bits_per_granule_channel: number
+): Float64Array;
+
+export function mp3_standard_big_value_table_selects(): Uint8Array;
+
+export function mp3_missing_standard_big_value_table_selects(): Uint8Array;
+
+export function mp3_standard_count1_table_selects(): Uint8Array;

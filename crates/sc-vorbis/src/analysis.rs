@@ -9,8 +9,9 @@
 //!
 //! The noise-floor mask ([`bark_noise_hybridmp`](crate::noise)) and the final
 //! tone/noise mix ([`offset_and_mix`](crate::noise)) are combined onto this
-//! tone mask by the caller; the AoTuV noise-companding refinement is a separate
-//! stage.
+//! tone mask by the caller. [`PsyAnalysis::m1_companding_gains`] adds the AoTuV
+//! M1 noise-companding refinement (a relative compensation of the MDCT lines
+//! against the noise floor), ported from the same `psy.c`.
 
 // `mdct_analysis` is the non-windowed convenience used by tests; the encoder
 // calls the windowed variant.
@@ -45,6 +46,25 @@ const NOISEWINDOW_BARK: f32 = 0.5;
 const NOISEWINDOW_MIN: i32 = 1;
 /// Offset the first noise regression pass adds before clamping (`140` dB).
 const NOISE_OFFSET_DB: f32 = 140.0;
+/// AoTuV M1 companding threshold (dB): the hinge between the two pro-rated
+/// attenuation slopes, an MDCT line `17.2` dB relative to the noise floor
+/// (libvorbis `psy.c` `_vp_offset_and_mix`).
+const M1_COEFFI: f32 = -17.2;
+
+/// AoTuV HF-weighting coefficient `m_val` (libvorbis `psy.c`): scales the M1
+/// companding strength by sample rate. Below 26 kHz it is `0`, which makes the
+/// companding a no-op.
+fn aotuv_m_val(rate: u32) -> f32 {
+    if rate < 26_000 {
+        0.0
+    } else if rate < 38_000 {
+        0.94
+    } else if rate > 46_000 {
+        1.275
+    } else {
+        1.0
+    }
+}
 
 /// Precomputed psychoacoustic state for one blocksize and sample rate.
 pub struct PsyAnalysis {
@@ -54,6 +74,7 @@ pub struct PsyAnalysis {
     bin_ath: Vec<f32>,
     bark: Vec<i32>,
     noiseoffset: Vec<f32>,
+    m_val: f32,
 }
 
 impl PsyAnalysis {
@@ -86,6 +107,7 @@ impl PsyAnalysis {
             bin_ath,
             bark,
             noiseoffset,
+            m_val: aotuv_m_val(rate),
         }
     }
 
@@ -162,8 +184,9 @@ impl PsyAnalysis {
     /// tone mask ([`tonemask`](Self::tonemask)) combined with the Bark-window
     /// noise floor and mixed so the louder of the two masks each bin.
     ///
-    /// This is the base masking model (the AoTuV noise-companding refinement is
-    /// not yet applied). Returns an empty vector on a size mismatch.
+    /// This is the base masking model; the AoTuV M1 companding refinement is
+    /// [`m1_companding_gains`](Self::m1_companding_gains). Returns an empty
+    /// vector on a size mismatch.
     #[must_use]
     pub fn logmask(&self, logmdct: &[f32]) -> Vec<f32> {
         if logmdct.len() != self.n || self.bark.len() != self.n || self.n == 0 {
@@ -188,6 +211,52 @@ impl PsyAnalysis {
             &mut logmask,
         );
         logmask
+    }
+
+    /// AoTuV M1 noise-companding gains (libvorbis `psy.c` `_vp_offset_and_mix`,
+    /// the "@ M1" block by Aoyumi, 2004): per bin, the factor an MDCT line is
+    /// scaled by to relatively compensate it against the noise floor. A line
+    /// near or below the floor is gently attenuated (so its residue shrinks
+    /// toward zero and may skip), while a line well above the floor is left
+    /// essentially unchanged; the strength scales with the per-rate coefficient
+    /// `m_val` (`0` below 26 kHz, making this a no-op).
+    ///
+    /// Because the floor curve is unchanged, scaling the MDCT line by this gain
+    /// is identical to scaling its residue (`residue = mdct / floor`), so the
+    /// caller applies these gains directly to the residue vector. Returns one
+    /// gain per bin, or an empty vector on a size mismatch.
+    #[must_use]
+    pub fn m1_companding_gains(&self, logmdct: &[f32]) -> Vec<f32> {
+        if logmdct.len() != self.n || self.bark.len() != self.n || self.n == 0 {
+            return Vec::new();
+        }
+        let cx = self.m_val;
+        let mut noise = vec![0.0f32; self.n];
+        bark_noise_hybridmp(&self.bark, logmdct, &mut noise, NOISE_OFFSET_DB, -1);
+
+        let mut gains = vec![1.0f32; self.n];
+        for (i, gain) in gains.iter_mut().enumerate() {
+            // The noise-floor mask term (`val`), as in `_vp_offset_and_mix`:
+            // the bin's noise floor plus its offset, capped at the suppression
+            // ceiling, then taken relative to the MDCT line.
+            let mut val = noise[i] + self.noiseoffset[i];
+            if val > NOISEMAXSUPP {
+                val = NOISEMAXSUPP;
+            }
+            val -= logmdct[i];
+            let de = if val > M1_COEFFI {
+                let d = 1.0 - (val - M1_COEFFI) * 0.005 * cx;
+                if d < 0.0 {
+                    0.0001
+                } else {
+                    d
+                }
+            } else {
+                1.0 - (val - M1_COEFFI) * 0.0003 * cx
+            };
+            *gain = de;
+        }
+        gains
     }
 }
 
@@ -339,5 +408,48 @@ mod tests {
                 quiet[i]
             );
         }
+    }
+
+    #[test]
+    fn m1_gains_are_a_no_op_below_26khz() {
+        // Below 26 kHz the AoTuV `m_val` coefficient is 0, so every companding
+        // gain is exactly 1.0 (the MDCT is untouched).
+        let psy = PsyAnalysis::new(128, 22_050);
+        let gains = psy.m1_companding_gains(&vec![-50.0; 128]);
+        assert_eq!(gains.len(), 128);
+        assert!(gains.iter().all(|&g| g == 1.0), "companding not a no-op");
+    }
+
+    #[test]
+    fn m1_attenuates_near_floor_bins_more_than_loud_ones() {
+        // At 48 kHz (m_val = 1.275) a loud line far above the floor keeps
+        // essentially all its energy (gain ~ 1), while the surrounding near-floor
+        // bins are attenuated (gain < 1) — the relative compensation that shrinks
+        // their residue toward zero.
+        let n = 256;
+        let psy = PsyAnalysis::new(n, 48_000);
+        let mut logmdct = vec![-90.0f32; n];
+        logmdct[60] = -5.0; // one loud tonal line
+        let gains = psy.m1_companding_gains(&logmdct);
+        assert_eq!(gains.len(), n);
+        assert!(gains.iter().all(|g| g.is_finite() && *g >= 0.0));
+        assert!(gains[60] > 0.95, "loud line over-attenuated: {}", gains[60]);
+        assert!(
+            gains[200] < 1.0,
+            "near-floor bin not attenuated: {}",
+            gains[200]
+        );
+        assert!(
+            gains[200] < gains[60],
+            "near-floor bin {} not attenuated more than the loud line {}",
+            gains[200],
+            gains[60]
+        );
+    }
+
+    #[test]
+    fn m1_gains_are_size_checked() {
+        let psy = PsyAnalysis::new(128, 48_000);
+        assert!(psy.m1_companding_gains(&vec![-50.0; 64]).is_empty());
     }
 }

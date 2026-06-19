@@ -32,14 +32,21 @@ aac_selected_10k = sonare_codec.encode_aac_with_selected_scale_factors_and_bitra
 aac_standard_128k = sonare_codec.encode_aac_with_standard_spectral_offsets_and_bitrate(
     44100, 1, [0.0] * 2048, 128000, 128
 )
+aac_standard_selected_params = sonare_codec.aac_standard_id_selected_scale_factor_parameters(1)
 aac_standard_selected_128k = (
-    sonare_codec.encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
-        44100, 1, [0.0] * 2048, 128000, 128, 16
+    sonare_codec.encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+        44100,
+        1,
+        [0.0] * 2048,
+        128000,
     )
 )
 aac_standard_selected_details = (
-    sonare_codec.aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
-        44100, 1, [0.0] * 2048, 128000, 128, 16
+    sonare_codec.aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+        44100,
+        1,
+        [0.0] * 2048,
+        128000,
     )
 )
 aac_production_details = sonare_codec.aac_selected_scale_factor_frame_details_with_bitrate(
@@ -63,8 +70,28 @@ adts = sonare_codec.demux_m4a_as_aac_adts(m4a)
 m4a_sample_rate, m4a_channels, m4a_samples = sonare_codec.decode_m4a(m4a)
 aac_budget = sonare_codec.aac_lc_adts_max_frame_len_for_bitrate(44100, 10000)
 aac_production_bitrate = sonare_codec.aac_lc_default_production_bitrate_bps(1)
+aac_production_steps = sonare_codec.aac_lc_pcm_step_candidates()
+aac_standard_id_steps = sonare_codec.aac_standard_id_pcm_step_candidates()
 aac_codebook7 = sonare_codec.aac_unsigned_pairs7_unit_magnitude_table()
 mp3_capacity = sonare_codec.mp3_layer3_main_data_capacity_bytes(44100, 1, 128, False, False)
+mp3_steps = sonare_codec.mp3_pcm_step_candidates()
+mp3_candidate_profile = sonare_codec.mp3_first_frame_perceptual_candidate_profile_with_bitrate(
+    44100, 1, [0.0] * (1152 * 3), 128, False
+)
+mp3_bit_allocation = sonare_codec.mp3_perceptual_bit_allocation_with_bitrate(
+    44100, 1, [0.0] * (1152 * 3), 128, False, 0
+)
+mp3_entropy_targeted_reservoir_details = (
+    sonare_codec.mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
+        44100, 1, [0.0] * (1152 * 3), 128, False, 0
+    )
+)
+mp3_entropy_targeted_reservoir = (
+    sonare_codec.encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
+        44100, 1, [0.0] * (1152 * 3), 128, False, 0
+    )
+)
+mp3_tables = sonare_codec.mp3_standard_big_value_table_selects()
 
 decoder = sonare_codec.StreamDecoder()
 partial = wav[: len(wav) - 2]
@@ -79,7 +106,8 @@ AAC-LC ADTS/M4A. `encode_audio_production` accepts the current non-silent lossy
 production candidates: mono/stereo MP3 at 32/44.1/48 kHz and mono/stereo
 AAC-LC ADTS/M4A at 7.35/8/11.025/12/16/22.05/24/32/44.1/48/64/88.2/96 kHz.
 Other non-silent MP3/AAC shapes are rejected. The package also exposes small
-lossy diagnostics for AAC ADTS bitrate budgets, AAC scale-factor/codebook
+lossy diagnostics for AAC ADTS bitrate budgets, AAC production and standard-id
+step candidates, AAC scale-factor/codebook
 5/6 direct signed-pair tables, codebook 1/2 direct signed-quad tables,
 codebook 3/4 unsigned-quad tables,
 codebook 7/8/9/10 unsigned-pair tables, the
@@ -87,7 +115,7 @@ escape codebook 11 table, codebook 6 section planning,
 quad and mixed standard-id section planning backed by core-owned unit fixtures,
 standard table-set section planning that now uses direct signed codebook 5/6
 alongside direct signed quad codebook 1/2, unsigned-quad codebook 3/4, and standard unsigned/escape codebooks, MP3 Layer III
-main-data capacity, AAC default production bitrate lookup, and caller-selected
+step candidates and main-data capacity, standard MP3 Huffman selector lists, AAC default production bitrate lookup, and caller-selected
 AAC/MP3 bitrate encoding. The mixed AAC helper also reports
 section/spectral/scale-factor split payload bit lengths for the current
 caller-table workbench, and the standard escape/mixed helpers report

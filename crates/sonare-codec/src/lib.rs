@@ -6,36 +6,6 @@ pub use sc_core::{
     HuffmanCode, HuffmanEntry, PackedBits, PcmDiff, PcmTolerance,
 };
 
-#[cfg(feature = "aac")]
-const AAC_STANDARD_ID_PCM_STEP_CANDIDATES: &[f32] = &[
-    0.0005,
-    0.001,
-    0.002,
-    0.005,
-    0.01,
-    0.02,
-    0.05,
-    0.075,
-    0.1,
-    0.15,
-    0.2,
-    0.3,
-    0.5,
-    0.75,
-    1.0,
-    1.5,
-    2.0,
-    5.0,
-    10.0,
-    20.0,
-    50.0,
-    100.0,
-    200.0,
-    500.0,
-    1_000.0,
-    f32::MAX,
-];
-
 #[cfg(feature = "mp3")]
 pub use sc_mp3::{
     apply_big_value_region_tables_to_granule, assemble_layer3_frame_from_payloads,
@@ -45,6 +15,7 @@ pub use sc_mp3::{
     encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_auto_step_and_table_provider,
@@ -77,6 +48,8 @@ pub use sc_mp3::{
     pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
     select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
     select_big_value_table_by_bit_cost, select_count1_table_by_bit_cost,
+    select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider,
+    select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider,
     select_mpeg1_layer3_long_scale_factor_compress,
     select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
     select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_provider,
@@ -89,6 +62,7 @@ pub use sc_mp3::{
     select_mpeg1_layer3_pcm_frame_step_details_with_table_provider,
     select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
     select_mpeg1_layer3_pcm_frame_step_with_table_provider,
+    select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate,
     select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider,
     select_mpeg1_layer3_psychoacoustic_long_scale_factors,
     select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider,
@@ -96,9 +70,12 @@ pub use sc_mp3::{
     Layer, Layer3BigValueMagnitude, Layer3BigValuePair, Layer3BigValueRegionTableSelection,
     Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad, Layer3Count1Quad,
     Layer3Count1TableSelection, Layer3EntropyTableProvider, Layer3EntropyTables,
-    Layer3GranuleChannelInfo, Layer3PcmFrameStepSelection, Layer3ReservoirFrameSelection,
-    Layer3ScaleFactorCompress, Layer3SideInfo, Layer3SpectralRegions, MpegVersion,
-    MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+    Layer3EntropyTargetedReservoirFrameSelection, Layer3GranuleChannelInfo,
+    Layer3PcmFrameStepSelection, Layer3PerceptualBitAllocation, Layer3PerceptualCandidateProfile,
+    Layer3ReservoirFrameSelection, Layer3ScaleFactorCompress, Layer3SideInfo,
+    Layer3SpectralRegions, MpegVersion, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
+    MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+    MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS,
 };
 
 #[cfg(feature = "aac")]
@@ -194,7 +171,8 @@ pub use sc_aac::{
     pack_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost,
     pack_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost,
     pack_aac_lc_standard_spectral_payload_with_sign_bits_by_bit_cost,
-    pack_quad_section_data_with_len, pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits,
+    pack_quad_section_data_with_len, pack_scale_factor_deltas_with_table,
+    pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits,
     pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits,
     pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits_and_scale_factor_bits_by_bit_cost,
     pack_sectioned_spectral_payload_by_codebook_id_with_sign_bits_by_bit_cost,
@@ -202,10 +180,10 @@ pub use sc_aac::{
     pack_sectioned_spectral_payload_with_sign_bits_by_bit_cost,
     pack_sectioned_spectral_quad_payload_with_sign_bits,
     pack_sectioned_spectral_quad_payload_with_sign_bits_by_bit_cost,
-    pack_spectral_pairs_with_table, pack_spectral_quad_sections_with_sign_bits,
-    pack_spectral_quads_with_sign_bits, pack_spectral_quads_with_table,
-    pack_spectral_section_data_with_len, pack_spectral_section_data_with_offsets,
-    pack_spectral_sections_by_codebook_id_with_sign_bits,
+    pack_spectral_pairs_with_sign_bits, pack_spectral_pairs_with_table,
+    pack_spectral_quad_sections_with_sign_bits, pack_spectral_quads_with_sign_bits,
+    pack_spectral_quads_with_table, pack_spectral_section_data_with_len,
+    pack_spectral_section_data_with_offsets, pack_spectral_sections_by_codebook_id_with_sign_bits,
     plan_aac_lc_standard_spectral_sections_by_bit_cost,
     plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost, plan_quad_sections_by_bit_cost,
     plan_sections_by_bit_cost, plan_sections_by_offsets,
@@ -220,6 +198,7 @@ pub use sc_aac::{
     select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
@@ -232,6 +211,8 @@ pub use sc_aac::{
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
+    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_by_bit_cost,
@@ -242,6 +223,7 @@ pub use sc_aac::{
     select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_with_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
@@ -254,12 +236,15 @@ pub use sc_aac::{
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
+    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
     select_codebook_by_bit_cost, select_quad_codebook_by_bit_cost,
     select_scale_factors_for_quantized_bands, select_scale_factors_for_quantized_bands_by_offsets,
     select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias,
     select_spectral_codebook_id_by_bit_cost,
+    split_aac_lc_standard_sectioned_spectral_payload_with_offsets_and_sign_bits,
     split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost,
     split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost,
     split_aac_lc_standard_spectral_payload_with_sign_bits_and_scale_factor_bits_by_bit_cost,
@@ -274,8 +259,15 @@ pub use sc_aac::{
     AacSpectralMagnitudeQuad, AacSpectralMagnitudeQuadTables, AacSpectralMagnitudeTables,
     AacSpectralPair, AacSpectralQuad, AacSpectralSection, AacSpectralTables, AdtsConfig,
     AAC_LC_48K_LONG_WINDOW_SCALE_FACTOR_BAND_OFFSETS, AAC_LC_PCM_STEP_CANDIDATES,
-    AAC_SCALE_FACTOR_DELTA_ZERO_TABLE,
+    AAC_SCALE_FACTOR_DELTA_ZERO_TABLE, AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
 };
+
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN: u8 = 128;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_GLOBAL_GAIN: u8 = 126;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS: i16 = 16;
 
 /// Decodes supported audio bytes into interleaved PCM.
 pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
@@ -874,6 +866,45 @@ pub fn encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors
 }
 
 #[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_global_gain(channels: u16) -> Result<u8, Error> {
+    match channels {
+        1 => Ok(AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN),
+        2 => Ok(AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_GLOBAL_GAIN),
+        _ => Err(Error::InvalidInput(
+            "AAC standard-id selected-scale-factor global gain requires mono or stereo",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_magnitude_bias() -> i16 {
+    AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_parameters(channels: u16) -> Result<(u8, i16), Error> {
+    Ok((
+        aac_standard_id_selected_scale_factor_global_gain(channels)?,
+        aac_standard_id_selected_scale_factor_magnitude_bias(),
+    ))
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
 pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
     pcm: &AudioBuffer,
     target_bitrate_bps: u32,
@@ -920,6 +951,21 @@ pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_
             "AAC standard selected-scale-factor frame details require mono or stereo PCM",
         )),
     }
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
 }
 
 #[cfg(feature = "aac")]
@@ -995,6 +1041,19 @@ pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with
             target_bitrate_bps,
             global_gain,
             scale_factor_magnitude_bias,
+        )?,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(
+        &encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            pcm,
+            target_bitrate_bps,
         )?,
     )
 }
@@ -1370,7 +1429,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "mp3")]
-    fn production_mono_mp3_uses_perceptual_reservoir_path() {
+    fn production_mono_mp3_uses_entropy_targeted_perceptual_reservoir_path() {
         let frames = 8_usize;
         let samples_per_frame = 1152_usize;
         let samples = (0..(frames * samples_per_frame))
@@ -1383,11 +1442,12 @@ mod tests {
 
         let production = encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap();
         let reservoir_details =
-            super::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
+            super::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
                 &pcm,
                 super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
                 128,
                 false,
+                0,
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
@@ -1400,15 +1460,15 @@ mod tests {
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
-        let perceptual_reservoir =
-            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
-                &pcm,
-                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-                128,
-                false,
-                super::mpeg1_layer3_standard_table_provider(),
-            )
-            .unwrap();
+        let entropy_targeted_reservoir = super::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+            &pcm,
+            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            0,
+            super::mpeg1_layer3_standard_table_provider(),
+        )
+        .unwrap();
 
         let mut offset = 0_usize;
         let mut frame_index = 0_usize;
@@ -1433,8 +1493,8 @@ mod tests {
             "production MP3 stopped using the bit reservoir"
         );
         assert_eq!(
-            production, perceptual_reservoir,
-            "mono production MP3 should use the perceptual reservoir path"
+            production, entropy_targeted_reservoir,
+            "mono production MP3 should use the entropy-targeted perceptual reservoir path"
         );
         assert_ne!(
             production, perceptual_cbr,
@@ -1444,7 +1504,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "mp3")]
-    fn production_stereo_mp3_uses_perceptual_reservoir_path() {
+    fn production_stereo_mp3_uses_entropy_targeted_perceptual_reservoir_path() {
         let frames = 8_usize;
         let samples_per_frame = 1152_usize;
         let samples = (0..(frames * samples_per_frame * 2))
@@ -1468,6 +1528,16 @@ mod tests {
         let pcm = AudioBuffer::new(44_100, 2, samples).unwrap();
 
         let production = encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap();
+        let entropy_targeted_details =
+            super::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
+                &pcm,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                0,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
         let perceptual_details =
             super::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
                 &pcm,
@@ -1486,14 +1556,36 @@ mod tests {
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
+        let entropy_targeted_reservoir = super::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+            &pcm,
+            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            0,
+            super::mpeg1_layer3_standard_table_provider(),
+        )
+        .unwrap();
 
-        assert!(perceptual_details
+        assert!(entropy_targeted_details
             .iter()
             .all(|detail| { detail.perceptual_granules == 4 && detail.calibrated_granules == 0 }));
-        assert!(perceptual_details.iter().all(|detail| {
+        assert!(entropy_targeted_details.iter().all(|detail| {
             detail.quality_guard_compared_granules == 0
                 && detail.quality_guard_distortion_delta == 0.0
         }));
+        assert!(entropy_targeted_details
+            .iter()
+            .any(|detail| detail.used_entropy_target_budget));
+        assert_eq!(
+            entropy_targeted_details
+                .iter()
+                .map(|detail| detail.entropy_target_bits)
+                .sum::<usize>(),
+            entropy_targeted_details
+                .iter()
+                .map(|detail| detail.frame_capacity_bytes * 8)
+                .sum::<usize>()
+        );
 
         let mut offset = 0_usize;
         let mut frame_index = 0_usize;
@@ -1503,7 +1595,7 @@ mod tests {
             let mut reader = BitReader::new(&production[offset + 4..]);
             let main_data_begin = reader.read_bits(9).unwrap();
             assert_eq!(
-                perceptual_details[frame_index].main_data_begin as u32,
+                entropy_targeted_details[frame_index].main_data_begin as u32,
                 main_data_begin
             );
             max_main_data_begin = max_main_data_begin.max(main_data_begin);
@@ -1512,21 +1604,42 @@ mod tests {
         }
 
         assert_eq!(offset, production.len());
-        assert_eq!(frame_index, perceptual_details.len());
+        assert_eq!(frame_index, entropy_targeted_details.len());
         assert!(
             max_main_data_begin > 0,
             "production stereo MP3 stopped using the bit reservoir"
         );
         assert_eq!(
-            production, perceptual_reservoir,
-            "stereo production MP3 should use the perceptual reservoir path"
+            production, entropy_targeted_reservoir,
+            "stereo production MP3 should use the entropy-targeted perceptual reservoir path"
         );
+        assert_ne!(
+            production, perceptual_reservoir,
+            "stereo production MP3 should no longer use the raw perceptual reservoir path"
+        );
+        assert_eq!(perceptual_details.len(), entropy_targeted_details.len());
         assert_eq!(super::detect(&production), Some(Format::Mp3));
     }
 
     #[test]
     #[cfg(feature = "mp3")]
     fn exposes_mp3_pcm_frame_scaffold_helper() {
+        assert_eq!(
+            super::MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS,
+            &[
+                1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+                26, 27, 28, 29, 30, 31
+            ]
+        );
+        assert_eq!(
+            super::MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS,
+            &[]
+        );
+        assert_eq!(
+            super::MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS,
+            &[false, true]
+        );
+
         let pcm = AudioBuffer::new(44_100, 2, vec![0.0; 1153 * 2]).unwrap();
 
         let scaffold =
@@ -1676,6 +1789,19 @@ mod tests {
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
+        let profile_candidates = [0.05_f32, 0.1, 0.2, 1.0];
+        let candidate_profile =
+            super::select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider(
+                &pcm,
+                &profile_candidates,
+                128,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let bit_allocation =
+            super::select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(&pcm, 128, false, 0)
+                .unwrap();
         let encoded =
             super::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider(
                 &pcm,
@@ -1723,6 +1849,24 @@ mod tests {
             .unwrap();
 
         assert!(active_selected.payload_bit_len <= active_selected.frame_capacity_bits);
+        assert_eq!(candidate_profile.len(), profile_candidates.len());
+        assert!(candidate_profile.iter().all(|profile| {
+            profile.scale_factor_bands == super::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT * 2
+        }));
+        assert!(candidate_profile
+            .iter()
+            .any(|profile| profile.nonzero_scale_factors > 0));
+        assert_eq!(bit_allocation.len(), 2);
+        assert_eq!(
+            bit_allocation
+                .iter()
+                .map(|allocation| allocation.target_bits)
+                .sum::<usize>(),
+            super::layer3_main_data_capacity_bits(header).unwrap()
+        );
+        assert!(bit_allocation
+            .iter()
+            .all(|allocation| allocation.perceptual_entropy.is_finite()));
         assert_eq!(encoded.len(), header.frame_len());
         assert_eq!(budgeted.len(), header.frame_len());
         assert_eq!(bitrate_encoded.len(), bitrate_header.frame_len());
@@ -1790,6 +1934,16 @@ mod tests {
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
+        let entropy_targeted_details =
+            super::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
+                &reservoir_pcm,
+                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                0,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
         let perceptual_reservoir =
             super::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
                 &reservoir_pcm,
@@ -1800,6 +1954,23 @@ mod tests {
             )
             .unwrap();
         assert_eq!(perceptual_reservoir_details.len(), 8);
+        assert_eq!(
+            entropy_targeted_details.len(),
+            perceptual_reservoir_details.len()
+        );
+        assert_eq!(
+            entropy_targeted_details
+                .iter()
+                .map(|detail| detail.entropy_target_bits)
+                .sum::<usize>(),
+            perceptual_reservoir_details
+                .iter()
+                .map(|detail| detail.frame_capacity_bytes * 8)
+                .sum::<usize>()
+        );
+        assert!(entropy_targeted_details
+            .iter()
+            .any(|detail| detail.used_entropy_target_budget));
         assert!(perceptual_reservoir_details
             .iter()
             .any(|detail| detail.main_data_begin > 0));
@@ -2060,6 +2231,31 @@ mod tests {
             )
             .unwrap();
 
+        assert!(super::AAC_LC_PCM_STEP_CANDIDATES.contains(&0.2));
+        assert!(!super::AAC_LC_PCM_STEP_CANDIDATES.contains(&0.15));
+        assert!(super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES.contains(&0.15));
+        assert!(super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES.contains(&0.075));
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_global_gain(1).unwrap(),
+            128
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_global_gain(2).unwrap(),
+            126
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_magnitude_bias(),
+            16
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_parameters(1).unwrap(),
+            (128, 16)
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_parameters(2).unwrap(),
+            (126, 16)
+        );
+        assert!(super::aac_standard_id_selected_scale_factor_global_gain(3).is_err());
         assert_eq!(&mono_adts[..2], &[0xff, 0xf1]);
         assert_eq!(&stereo_adts[..2], &[0xff, 0xf1]);
         assert_eq!(mono_adts_high_level, mono_adts);
@@ -2591,6 +2787,33 @@ mod tests {
             )
             .unwrap();
         assert_eq!(&high_level_selected_standard_m4a[4..8], b"ftyp");
+        let recommended_selected_standard_bitrate_stream =
+            super::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_bitrate_stream,
+            high_level_selected_standard_bitrate_stream
+        );
+        let recommended_selected_standard_details =
+            super::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_details,
+            high_level_selected_standard_details
+        );
+        let recommended_selected_standard_m4a =
+            super::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_m4a,
+            high_level_selected_standard_m4a
+        );
         let standard_bitrate_details =
             super::select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
                 super::AdtsConfig::aac_lc(44_100, 1),
@@ -2750,6 +2973,53 @@ mod tests {
         assert_eq!(
             high_level_selected_standard_stereo_details,
             core_selected_standard_stereo_details
+        );
+        let recommended_selected_standard_stereo_bitrate_stream =
+            super::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &stereo_pcm, 256_000,
+            )
+            .unwrap();
+        let core_recommended_selected_standard_stereo_bitrate_stream =
+            super::encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 2),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                &stereo_pcm,
+                0,
+                long_offsets,
+                16,
+                super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+                256_000,
+                &super::aac_scale_factor_delta_table(),
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_stereo_bitrate_stream,
+            core_recommended_selected_standard_stereo_bitrate_stream
+        );
+        let recommended_selected_standard_stereo_details =
+            super::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+                &stereo_pcm,
+                256_000,
+            )
+            .unwrap();
+        let core_recommended_selected_standard_stereo_details =
+            super::select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 2),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                &stereo_pcm,
+                0,
+                long_offsets,
+                16,
+                super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+                256_000,
+                &super::aac_scale_factor_delta_table(),
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_stereo_details,
+            core_recommended_selected_standard_stereo_details
         );
         assert_eq!(
             high_level_selected_standard_stereo_details
