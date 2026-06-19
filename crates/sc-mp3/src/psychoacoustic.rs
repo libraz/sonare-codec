@@ -633,6 +633,82 @@ pub fn perceptual_long_block_allowed_noise(
     perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)
 }
 
+/// Number of equal segments a block is split into for transient analysis. MP3
+/// short blocks divide the long window into three; a few more segments localizes
+/// the onset within the block more sharply.
+const TRANSIENT_SEGMENTS: usize = 8;
+
+/// Default attack-ratio threshold above which a block is treated as transient
+/// and switched to short blocks to suppress pre-echo.
+const TRANSIENT_RATIO_THRESHOLD: f64 = 10.0;
+
+/// Energy floor used when a segment's preceding context is silent, so the attack
+/// ratio stays finite instead of dividing by zero.
+const TRANSIENT_ENERGY_FLOOR: f64 = 1.0e-12;
+
+/// Splits `pcm` into `segments` equal contiguous parts and returns each part's
+/// energy (sum of squares). Each sample maps to exactly one segment.
+fn segment_energies(pcm: &[f64], segments: usize) -> Result<Vec<f64>, Error> {
+    if segments == 0 {
+        return Err(Error::InvalidInput(
+            "transient segment count must be non-zero",
+        ));
+    }
+    if pcm.is_empty() {
+        return Err(Error::InvalidInput(
+            "transient analysis needs a non-empty block",
+        ));
+    }
+    let len = pcm.len();
+    let mut energies = vec![0.0_f64; segments];
+    for (index, &sample) in pcm.iter().enumerate() {
+        // index < len, so (index * segments) / len < segments — always in range.
+        let segment = index * segments / len;
+        if let Some(slot) = energies.get_mut(segment) {
+            *slot += sample * sample;
+        }
+    }
+    Ok(energies)
+}
+
+/// Estimates the attack strength of a block as the largest rise in energy from
+/// the running mean of the preceding segments to a segment.
+///
+/// The block is split into `segments` equal parts; the attack ratio is the
+/// maximum of `segment_energy / mean(preceding segment energies)`. A steady block
+/// yields a ratio near 1, while a sharp onset — the case where short blocks are
+/// needed to keep quantization noise from spreading backwards as pre-echo —
+/// yields a large ratio. The first segment has no preceding context and is
+/// skipped. Returns an error for an empty block or zero segments.
+pub fn transient_attack_ratio(pcm: &[f64], segments: usize) -> Result<f64, Error> {
+    let energies = segment_energies(pcm, segments)?;
+    let mut max_ratio = 1.0_f64;
+    let mut preceding_sum = 0.0_f64;
+    let mut preceding_count = 0.0_f64;
+    for &energy in &energies {
+        if preceding_count > 0.0 {
+            let mean_preceding = (preceding_sum / preceding_count).max(TRANSIENT_ENERGY_FLOOR);
+            let ratio = energy / mean_preceding;
+            if ratio > max_ratio {
+                max_ratio = ratio;
+            }
+        }
+        preceding_sum += energy;
+        preceding_count += 1.0;
+    }
+    Ok(max_ratio)
+}
+
+/// Decides whether a block should switch to short blocks, by comparing its
+/// [`transient_attack_ratio`] against [`TRANSIENT_RATIO_THRESHOLD`].
+///
+/// This is the long/short block-switching trigger: `true` marks a transient
+/// (sharp onset) for which short blocks suppress pre-echo. A silent or steady
+/// block returns `false`.
+pub fn is_transient_block(pcm: &[f64]) -> Result<bool, Error> {
+    Ok(transient_attack_ratio(pcm, TRANSIENT_SEGMENTS)? >= TRANSIENT_RATIO_THRESHOLD)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1131,5 +1207,58 @@ mod tests {
             scale_factors,
             [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
         );
+    }
+
+    #[test]
+    fn steady_tone_is_not_a_transient() {
+        // A continuous tone has near-uniform segment energy, so the attack ratio
+        // stays close to 1 and the block is not flagged.
+        let pcm: Vec<f64> = (0..1152)
+            .map(|n| 0.5 * (std::f64::consts::TAU * 1000.0 * n as f64 / 44_100.0).sin())
+            .collect();
+        let ratio = transient_attack_ratio(&pcm, TRANSIENT_SEGMENTS).unwrap();
+        assert!(ratio < TRANSIENT_RATIO_THRESHOLD, "steady ratio {ratio}");
+        assert!(!is_transient_block(&pcm).unwrap());
+    }
+
+    #[test]
+    fn sudden_onset_is_a_transient() {
+        // Silence for the first half of the block, then a loud burst: the running
+        // mean of the preceding (near-silent) segments is tiny, so the onset
+        // segment's ratio is large and the block is flagged.
+        let mut pcm = vec![0.0_f64; 1152];
+        for (n, sample) in pcm.iter_mut().enumerate().skip(640) {
+            *sample = 0.8 * (std::f64::consts::TAU * 2000.0 * n as f64 / 44_100.0).sin();
+        }
+        let ratio = transient_attack_ratio(&pcm, TRANSIENT_SEGMENTS).unwrap();
+        assert!(ratio > TRANSIENT_RATIO_THRESHOLD, "onset ratio {ratio}");
+        assert!(is_transient_block(&pcm).unwrap());
+    }
+
+    #[test]
+    fn silence_is_not_a_transient() {
+        // A fully silent block must not be flagged (no division blow-up).
+        let pcm = vec![0.0_f64; 1152];
+        let ratio = transient_attack_ratio(&pcm, TRANSIENT_SEGMENTS).unwrap();
+        assert!(approx(ratio, 1.0, 1.0e-9));
+        assert!(!is_transient_block(&pcm).unwrap());
+    }
+
+    #[test]
+    fn transient_analysis_rejects_empty_or_zero_segments() {
+        assert!(transient_attack_ratio(&[], TRANSIENT_SEGMENTS).is_err());
+        assert!(transient_attack_ratio(&[1.0, 2.0, 3.0], 0).is_err());
+    }
+
+    #[test]
+    fn segment_energies_partition_the_block() {
+        // The per-segment energies must sum to the block's total energy, with one
+        // segment per equal contiguous span.
+        let pcm: Vec<f64> = (0..96).map(|n| (n as f64 - 48.0) / 48.0).collect();
+        let energies = segment_energies(&pcm, 8).unwrap();
+        assert_eq!(energies.len(), 8);
+        let total: f64 = pcm.iter().map(|s| s * s).sum();
+        let summed: f64 = energies.iter().sum();
+        assert!(approx(total, summed, 1.0e-9));
     }
 }
