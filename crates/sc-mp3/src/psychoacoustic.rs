@@ -719,6 +719,58 @@ pub fn perceptual_long_block_allowed_noise(
     perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)
 }
 
+/// Consolidated perceptual analysis of one long block.
+///
+/// Bundles every perceptual decision an encoder needs for a granule: the per-band
+/// allowed quantization noise (for scale-factor allocation), the perceptual
+/// entropy (the granule's bit demand, for rate control), and the transient flag
+/// (the long/short block-switching decision). It is the single entry point the
+/// encoder calls; the individual functions remain available for finer use.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LongBlockAnalysis {
+    /// Per-band allowed quantization-noise energy in the MDCT domain, one entry
+    /// per transmitted long-block scale-factor band.
+    pub allowed_noise: [f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    /// Estimated bits the granule demands to keep its noise below the masking
+    /// threshold.
+    pub perceptual_entropy: f64,
+    /// Whether the block should switch to short blocks (a transient onset).
+    pub transient: bool,
+}
+
+/// Runs the full long-block perceptual analysis in one pass.
+///
+/// The masking threshold, allowed noise, and perceptual entropy are all derived
+/// from a single shared FFT of `pcm_window`, so the encoder pays for the
+/// transform once rather than once per signal. The transient decision is taken
+/// directly from `pcm_window`. Returns a [`LongBlockAnalysis`] bundle.
+pub fn analyze_long_block(
+    mdct_spectrum: &[f32],
+    pcm_window: &[f64],
+    sample_rate: u32,
+) -> Result<LongBlockAnalysis, Error> {
+    let fft_len = pcm_window.len();
+    let window = hann_window(fft_len)?;
+    let windowed: Vec<f64> = pcm_window
+        .iter()
+        .zip(window.iter())
+        .map(|(&sample, &scale)| sample * scale)
+        .collect();
+    let energy = power_spectrum(&windowed)?;
+    let tonality = windowed_tonality(&energy, TONALITY_WINDOW_BINS)?;
+    let barks = bin_barks(energy.len(), sample_rate, fft_len)?;
+    let threshold = spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
+    let allowed_noise =
+        perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)?;
+    let entropy = perceptual_entropy(&energy, &threshold)?;
+    let transient = is_transient_block(pcm_window)?;
+    Ok(LongBlockAnalysis {
+        allowed_noise,
+        perceptual_entropy: entropy,
+        transient,
+    })
+}
+
 /// Number of equal segments a block is split into for transient analysis. MP3
 /// short blocks divide the long window into three; a few more segments localizes
 /// the onset within the block more sharply.
@@ -1502,5 +1554,34 @@ mod tests {
         let zero = [0.0_f64; 64];
         assert!(approx(side_energy_fraction(&zero, &zero).unwrap(), 0.0, 1.0e-15));
         assert!(should_use_mid_side(&zero, &zero).unwrap());
+    }
+
+    #[test]
+    fn analyze_long_block_matches_the_individual_paths() {
+        // The aggregator must produce exactly what the standalone allowed-noise
+        // path produces for the same inputs, and a sensible entropy/transient.
+        let fft_len = 1024usize;
+        let pcm_window: Vec<f64> = (0..fft_len)
+            .map(|n| 0.5 * (std::f64::consts::TAU * 1000.0 * n as f64 / 44_100.0).sin())
+            .collect();
+        let mdct: Vec<f32> = (0..576)
+            .map(|l| 0.3 * (-(l as f32) / 120.0).exp())
+            .collect();
+
+        let analysis = analyze_long_block(&mdct, &pcm_window, 44_100).unwrap();
+        let reference = perceptual_long_block_allowed_noise(&mdct, &pcm_window, 44_100).unwrap();
+        assert_eq!(analysis.allowed_noise, reference);
+
+        // A steady tone is not transient and demands a positive number of bits.
+        assert!(!analysis.transient);
+        assert!(analysis.perceptual_entropy > 0.0);
+        assert!(analysis.perceptual_entropy.is_finite());
+    }
+
+    #[test]
+    fn analyze_long_block_flags_a_silent_granule_cheaply() {
+        let analysis = analyze_long_block(&[0.0_f32; 576], &[0.0_f64; 1024], 44_100).unwrap();
+        assert!(approx(analysis.perceptual_entropy, 0.0, 1.0e-12));
+        assert!(!analysis.transient);
     }
 }
