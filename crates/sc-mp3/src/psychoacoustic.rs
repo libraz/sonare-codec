@@ -388,6 +388,92 @@ pub fn perceptual_entropy(energy: &[f64], threshold: &[f64]) -> Result<f64, Erro
     Ok(bits)
 }
 
+/// Splits `total` as evenly as possible into `parts` non-negative integers whose
+/// sum is exactly `total`; the first `total % parts` parts get one extra.
+fn even_split(total: usize, parts: usize) -> Vec<usize> {
+    if parts == 0 {
+        return Vec::new();
+    }
+    let base = total / parts;
+    let remainder = total % parts;
+    (0..parts)
+        .map(|i| if i < remainder { base + 1 } else { base })
+        .collect()
+}
+
+/// Distributes a total bit budget across granules in proportion to their
+/// perceptual entropy, guaranteeing each granule at least `min_bits`.
+///
+/// Granules that demand more bits (higher [`perceptual_entropy`]) receive a
+/// larger share — this is how a perceptual bit reservoir spends its budget where
+/// it is audibly needed. Each granule is first given `min_bits`; the remainder is
+/// split in proportion to perceptual entropy, with largest-remainder rounding so
+/// the targets sum to exactly `total_bits`. If the floors alone exceed the budget
+/// the budget is split as evenly as possible instead, and if no granule has any
+/// perceptual demand the remainder is shared evenly. Returns one target per
+/// granule (empty input → empty result); entropy values must be finite and
+/// non-negative.
+pub fn distribute_bits_by_perceptual_entropy(
+    perceptual_entropy: &[f64],
+    total_bits: usize,
+    min_bits: usize,
+) -> Result<Vec<usize>, Error> {
+    let n = perceptual_entropy.len();
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    for &pe in perceptual_entropy {
+        if !pe.is_finite() || pe < 0.0 {
+            return Err(Error::InvalidInput(
+                "perceptual entropy values must be finite and non-negative",
+            ));
+        }
+    }
+
+    // The floors cannot all be honored: spread the whole budget as evenly as we
+    // can rather than over-committing.
+    if min_bits.saturating_mul(n) >= total_bits {
+        return Ok(even_split(total_bits, n));
+    }
+
+    let remainder = total_bits - min_bits * n;
+    let sum: f64 = perceptual_entropy.iter().sum();
+    let mut targets = vec![min_bits; n];
+
+    if sum <= 0.0 {
+        // No perceptual demand anywhere: share the remainder evenly.
+        for (slot, extra) in targets.iter_mut().zip(even_split(remainder, n)) {
+            *slot += extra;
+        }
+        return Ok(targets);
+    }
+
+    // Proportional share with largest-remainder rounding for an exact total.
+    let mut assigned = 0usize;
+    let mut fractional: Vec<(usize, f64)> = Vec::with_capacity(n);
+    for (index, (&pe, slot)) in perceptual_entropy.iter().zip(targets.iter_mut()).enumerate() {
+        let exact = remainder as f64 * pe / sum;
+        let floor = exact.floor();
+        let whole = floor as usize;
+        *slot += whole;
+        assigned += whole;
+        fractional.push((index, exact - floor));
+    }
+
+    let mut leftover = remainder - assigned;
+    fractional.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    for (index, _) in fractional {
+        if leftover == 0 {
+            break;
+        }
+        if let Some(slot) = targets.get_mut(index) {
+            *slot += 1;
+            leftover -= 1;
+        }
+    }
+    Ok(targets)
+}
+
 /// Maps each retained half-spectrum bin to its critical-band rate (bark) for an
 /// FFT of length `fft_len` sampled at `sample_rate`.
 pub fn bin_barks(num_bins: usize, sample_rate: u32, fft_len: usize) -> Result<Vec<f64>, Error> {
@@ -1260,5 +1346,55 @@ mod tests {
         let total: f64 = pcm.iter().map(|s| s * s).sum();
         let summed: f64 = energies.iter().sum();
         assert!(approx(total, summed, 1.0e-9));
+    }
+
+    #[test]
+    fn bit_distribution_favors_higher_entropy_granules_and_sums_exactly() {
+        // Granule 0 demands three times the entropy of granule 1, so after the
+        // shared floor it receives three times the remaining budget.
+        let targets =
+            distribute_bits_by_perceptual_entropy(&[3.0, 1.0], 800, 100).unwrap();
+        assert_eq!(targets, vec![550, 250]);
+        assert_eq!(targets.iter().sum::<usize>(), 800);
+        assert!(targets[0] > targets[1]);
+    }
+
+    #[test]
+    fn bit_distribution_is_exact_with_awkward_rounding() {
+        // Equal demand over a budget that does not divide evenly still sums to the
+        // exact total via largest-remainder rounding.
+        let targets =
+            distribute_bits_by_perceptual_entropy(&[1.0, 1.0, 1.0], 1001, 0).unwrap();
+        assert_eq!(targets.iter().sum::<usize>(), 1001);
+        // Each granule is within one bit of an even share.
+        for &t in &targets {
+            assert!(t == 333 || t == 334);
+        }
+    }
+
+    #[test]
+    fn bit_distribution_splits_evenly_without_demand() {
+        // No perceptual demand: the budget is shared evenly above the floor.
+        let targets =
+            distribute_bits_by_perceptual_entropy(&[0.0, 0.0, 0.0, 0.0], 1000, 100).unwrap();
+        assert_eq!(targets, vec![250, 250, 250, 250]);
+    }
+
+    #[test]
+    fn bit_distribution_handles_floors_exceeding_the_budget() {
+        // Floors that cannot be met collapse to an even split of the whole budget.
+        let targets =
+            distribute_bits_by_perceptual_entropy(&[5.0, 1.0], 150, 100).unwrap();
+        assert_eq!(targets, vec![75, 75]);
+        assert_eq!(targets.iter().sum::<usize>(), 150);
+    }
+
+    #[test]
+    fn bit_distribution_validates_inputs() {
+        assert!(distribute_bits_by_perceptual_entropy(&[], 100, 10)
+            .unwrap()
+            .is_empty());
+        assert!(distribute_bits_by_perceptual_entropy(&[1.0, -1.0], 100, 10).is_err());
+        assert!(distribute_bits_by_perceptual_entropy(&[1.0, f64::NAN], 100, 10).is_err());
     }
 }
