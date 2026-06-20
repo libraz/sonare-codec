@@ -15,8 +15,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream(
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, pcm_config.start_frame)? {
+    let starts = pcm_frame_starts(pcm, pcm_config.start_frame)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         out.extend_from_slice(&encode_pcm_stereo_long_block_adts(
             adts,
             left,
@@ -44,8 +45,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_by_bit_cost(
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, pcm_config.start_frame)? {
+    let starts = pcm_frame_starts(pcm, pcm_config.start_frame)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         out.extend_from_slice(&encode_pcm_stereo_long_block_adts_by_bit_cost(
             adts,
             left,
@@ -83,7 +85,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_scale_factors(
         ));
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (frame_index, start_frame) in starts.into_iter().enumerate() {
         out.extend_from_slice(&encode_pcm_stereo_long_block_adts_with_scale_factors(
             adts,
@@ -123,7 +125,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_scale_factors_by_bit_cost(
         ));
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (frame_index, start_frame) in starts.into_iter().enumerate() {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_scale_factors_by_bit_cost(
@@ -166,7 +168,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
         ));
     }
 
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (frame_index, start_frame) in starts.into_iter().enumerate() {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_standard_spectral_offsets_and_scale_factors_by_bit_cost(
@@ -209,7 +211,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
             scale_factor_table,
         )?;
     let starts = pcm_frame_starts(pcm, start_frame)?;
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (frame_index, (start_frame, selection)) in
         starts.into_iter().zip(selections.into_iter()).enumerate()
     {
@@ -300,8 +302,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, start_frame)? {
+    let starts = pcm_frame_starts(pcm, start_frame)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
                 adts,
@@ -372,7 +375,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
             scale_factor_table,
         )?;
     let starts = pcm_frame_starts(pcm, start_frame)?;
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (start_frame, selection) in starts.into_iter().zip(selections.into_iter()) {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
@@ -475,7 +478,7 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
             scale_factor_table,
         )?;
     let starts = pcm_frame_starts(pcm, start_frame)?;
-    let mut out = Vec::new();
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
     for (start_frame, selection) in starts.into_iter().zip(selections.into_iter()) {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
@@ -510,8 +513,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_selected_scale_factors(
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, pcm_config.start_frame)? {
+    let starts = pcm_frame_starts(pcm, pcm_config.start_frame)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_selected_scale_factors(
                 adts,
@@ -543,8 +547,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_selected_scale_factors_by_b
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, pcm_config.start_frame)? {
+    let starts = pcm_frame_starts(pcm, pcm_config.start_frame)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         out.extend_from_slice(
             &encode_pcm_stereo_long_block_adts_with_selected_scale_factors_by_bit_cost(
                 adts,

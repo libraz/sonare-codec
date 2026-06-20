@@ -100,8 +100,9 @@ pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_by_
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step = select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost(
             adts,
             channel,
@@ -145,8 +146,9 @@ pub fn encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step =
             select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
                 adts,
@@ -217,8 +219,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_b
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step = select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_by_bit_cost(
             adts,
             left,
@@ -264,8 +267,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step = select_aac_lc_stereo_pcm_frame_step_with_offsets_by_bit_cost(
             adts,
             left,
@@ -312,8 +316,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step = select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost(
             adts,
             left,
@@ -452,8 +457,9 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_a
         ));
     }
 
-    let mut out = Vec::new();
-    for start_frame in pcm_frame_starts(pcm, 0)? {
+    let starts = pcm_frame_starts(pcm, 0)?;
+    let mut out = Vec::with_capacity(adts_stream_capacity(starts.len()));
+    for start_frame in starts {
         let step =
             select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
                 adts,

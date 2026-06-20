@@ -3,8 +3,12 @@ use super::*;
 pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     let (stream_info, audio_start) = parse_metadata(input)?;
     let mut cursor = audio_start;
-    let mut samples = Vec::new();
-    let mut md5_input = Vec::new();
+    let sample_capacity = usize::try_from(stream_info.total_samples)
+        .ok()
+        .and_then(|frames| frames.checked_mul(usize::from(stream_info.channels)))
+        .unwrap_or(0);
+    let mut samples = Vec::with_capacity(sample_capacity);
+    let mut md5 = Md5::new();
     let mut decoded_frames = 0_usize;
     let mut decoded_frame_count = 0_u64;
 
@@ -12,7 +16,7 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         let frame_input = input
             .get(cursor..)
             .ok_or(Error::InvalidInput("FLAC audio data is truncated"))?;
-        let decoded = decode_frame(frame_input, &stream_info)?;
+        let decoded = decode_frame(frame_input, &stream_info, &mut md5)?;
         if decoded.header.sample_rate != stream_info.sample_rate {
             return Err(Error::InvalidInput("FLAC frame sample rate mismatch"));
         }
@@ -53,7 +57,6 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
             .checked_add(1)
             .ok_or(Error::InvalidInput("FLAC decoded frame count overflow"))?;
         samples.extend(decoded.samples);
-        md5_input.extend(decoded.md5_input);
         cursor = cursor
             .checked_add(decoded.bytes_read)
             .ok_or(Error::InvalidInput("FLAC frame cursor overflow"))?;
@@ -66,7 +69,7 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         return Err(Error::InvalidInput("FLAC decoded sample count mismatch"));
     }
     if stream_info.md5 != [0; 16] {
-        let actual_md5: [u8; 16] = Md5::digest(&md5_input).into();
+        let actual_md5: [u8; 16] = md5.finalize().into();
         if actual_md5 != stream_info.md5 {
             return Err(Error::InvalidInput("FLAC STREAMINFO MD5 mismatch"));
         }
@@ -99,13 +102,13 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     }
 
     let mut pcm_i16 = Vec::with_capacity(pcm.samples.len());
-    let mut md5_input = Vec::with_capacity(pcm.samples.len() * 2);
+    let mut md5 = Md5::new();
     for &sample in &pcm.samples {
         let quantized = quantize_i16(sample);
         pcm_i16.push(quantized);
-        md5_input.extend_from_slice(&quantized.to_le_bytes());
+        md5.update(quantized.to_le_bytes());
     }
-    let md5: [u8; 16] = Md5::digest(&md5_input).into();
+    let md5: [u8; 16] = md5.finalize().into();
 
     let block_sizes = encode_block_sizes(total_frames);
     let encoded_min_block_size = *block_sizes
@@ -209,11 +212,14 @@ pub(crate) struct DecodedFrame {
     pub(crate) header: FrameHeader,
     pub(crate) frames: usize,
     pub(crate) samples: Vec<f32>,
-    pub(crate) md5_input: Vec<u8>,
     pub(crate) bytes_read: usize,
 }
 
-pub(crate) fn decode_frame(input: &[u8], stream_info: &StreamInfo) -> Result<DecodedFrame, Error> {
+pub(crate) fn decode_frame(
+    input: &[u8],
+    stream_info: &StreamInfo,
+    md5: &mut Md5,
+) -> Result<DecodedFrame, Error> {
     let frame = parse_frame_header(input, stream_info)?;
     let decoded_channels = frame.channel_assignment.channels();
     let frame_body = input
@@ -235,14 +241,12 @@ pub(crate) fn decode_frame(input: &[u8], stream_info: &StreamInfo) -> Result<Dec
     let channel_samples = decorrelate_channels(frame.channel_assignment, channel_samples)?;
 
     let mut samples = Vec::with_capacity(block_size * usize::from(decoded_channels));
-    let md5_sample_bytes = usize::from(frame.bits_per_sample).div_ceil(8);
-    let mut md5_input = Vec::with_capacity(samples.capacity() * md5_sample_bytes);
     for frame_index in 0..block_size {
         for channel in &channel_samples {
             let sample = *channel
                 .get(frame_index)
                 .ok_or(Error::InvalidInput("FLAC channel sample is missing"))?;
-            append_md5_sample(&mut md5_input, sample, frame.bits_per_sample)?;
+            update_md5_sample(md5, sample, frame.bits_per_sample)?;
             samples.push(normalize_signed_sample(sample, frame.bits_per_sample)?);
         }
     }
@@ -269,13 +273,12 @@ pub(crate) fn decode_frame(input: &[u8], stream_info: &StreamInfo) -> Result<Dec
         header: frame,
         frames: block_size,
         samples,
-        md5_input,
         bytes_read,
     })
 }
 
-pub(crate) fn append_md5_sample(
-    out: &mut Vec<u8>,
+pub(crate) fn update_md5_sample(
+    md5: &mut Md5,
     sample: i32,
     bits_per_sample: u8,
 ) -> Result<(), Error> {
@@ -283,7 +286,7 @@ pub(crate) fn append_md5_sample(
         return Err(Error::InvalidInput("unsupported FLAC sample width"));
     }
     let bytes = usize::from(bits_per_sample).div_ceil(8);
-    out.extend_from_slice(&sample.to_le_bytes()[..bytes]);
+    md5.update(&sample.to_le_bytes()[..bytes]);
     Ok(())
 }
 

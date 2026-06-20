@@ -92,6 +92,10 @@ pub(crate) fn pcm_frame_starts(
         .collect()
 }
 
+pub(crate) fn adts_stream_capacity(frame_count: usize) -> usize {
+    frame_count.saturating_mul(1024)
+}
+
 pub(crate) fn aac_spectral_pair_magnitude(
     pair: AacSpectralPair,
 ) -> Result<AacSpectralMagnitudePair, Error> {
