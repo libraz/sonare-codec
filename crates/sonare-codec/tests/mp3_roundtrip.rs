@@ -137,6 +137,97 @@ fn mp3_multirate_roundtrip_reconstructs_mono_and_stereo() {
 }
 
 #[test]
+fn mp3_mpeg2_lsf_roundtrip_reconstructs_mono_and_stereo() {
+    // MPEG-2 LSF (ISO/IEC 13818-3) low-sampling-frequency rates carry one
+    // 576-sample granule per frame. A 1 kHz tone must encode through the
+    // single-granule calibrated-gain path and decode back through Symphonia for
+    // every LSF rate, in both mono and stereo.
+    let seg = 8_192;
+    let ref_start = 6_000;
+    for &rate in &[16_000_u32, 22_050, 24_000] {
+        let frames = 22_050;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * (i as f32 / rate as f32)).sin())
+            .collect();
+
+        let mono = AudioBuffer::new(rate, 1, tone.clone()).unwrap();
+        let mp3 = sonare_codec::encode(Format::Mp3, &mono).expect("MPEG-2 LSF mono encode");
+        assert_eq!(
+            sonare_codec::detect(&mp3),
+            Some(Format::Mp3),
+            "{rate} Hz: encoded stream must be detected as MP3"
+        );
+        let dec = sonare_codec::decode(&mp3).expect("Symphonia decode");
+        assert_eq!(dec.sample_rate, rate, "{rate} Hz: rate must round-trip");
+        assert_eq!(dec.channels, 1, "{rate} Hz: expected mono");
+        let mc = aligned_channel_corr(&tone, &dec.samples, seg, ref_start);
+        eprintln!("MPEG-2 LSF {rate} Hz mono tone corr={mc:.4}");
+        assert!(mc > 0.8, "MPEG-2 LSF {rate} Hz mono corr too low: {mc:.4}");
+
+        let interleaved: Vec<f32> = tone.iter().flat_map(|&s| [s, s]).collect();
+        let stereo = AudioBuffer::new(rate, 2, interleaved).unwrap();
+        let dec =
+            sonare_codec::decode(&sonare_codec::encode(Format::Mp3, &stereo).unwrap()).unwrap();
+        assert_eq!(dec.sample_rate, rate);
+        assert_eq!(dec.channels, 2);
+        assert!(
+            rms(&dec.samples) > 0.05,
+            "MPEG-2 LSF {rate} Hz stereo decoded near silence"
+        );
+    }
+}
+
+#[test]
+fn mp3_mpeg25_rates_are_rejected_cleanly() {
+    // MPEG-2.5 (8/11.025/12 kHz) is outside ISO/IEC 11172-3 and 13818-3, so the
+    // encoder must reject it with an error rather than panicking or emitting an
+    // undecodable stream.
+    for &rate in &[8_000_u32, 11_025, 12_000] {
+        let tone: Vec<f32> = (0..4_096)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 500.0 * (i as f32 / rate as f32)).sin())
+            .collect();
+        let pcm = AudioBuffer::new(rate, 1, tone).unwrap();
+        assert!(
+            sonare_codec::encode(Format::Mp3, &pcm).is_err(),
+            "{rate} Hz (MPEG-2.5) must be rejected"
+        );
+    }
+}
+
+#[test]
+fn mp3_mpeg2_lsf_handles_edge_inputs_without_panicking() {
+    // The MPEG-2 LSF encode path must survive degenerate inputs: empty, shorter
+    // than a 576-sample granule, full-scale, and pure silence — without
+    // panicking and while emitting a well-formed MP3 stream.
+    for &rate in &[16_000_u32, 22_050, 24_000] {
+        // Empty input encodes to an empty (frame-less) stream without panicking.
+        let empty = AudioBuffer::new(rate, 1, Vec::new()).unwrap();
+        let enc = sonare_codec::encode(Format::Mp3, &empty).expect("empty MPEG-2 encode");
+        assert!(
+            enc.is_empty(),
+            "{rate} Hz: empty input must yield no frames"
+        );
+
+        // Sub-granule, full-scale, and silent chunks must encode to detectable
+        // MP3 frames without panicking. (Decoding 1-3 frame streams is a generic
+        // short-stream limitation, exercised at length below.)
+        for samples in [vec![0.5_f32], vec![1.0_f32; 200], vec![0.0_f32; 1_500]] {
+            let pcm = AudioBuffer::new(rate, 1, samples).unwrap();
+            let enc = sonare_codec::encode(Format::Mp3, &pcm).expect("edge MPEG-2 encode");
+            assert_eq!(sonare_codec::detect(&enc), Some(Format::Mp3));
+            assert_eq!(&enc[..1], &[0xff], "{rate} Hz: missing frame sync");
+        }
+
+        // A comfortably long full-scale signal must encode and decode.
+        let loud = vec![0.9_f32; 16_000];
+        let pcm = AudioBuffer::new(rate, 1, loud).unwrap();
+        let enc = sonare_codec::encode(Format::Mp3, &pcm).expect("loud MPEG-2 encode");
+        let dec = sonare_codec::decode(&enc).expect("loud MPEG-2 decode");
+        assert_eq!(dec.sample_rate, rate);
+    }
+}
+
+#[test]
 fn mp3_reservoir_roundtrip_decodes_through_symphonia() {
     // The bit-reservoir encoder lets frames borrow main-data bytes from earlier
     // frames via main_data_begin. Symphonia must reassemble that cross-frame

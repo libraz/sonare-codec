@@ -490,9 +490,9 @@ fn production_encode_rejection_reason(format: Format, pcm: &AudioBuffer) -> Opti
     }
 
     match format {
-        Format::Mp3 if !is_mp3_non_silent_production_candidate(pcm) => {
-            Some("production MP3 encode currently supports mono/stereo MPEG-1 sample rates only")
-        }
+        Format::Mp3 if !is_mp3_non_silent_production_candidate(pcm) => Some(
+            "production MP3 encode currently supports mono/stereo MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) sample rates only",
+        ),
         Format::Aac if !is_aac_non_silent_production_candidate(pcm) => Some(
             "production AAC-LC encode currently supports mono/stereo 7.35/8/11.025/12/16/22.05/24/32/44.1/48/64/88.2/96kHz only",
         ),
@@ -501,7 +501,12 @@ fn production_encode_rejection_reason(format: Format, pcm: &AudioBuffer) -> Opti
 }
 
 fn is_mp3_non_silent_production_candidate(pcm: &AudioBuffer) -> bool {
-    matches!(pcm.channels, 1 | 2) && matches!(pcm.sample_rate, 32_000 | 44_100 | 48_000)
+    matches!(pcm.channels, 1 | 2)
+        && matches!(
+            pcm.sample_rate,
+            // MPEG-1 (ISO/IEC 11172-3) and MPEG-2 LSF (ISO/IEC 13818-3).
+            16_000 | 22_050 | 24_000 | 32_000 | 44_100 | 48_000
+        )
 }
 
 #[cfg(feature = "aac")]
@@ -555,7 +560,7 @@ fn decode_impl(input: &[u8]) -> Result<AudioBuffer, Error> {
     }
 }
 
-#[cfg(all(feature = "decode", feature = "aac"))]
+#[cfg(feature = "decode")]
 fn is_m4a_container(input: &[u8]) -> bool {
     input.len() >= 12
         && input.get(4..8) == Some(b"ftyp")
@@ -711,19 +716,9 @@ pub fn decode_aac(_input: &[u8]) -> Result<AudioBuffer, Error> {
     Err(Error::UnsupportedFormat)
 }
 
-#[cfg(all(feature = "decode", feature = "aac"))]
+#[cfg(feature = "decode")]
 fn is_m4a_container_for_decode(input: &[u8]) -> bool {
     is_m4a_container(input)
-}
-
-#[cfg(all(feature = "decode", not(feature = "aac")))]
-fn is_m4a_container_for_decode(input: &[u8]) -> bool {
-    input.len() >= 12
-        && input.get(4..8) == Some(b"ftyp")
-        && matches!(
-            input.get(8..12),
-            Some(b"M4A ") | Some(b"mp42") | Some(b"isom") | Some(b"iso2")
-        )
 }
 
 /// Encodes interleaved PCM as WAV.

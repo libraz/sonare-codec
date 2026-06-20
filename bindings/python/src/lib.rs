@@ -89,6 +89,24 @@ fn decode_m4a(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
     Ok(pcm_tuple(pcm))
 }
 
+fn pcm_from_samples(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+) -> PyResult<sonare_codec_rs::AudioBuffer> {
+    sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples).map_err(to_py_value_error)
+}
+
+fn encode_format(
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+    format: sonare_codec_rs::Format,
+) -> PyResult<Vec<u8>> {
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+    sonare_codec_rs::encode(format, &pcm).map_err(to_py_value_error)
+}
+
 #[pyfunction]
 fn encode_audio(
     format: &str,
@@ -96,8 +114,7 @@ fn encode_audio(
     channels: u16,
     samples: Vec<f32>,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     encode_by_name(format, &pcm)
 }
 
@@ -108,30 +125,28 @@ fn encode_audio_production(
     channels: u16,
     samples: Vec<f32>,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     encode_by_name_with_mode(format, &pcm, sonare_codec_rs::EncodeMode::ProductionOnly)
 }
 
 #[pyfunction]
 fn encode_wav(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Wav, &pcm).map_err(to_py_value_error)
+    encode_format(sample_rate, channels, samples, sonare_codec_rs::Format::Wav)
 }
 
 #[pyfunction]
 fn encode_flac(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Flac, &pcm).map_err(to_py_value_error)
+    encode_format(
+        sample_rate,
+        channels,
+        samples,
+        sonare_codec_rs::Format::Flac,
+    )
 }
 
 #[pyfunction]
 fn encode_mp3(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Mp3, &pcm).map_err(to_py_value_error)
+    encode_format(sample_rate, channels, samples, sonare_codec_rs::Format::Mp3)
 }
 
 #[pyfunction]
@@ -143,8 +158,7 @@ fn encode_mp3_with_bitrate(
     padding: bool,
     crc_protected: bool,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -164,8 +178,7 @@ fn encode_mp3_cbr_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -184,8 +197,7 @@ fn encode_mp3_perceptual_active_cbr_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -204,8 +216,7 @@ fn encode_mp3_perceptual_reservoir_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -225,8 +236,7 @@ fn encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec_rs::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(to_py_value_error)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
@@ -248,8 +258,7 @@ fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -270,8 +279,7 @@ fn encode_mp3_perceptual_scale_factor_band_bias(
     band_end: usize,
     bias: i8,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factor_band_bias_and_table_provider(
         &pcm,
         step,
@@ -295,8 +303,7 @@ fn encode_mp3_perceptual_quantized_band_gain(
     band_end: usize,
     gain: f32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_table_provider(
         &pcm,
         step,
@@ -322,8 +329,7 @@ fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
     gain: f32,
     global_gain_bias: i16,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
         &pcm,
         step,
@@ -340,23 +346,27 @@ fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
 
 #[pyfunction]
 fn encode_vorbis(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Vorbis, &pcm).map_err(to_py_value_error)
+    encode_format(
+        sample_rate,
+        channels,
+        samples,
+        sonare_codec_rs::Format::Vorbis,
+    )
 }
 
 #[pyfunction]
 fn encode_opus(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Opus, &pcm).map_err(to_py_value_error)
+    encode_format(
+        sample_rate,
+        channels,
+        samples,
+        sonare_codec_rs::Format::Opus,
+    )
 }
 
 #[pyfunction]
 fn encode_aac(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
-    sonare_codec_rs::encode(sonare_codec_rs::Format::Aac, &pcm).map_err(to_py_value_error)
+    encode_format(sample_rate, channels, samples, sonare_codec_rs::Format::Aac)
 }
 
 #[pyfunction]
@@ -366,8 +376,7 @@ fn encode_aac_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_bitrate(&pcm, target_bitrate_bps)
         .map_err(to_py_value_error)
 }
@@ -379,8 +388,7 @@ fn encode_aac_with_selected_scale_factors_and_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -396,8 +404,7 @@ fn encode_aac_with_standard_spectral_offsets_and_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -415,8 +422,7 @@ fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_mag
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -433,8 +439,7 @@ fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_fact
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -452,8 +457,7 @@ fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_max_quan
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -472,8 +476,7 @@ fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_fact
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -489,8 +492,7 @@ fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_factors
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -500,8 +502,8 @@ fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_factors
 
 #[pyfunction]
 fn encode_m4a(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let aac = encode_aac(sample_rate, channels, samples)?;
-    sonare_codec_rs::mux_aac_adts_as_m4a(&aac).map_err(to_py_value_error)
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+    encode_by_name("m4a", &pcm)
 }
 
 #[pyfunction]
@@ -511,8 +513,7 @@ fn encode_m4a_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_bitrate(&pcm, target_bitrate_bps).map_err(to_py_value_error)
 }
 
@@ -523,8 +524,7 @@ fn encode_m4a_with_selected_scale_factors_and_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
         .map_err(to_py_value_error)
 }
@@ -537,8 +537,7 @@ fn encode_m4a_with_standard_spectral_offsets_and_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -556,8 +555,7 @@ fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_mag
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -574,8 +572,7 @@ fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_fact
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -593,8 +590,7 @@ fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_max_quan
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -613,8 +609,7 @@ fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_fact
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -630,8 +625,7 @@ fn encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1247,8 +1241,7 @@ fn encode_aac_standard_mono_offsets_with_step(
     step: f32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
@@ -1285,8 +1278,7 @@ fn encode_aac_standard_mono_offsets_with_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1302,8 +1294,7 @@ fn aac_standard_mono_offsets_bitrate_frame_details(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<f64>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 1, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
@@ -1354,8 +1345,7 @@ fn encode_aac_standard_stereo_offsets_with_step(
     step: f32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
@@ -1393,8 +1383,7 @@ fn encode_aac_standard_stereo_offsets_with_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1410,8 +1399,7 @@ fn aac_standard_stereo_offsets_bitrate_frame_details(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<f64>> {
-    let pcm =
-        sonare_codec_rs::AudioBuffer::new(sample_rate, 2, samples).map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     let offsets = sonare_codec_rs::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("unsupported AAC-LC long-window sample rate")
@@ -1465,8 +1453,7 @@ fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitr
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1497,8 +1484,7 @@ fn aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1530,8 +1516,7 @@ fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quan
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1564,8 +1549,7 @@ fn aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantiz
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1595,8 +1579,7 @@ fn aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1627,8 +1610,7 @@ fn aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrate(
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1663,8 +1645,7 @@ fn aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1694,8 +1675,7 @@ fn aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1786,8 +1766,7 @@ fn aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate(
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1814,8 +1793,7 @@ fn aac_recommended_standard_id_payload_breakdown_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1837,8 +1815,7 @@ fn aac_balanced_standard_id_payload_breakdown_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1862,8 +1839,7 @@ fn aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized_abs
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1892,8 +1868,7 @@ fn aac_balanced_standard_id_quality_control_profile_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec_rs::aac_balanced_standard_id_quality_control_profile_with_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1909,8 +1884,7 @@ fn aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates =
         sonare_codec_rs::aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
             &pcm,
@@ -1930,8 +1904,7 @@ fn aac_selected_scale_factor_frame_details_with_bitrate(
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec_rs::aac_selected_scale_factor_frame_details_with_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -2013,8 +1986,7 @@ fn mp3_first_frame_perceptual_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec_rs::select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider(
             &pcm,
@@ -2047,8 +2019,7 @@ fn mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec_rs::select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider(
             &pcm,
@@ -2082,8 +2053,7 @@ fn mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec_rs::select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider(
             &pcm,
@@ -2120,8 +2090,7 @@ fn mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec_rs::select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider(
             &pcm,
@@ -2156,8 +2125,7 @@ fn mp3_perceptual_bit_allocation_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let allocations = sonare_codec_rs::select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(
         &pcm,
         bitrate_kbps,
@@ -2211,8 +2179,7 @@ fn mp3_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec_rs::select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -2251,8 +2218,7 @@ fn mp3_perceptual_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec_rs::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
             &pcm,
@@ -2293,8 +2259,7 @@ fn mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec_rs::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(to_py_value_error)?;
     let details =
@@ -2340,8 +2305,7 @@ fn mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec_rs::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(to_py_value_error)?;
     let profile =
@@ -2373,8 +2337,7 @@ fn mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> PyResult<Vec<f64>> {
-    let pcm = sonare_codec_rs::AudioBuffer::new(sample_rate, channels, samples)
-        .map_err(to_py_value_error)?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec_rs::select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
         &pcm,
         sonare_codec_rs::MPEG1_LAYER3_PCM_STEP_CANDIDATES,

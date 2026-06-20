@@ -317,10 +317,7 @@ impl<'a> BitReader<'a> {
         for _ in 0..count {
             let byte_index = self.bit_pos / 8;
             let bit_index = 7 - (self.bit_pos % 8);
-            let byte = *self
-                .input
-                .get(byte_index)
-                .ok_or(Error::InvalidInput("bitstream read is truncated"))?;
+            let byte = self.input[byte_index];
             value = (value << 1) | u32::from((byte >> bit_index) & 1);
             self.bit_pos += 1;
         }
@@ -402,11 +399,8 @@ impl BitWriter {
                 self.out.push(0);
             }
             let bit = ((value >> shift) & 1) as u8;
-            let byte = self
-                .out
-                .last_mut()
-                .ok_or(Error::InvalidInput("bit writer has no current byte"))?;
-            *byte |= bit << (7 - self.bit_pos);
+            let byte_index = self.out.len() - 1;
+            self.out[byte_index] |= bit << (7 - self.bit_pos);
             self.bit_pos = (self.bit_pos + 1) % 8;
         }
         Ok(())
@@ -460,10 +454,20 @@ pub fn write_packed_bits(writer: &mut BitWriter, bits: &PackedBits) -> Result<()
         return Err(Error::InvalidInput("packed bit length exceeds byte buffer"));
     }
 
-    for bit_index in 0..bits.bit_len {
+    let mut bit_index = 0;
+    if writer.bit_pos == 0 {
+        let full_bytes = bits.bit_len / 8;
+        if full_bytes > 0 {
+            writer.write_bytes(&bits.bytes[..full_bytes])?;
+            bit_index = full_bytes * 8;
+        }
+    }
+
+    while bit_index < bits.bit_len {
         let byte = bits.bytes[bit_index / 8];
         let bit = (byte >> (7 - (bit_index % 8))) & 1;
         writer.write_bits(u32::from(bit), 1)?;
+        bit_index += 1;
     }
     Ok(())
 }
@@ -522,11 +526,16 @@ pub fn pack_huffman_symbols_with_len<T: PartialEq>(
     symbols: &[T],
     table: &[HuffmanEntry<T>],
 ) -> Result<PackedBits, Error> {
-    let codes = symbols
-        .iter()
-        .map(|symbol| lookup_huffman_code(table, symbol))
-        .collect::<Result<Vec<_>, _>>()?;
-    pack_huffman_codes_with_len(&codes)
+    let mut writer = BitWriter::new();
+    for symbol in symbols {
+        let code = lookup_huffman_code(table, symbol)?;
+        writer.write_bits(code.bits, code.len)?;
+    }
+    let bit_len = writer.bit_len();
+    Ok(PackedBits {
+        bytes: writer.finish_byte_aligned(),
+        bit_len,
+    })
 }
 
 /// Supported container or codec formats.

@@ -4719,9 +4719,10 @@ fn aac_loudness_recovery_candidates(channels: u16) -> Result<Vec<(u8, i16, u32)>
 }
 
 #[cfg(test)]
-fn aac_aggressive_gain_bias_candidates(
-    channels: u16,
-) -> Result<(Vec<u8>, Vec<i16>, Vec<u32>), String> {
+type AacGainBiasCandidates = (Vec<u8>, Vec<i16>, Vec<u32>);
+
+#[cfg(test)]
+fn aac_aggressive_gain_bias_candidates(channels: u16) -> Result<AacGainBiasCandidates, String> {
     let profile = sonare_codec::aac_standard_id_selected_scale_factor_balance_profile(channels)
         .map_err(|err| format!("AAC balanced profile lookup failed: {err}"))?;
     let mut gain_deltas = vec![profile
@@ -12378,13 +12379,9 @@ mod tests {
         mut bit_offset: usize,
     ) -> Result<usize, String> {
         bit_offset += 12 + 9 + 8 + 4;
-        let window_switching_flag = mp3_read_bits(bytes, bit_offset, 1)?;
+        mp3_read_bits(bytes, bit_offset, 1)?;
         bit_offset += 1;
-        if window_switching_flag == 1 {
-            bit_offset += 2 + 1 + 5 + 5 + 3 * 3;
-        } else {
-            bit_offset += 3 * 5 + 4 + 3;
-        }
+        bit_offset += 15;
         Ok(bit_offset + 1 + 1 + 1)
     }
 

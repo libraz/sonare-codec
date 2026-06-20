@@ -13,5 +13,5 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-sonare-codec = { workspace = true, features = ["aac", "opus"] }
+sonare-codec = { workspace = true, features = ["aac", "opus", "vorbis"] }
 wasm-bindgen.workspace = true

@@ -126,8 +126,7 @@ pub fn encode_audio(
     channels: u16,
     samples: &[f32],
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     encode_by_name(format, &pcm)
 }
 
@@ -138,30 +137,23 @@ pub fn encode_audio_production(
     channels: u16,
     samples: &[f32],
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     encode_by_name_with_mode(format, &pcm, sonare_codec::EncodeMode::ProductionOnly)
 }
 
 #[wasm_bindgen]
 pub fn encode_wav(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
-    sonare_codec::encode(sonare_codec::Format::Wav, &pcm).map_err(|err| err.to_string())
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Wav)
 }
 
 #[wasm_bindgen]
 pub fn encode_flac(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
-    sonare_codec::encode(sonare_codec::Format::Flac, &pcm).map_err(|err| err.to_string())
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Flac)
 }
 
 #[wasm_bindgen]
 pub fn encode_mp3(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
-    sonare_codec::encode(sonare_codec::Format::Mp3, &pcm).map_err(|err| err.to_string())
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Mp3)
 }
 
 #[wasm_bindgen]
@@ -173,8 +165,7 @@ pub fn encode_mp3_with_bitrate(
     padding: bool,
     crc_protected: bool,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -194,8 +185,7 @@ pub fn encode_mp3_cbr_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -214,8 +204,7 @@ pub fn encode_mp3_perceptual_active_cbr_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -234,8 +223,7 @@ pub fn encode_mp3_perceptual_reservoir_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -255,8 +243,7 @@ pub fn encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(|err| err.to_string())?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
@@ -278,8 +265,7 @@ pub fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -300,8 +286,7 @@ pub fn encode_mp3_perceptual_scale_factor_band_bias(
     band_end: usize,
     bias: i8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factor_band_bias_and_table_provider(
         &pcm,
         step,
@@ -325,8 +310,7 @@ pub fn encode_mp3_perceptual_quantized_band_gain(
     band_end: usize,
     gain: f32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_table_provider(
         &pcm,
         step,
@@ -352,8 +336,7 @@ pub fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
     gain: f32,
     global_gain_bias: i16,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
         &pcm,
         step,
@@ -369,10 +352,18 @@ pub fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
 }
 
 #[wasm_bindgen]
+pub fn encode_vorbis(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Vorbis)
+}
+
+#[wasm_bindgen]
+pub fn encode_opus(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Opus)
+}
+
+#[wasm_bindgen]
 pub fn encode_aac(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
-    sonare_codec::encode(sonare_codec::Format::Aac, &pcm).map_err(|err| err.to_string())
+    encode_format(sample_rate, channels, samples, sonare_codec::Format::Aac)
 }
 
 #[wasm_bindgen]
@@ -382,8 +373,7 @@ pub fn encode_aac_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_bitrate(&pcm, target_bitrate_bps)
         .map_err(|err| err.to_string())
 }
@@ -395,8 +385,7 @@ pub fn encode_aac_with_selected_scale_factors_and_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
         .map_err(|err| err.to_string())
 }
@@ -409,8 +398,7 @@ pub fn encode_aac_with_standard_spectral_offsets_and_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -428,8 +416,7 @@ pub fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -446,8 +433,7 @@ pub fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -465,8 +451,7 @@ pub fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_max_
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -485,8 +470,7 @@ pub fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -502,8 +486,7 @@ pub fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_fac
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -513,8 +496,8 @@ pub fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_fac
 
 #[wasm_bindgen]
 pub fn encode_m4a(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
-    let aac = encode_aac(sample_rate, channels, samples)?;
-    sonare_codec::mux_aac_adts_as_m4a(&aac).map_err(|err| err.to_string())
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+    encode_by_name("m4a", &pcm)
 }
 
 #[wasm_bindgen]
@@ -524,8 +507,7 @@ pub fn encode_m4a_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_bitrate(&pcm, target_bitrate_bps).map_err(|err| err.to_string())
 }
 
@@ -536,8 +518,7 @@ pub fn encode_m4a_with_selected_scale_factors_and_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
         .map_err(|err| err.to_string())
 }
@@ -550,8 +531,7 @@ pub fn encode_m4a_with_standard_spectral_offsets_and_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -569,8 +549,7 @@ pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -587,8 +566,7 @@ pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -606,8 +584,7 @@ pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_max_
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -626,8 +603,7 @@ pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -643,8 +619,7 @@ pub fn encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_fac
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1269,8 +1244,7 @@ pub fn encode_aac_standard_mono_offsets_with_step(
     step: f32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
     let channel_config =
@@ -1305,8 +1279,7 @@ pub fn encode_aac_standard_mono_offsets_with_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1322,8 +1295,7 @@ pub fn aac_standard_mono_offsets_bitrate_frame_details(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 1, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 1, samples)?;
     let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
     let channel_config =
@@ -1372,8 +1344,7 @@ pub fn encode_aac_standard_stereo_offsets_with_step(
     step: f32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
     let channel_config =
@@ -1409,8 +1380,7 @@ pub fn encode_aac_standard_stereo_offsets_with_bitrate(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<u8>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1426,8 +1396,7 @@ pub fn aac_standard_stereo_offsets_bitrate_frame_details(
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, 2, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, 2, samples)?;
     let offsets = sonare_codec::aac_lc_long_window_scale_factor_band_offsets(sample_rate)
         .ok_or_else(|| "unsupported AAC-LC long-window sample rate".to_owned())?;
     let channel_config =
@@ -1479,8 +1448,7 @@ pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1511,8 +1479,7 @@ pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1544,8 +1511,7 @@ pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1578,8 +1544,7 @@ pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_max_qua
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1609,8 +1574,7 @@ pub fn aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1641,8 +1605,7 @@ pub fn aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrat
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1677,8 +1640,7 @@ pub fn aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1708,8 +1670,7 @@ pub fn aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1800,8 +1761,7 @@ pub fn aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate(
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
             &pcm,
@@ -1828,8 +1788,7 @@ pub fn aac_recommended_standard_id_payload_breakdown_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1850,8 +1809,7 @@ pub fn aac_balanced_standard_id_payload_breakdown_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
             &pcm,
@@ -1874,8 +1832,7 @@ pub fn aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
             &pcm,
@@ -1904,8 +1861,7 @@ pub fn aac_balanced_standard_id_quality_control_profile_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     sonare_codec::aac_balanced_standard_id_quality_control_profile_with_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -1921,8 +1877,7 @@ pub fn aac_standard_id_quality_control_candidates_for_balance_profile_with_bitra
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates =
         sonare_codec::aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
             &pcm,
@@ -1942,8 +1897,7 @@ pub fn aac_selected_scale_factor_frame_details_with_bitrate(
     samples: &[f32],
     target_bitrate_bps: u32,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec::aac_selected_scale_factor_frame_details_with_bitrate(
         &pcm,
         target_bitrate_bps,
@@ -2048,8 +2002,7 @@ pub fn mp3_first_frame_perceptual_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec::select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider(
             &pcm,
@@ -2082,8 +2035,7 @@ pub fn mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec::select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider(
             &pcm,
@@ -2117,8 +2069,7 @@ pub fn mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles =
         sonare_codec::select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider(
             &pcm,
@@ -2155,8 +2106,7 @@ pub fn mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let profiles = sonare_codec::select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider(
             &pcm,
             sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -2190,8 +2140,7 @@ pub fn mp3_perceptual_bit_allocation_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let allocations = sonare_codec::select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(
         &pcm,
         bitrate_kbps,
@@ -2239,8 +2188,7 @@ pub fn mp3_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec::select_mpeg1_layer3_reservoir_frame_details_with_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -2279,8 +2227,7 @@ pub fn mp3_perceptual_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details =
         sonare_codec::select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider(
             &pcm,
@@ -2321,8 +2268,7 @@ pub fn mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(|err| err.to_string())?;
     let details =
@@ -2368,8 +2314,7 @@ pub fn mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrat
     crc_protected: bool,
     min_bits_per_granule_channel: usize,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
         .map_err(|err| err.to_string())?;
     let profile =
@@ -2401,8 +2346,7 @@ pub fn mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate(
     bitrate_kbps: u16,
     crc_protected: bool,
 ) -> Result<Vec<f64>, String> {
-    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
-        .map_err(|err| err.to_string())?;
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
     let details = sonare_codec::select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
         &pcm,
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
@@ -2441,6 +2385,25 @@ impl From<sonare_codec::AudioBuffer> for WavPcm {
             samples: pcm.samples,
         }
     }
+}
+
+fn pcm_from_samples(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+) -> Result<sonare_codec::AudioBuffer, String> {
+    sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())
+}
+
+fn encode_format(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    format: sonare_codec::Format,
+) -> Result<Vec<u8>, String> {
+    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+    sonare_codec::encode(format, &pcm).map_err(|err| err.to_string())
 }
 
 fn parse_format(format: &str) -> Result<sonare_codec::Format, String> {
@@ -2537,6 +2500,7 @@ mod tests {
         encode_mp3_perceptual_quantized_band_gain_global_gain_bias,
         encode_mp3_perceptual_reservoir_with_bitrate, encode_mp3_perceptual_scale_factor_band_bias,
         encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate, encode_mp3_with_bitrate,
+        encode_opus, encode_vorbis,
         mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate,
         mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate,
         mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate,
@@ -3697,25 +3661,35 @@ mod tests {
     }
 
     #[test]
-    fn unified_encode_reports_unimplemented_lossy_encoders() {
+    fn unified_encode_produces_ogg_streams_for_lossy_encoders() {
         let samples = vec![0.0; 128];
 
-        // Opus encoding depends on native libopus. Browser-targeted WASM builds
-        // keep it unsupported, while native unit tests can see the encoder
-        // through Cargo feature unification.
-        match encode_audio("opus", 48_000, 1, &samples) {
-            Err(err) => assert_eq!(err, "unsupported codec feature: Opus encode"),
-            Ok(stream) => assert_eq!(&stream[..4], b"OggS"),
-        }
-        // Vorbis encoding relies on a native C library (libvorbis) that cannot
-        // be compiled into the wasm bundle, so the wasm surface does not enable
-        // the `vorbis` feature and reports it as unsupported. Workspace-wide
-        // `--all-features` builds can unify the native encoder into the umbrella
-        // via Cargo feature unification, in which case a real Ogg stream is
-        // produced instead; accept either outcome.
-        match encode_audio("vorbis", 48_000, 1, &samples) {
-            Err(err) => assert_eq!(err, "unsupported format"),
-            Ok(stream) => assert_eq!(&stream[..4], b"OggS"),
-        }
+        // Opus and Vorbis are both pure-Rust encoders that compile to wasm, so
+        // the wasm surface enables their features and the unified entry point
+        // produces real Ogg streams rather than reporting them as unsupported.
+        let opus = encode_audio("opus", 48_000, 1, &samples).expect("opus encode");
+        assert_eq!(&opus[..4], b"OggS");
+
+        let vorbis = encode_audio("vorbis", 48_000, 1, &samples).expect("vorbis encode");
+        assert_eq!(&vorbis[..4], b"OggS");
+    }
+
+    #[test]
+    fn dedicated_lossy_encoders_produce_ogg_streams() {
+        let samples = vec![0.0; 128];
+
+        let vorbis = encode_vorbis(48_000, 1, &samples).expect("encode_vorbis");
+        assert_eq!(&vorbis[..4], b"OggS");
+        assert_eq!(
+            sonare_codec::detect(&vorbis),
+            Some(sonare_codec::Format::Vorbis)
+        );
+
+        let opus = encode_opus(48_000, 1, &samples).expect("encode_opus");
+        assert_eq!(&opus[..4], b"OggS");
+        assert_eq!(
+            sonare_codec::detect(&opus),
+            Some(sonare_codec::Format::Opus)
+        );
     }
 }

@@ -71,6 +71,60 @@ pub fn mpeg1_layer3_long_scalefactor_band_range(
     Ok((usize::from(index[band]), usize::from(index[band + 1])))
 }
 
+/// MPEG-2 LSF Layer III long-block scale-factor band boundaries at 22.05 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex`). The low-sampling-frequency
+/// extension keeps the same 22-band / 21-transmitted-factor layout as MPEG-1.
+/// 16 kHz shares this table; 24 kHz differs above band 12.
+const MPEG2_LAYER3_LONG_SFB_22050: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] = [
+    0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 116, 140, 168, 200, 238, 284, 336, 396, 464, 522,
+    576,
+];
+
+/// MPEG-2 LSF Layer III long-block scale-factor band boundaries at 24 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex`).
+const MPEG2_LAYER3_LONG_SFB_24000: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] = [
+    0, 6, 12, 18, 24, 30, 36, 44, 54, 66, 80, 96, 114, 136, 162, 194, 232, 278, 332, 394, 464, 540,
+    576,
+];
+
+/// MPEG-2 LSF Layer III long-block scale-factor band boundaries at 16 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex`). Identical to the 22.05 kHz table.
+const MPEG2_LAYER3_LONG_SFB_16000: [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES] =
+    MPEG2_LAYER3_LONG_SFB_22050;
+
+/// Returns the Layer III long-block scale-factor band index for any sample rate
+/// defined by the MPEG-1 (ISO/IEC 11172-3) or MPEG-2 LSF (ISO/IEC 13818-3)
+/// specifications. MPEG-2.5 rates (8/11.025/12 kHz) are outside both ISO
+/// specifications and are not covered here.
+pub fn layer3_long_scalefactor_band_index(
+    sample_rate: u32,
+) -> Result<&'static [u16; MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES], Error> {
+    match sample_rate {
+        32_000 | 44_100 | 48_000 => mpeg1_layer3_long_scalefactor_band_index(sample_rate),
+        22_050 => Ok(&MPEG2_LAYER3_LONG_SFB_22050),
+        24_000 => Ok(&MPEG2_LAYER3_LONG_SFB_24000),
+        16_000 => Ok(&MPEG2_LAYER3_LONG_SFB_16000),
+        _ => Err(Error::InvalidInput(
+            "MP3 long-block scale-factor band index undefined for sample rate",
+        )),
+    }
+}
+
+/// Returns the `[start, end)` spectral-line range of one long-block transmitted
+/// scale-factor band at any MPEG-1 or MPEG-2 LSF sample rate.
+pub fn layer3_long_scalefactor_band_range(
+    band: usize,
+    sample_rate: u32,
+) -> Result<(usize, usize), Error> {
+    if band >= MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+        return Err(Error::InvalidInput(
+            "MP3 long-block scale-factor band index out of range",
+        ));
+    }
+    let index = layer3_long_scalefactor_band_index(sample_rate)?;
+    Ok((usize::from(index[band]), usize::from(index[band + 1])))
+}
+
 pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     0.0005,
     0.001,
@@ -607,6 +661,18 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         ));
     }
 
+    // MPEG-2 LSF rates (ISO/IEC 13818-3) use the single-granule calibrated-gain
+    // path. MPEG-2.5 rates (8/11.025/12 kHz) are outside ISO 11172-3 / 13818-3
+    // and are rejected by the header builder.
+    if matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider(
+            pcm,
+            MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            mpeg1_layer3_standard_table_provider(),
+        );
+    }
+
     if pcm.samples.iter().any(|sample| *sample != 0.0) && pcm.channels == 1 {
         encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider(
             pcm,
@@ -659,6 +725,31 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_prov
     let header = mpeg1_layer3_header_for_pcm(pcm)?;
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider(
         header, pcm, step, provider,
+    )
+}
+
+/// Default constant bitrate (kbit/s) for the MPEG-2 LSF Layer III path. A valid
+/// MPEG-2 Layer III bitrate that the per-frame step search can comfortably fit
+/// across 16/22.05/24 kHz mono and stereo.
+pub const MPEG2_LAYER3_DEFAULT_BITRATE_KBPS: u16 = 64;
+
+/// Encodes PCM as MPEG-2 LSF (ISO/IEC 13818-3) Layer III frames.
+///
+/// The low-sampling-frequency extension carries a single 576-sample granule per
+/// frame and an 8-bit `main_data_begin`. This path reuses the version-agnostic
+/// calibrated-gain frame assembler with a per-frame quantizer-step search so the
+/// main data always fits one constant-bitrate frame (`main_data_begin = 0`).
+/// Sample rate must be an MPEG-2 LSF rate (16/22.05/24 kHz); MPEG-2.5 rates
+/// (8/11.025/12 kHz) are outside ISO/IEC 11172-3 and 13818-3 and are rejected.
+pub fn encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider(
+    pcm: &AudioBuffer,
+    bitrate_kbps: u16,
+    candidates: &[f32],
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg2_layer3_header_for_pcm(pcm, bitrate_kbps)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider(
+        header, pcm, candidates, provider,
     )
 }
 
@@ -1308,14 +1399,18 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
             0
         };
         if active_scale_factors > 0 {
+            best = None;
             best_active = select_better_mpeg1_layer3_active_reservoir_candidate(
                 best_active,
-                candidate.clone(),
+                candidate,
                 active_scale_factors,
             );
+            continue;
         }
-        // Prefer the smallest fitting step (finest quantization, best quality).
-        best = select_better_mpeg1_layer3_reservoir_candidate(best, candidate);
+        if best_active.is_none() {
+            // Prefer the smallest fitting step (finest quantization, best quality).
+            best = select_better_mpeg1_layer3_reservoir_candidate(best, candidate);
+        }
     }
     best_active
         .map(|(candidate, _)| candidate)
@@ -3827,6 +3922,24 @@ pub struct Layer3ScaleFactorCompress {
     pub scalefac_compress: u16,
     pub slen1: u8,
     pub slen2: u8,
+}
+
+/// MPEG-2 LSF (ISO/IEC 13818-3 §2.4.3.2) long-block scale-factor partition.
+///
+/// In the low-sampling-frequency extension the 21 transmitted long-block scale
+/// factors are split into four contiguous groups whose sizes and per-group bit
+/// widths (`slen`) are jointly encoded in the 9-bit `scalefac_compress` field.
+/// This encoder generates only the two `preflag == 0` partition branches —
+/// group sizes `[6, 5, 5, 5]` (`scalefac_compress < 400`) and `[6, 5, 7, 3]`
+/// (`400 <= scalefac_compress < 500`); the `preflag` and intensity-stereo
+/// branches are never produced.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mpeg2Layer3LsfScaleFactorCompress {
+    pub scalefac_compress: u16,
+    /// Group sizes in scale-factor bands; the four entries sum to 21.
+    pub group_sizes: [u8; 4],
+    /// Per-group scale-factor bit widths.
+    pub slen: [u8; 4],
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -10147,10 +10260,13 @@ pub fn pack_quantized_spectrum_with_table_provider(
     apply_spectral_regions_to_granule(granule, regions)?;
 
     let big_value_pairs = big_value_pairs(quantized, regions)?;
+    // This MPEG-1-only entry uses the MPEG-1 long-block region boundaries; the
+    // MPEG-2 LSF path goes through the `_for_rate_` variant below.
     let (region0_pairs, region1_pairs) = long_block_region_pair_split(
         granule.region0_count,
         granule.region1_count,
         big_value_pairs.len(),
+        44_100,
     );
     let big_value_selection = select_big_value_region_tables_by_bit_cost(
         &big_value_pairs,
@@ -10177,11 +10293,33 @@ pub fn pack_quantized_spectrum_with_table_provider(
     pack_main_data_regions_for_granule(granule, big_values, count1)
 }
 
-/// Builds one granule/channel main-data payload with scale factors and provider lookup.
+/// Builds one granule/channel main-data payload with scale factors and provider
+/// lookup, using the MPEG-1 long-block region boundaries.
 pub fn pack_quantized_spectrum_with_scale_factors_and_table_provider(
     granule: &mut Layer3GranuleChannelInfo,
     scale_factors: PackedBits,
     quantized: &[i32],
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    pack_quantized_spectrum_with_scale_factors_for_rate_and_table_provider(
+        granule,
+        scale_factors,
+        quantized,
+        44_100,
+        provider,
+    )
+}
+
+/// Builds one granule/channel main-data payload with scale factors, resolving
+/// the big-value region boundaries for the granule's sample rate (MPEG-1 vs
+/// MPEG-2 LSF). A spec decoder maps `region_address1`/`region_address2` to
+/// spectral lines through the rate-specific `sfBandIndex`, so the encoder must
+/// split the big-value pairs at the matching boundaries to stay in sync.
+pub fn pack_quantized_spectrum_with_scale_factors_for_rate_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    scale_factors: PackedBits,
+    quantized: &[i32],
+    sample_rate: u32,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<PackedBits, Error> {
     let regions = plan_spectral_regions(quantized)?;
@@ -10192,6 +10330,7 @@ pub fn pack_quantized_spectrum_with_scale_factors_and_table_provider(
         granule.region0_count,
         granule.region1_count,
         big_value_pairs.len(),
+        sample_rate,
     );
     let big_value_selection = select_big_value_region_tables_by_bit_cost(
         &big_value_pairs,
@@ -10220,8 +10359,15 @@ pub fn pack_quantized_spectrum_with_scale_factors_and_table_provider(
 
 /// Long-block scalefactor-band line boundaries shared by all MPEG-1 sample
 /// rates. The full per-rate tables diverge only above index 6; the prefix used
-/// to place the big-value region addresses (indices 0..=2) is rate-independent.
-const LONG_SFB_LOW_BOUNDARIES: [usize; 7] = [0, 4, 8, 12, 16, 20, 24];
+/// to place the big-value region addresses (indices 0..=2) is rate-independent
+/// across the three MPEG-1 rates.
+const LONG_SFB_LOW_BOUNDARIES_MPEG1: [usize; 7] = [0, 4, 8, 12, 16, 20, 24];
+
+/// Long-block scalefactor-band line boundaries shared by the MPEG-2 LSF rates
+/// (16/22.05/24 kHz). The full per-rate tables diverge only above index 12, so
+/// the low prefix used for the big-value region addresses is rate-independent
+/// across the three LSF rates (ISO/IEC 13818-3 Table B.8).
+const LONG_SFB_LOW_BOUNDARIES_MPEG2_LSF: [usize; 7] = [0, 6, 12, 18, 24, 30, 36];
 
 /// Maps the written `region_address1`/`region_address2` side-info fields to the
 /// big-value region split in pairs, exactly as a spec decoder derives it.
@@ -10229,22 +10375,24 @@ const LONG_SFB_LOW_BOUNDARIES: [usize; 7] = [0, 4, 8, 12, 16, 20, 24];
 /// The decoder reads `region0 = [0, sfb[ra1 + 1])`,
 /// `region1 = [sfb[ra1 + 1], sfb[ra1 + ra2 + 2])`, and `region2` the remainder,
 /// all in spectral-line units, then capped at the big-value count. The encoder
-/// must split pairs at the same boundaries so the bitstream stays in sync.
+/// must split pairs at the same boundaries so the bitstream stays in sync. The
+/// `sfb` table is sample-rate dependent (MPEG-1 vs MPEG-2 LSF), so the split
+/// must use the boundaries for the granule's sample rate.
 fn long_block_region_pair_split(
     region0_count: u8,
     region1_count: u8,
     pair_count: usize,
+    sample_rate: u32,
 ) -> (usize, usize) {
+    let boundaries = if matches!(sample_rate, 16_000 | 22_050 | 24_000) {
+        &LONG_SFB_LOW_BOUNDARIES_MPEG2_LSF
+    } else {
+        &LONG_SFB_LOW_BOUNDARIES_MPEG1
+    };
     let r1_idx = usize::from(region0_count) + 1;
     let r2_idx = usize::from(region0_count) + usize::from(region1_count) + 2;
-    let r1_start = LONG_SFB_LOW_BOUNDARIES
-        .get(r1_idx)
-        .copied()
-        .unwrap_or(usize::MAX);
-    let r2_start = LONG_SFB_LOW_BOUNDARIES
-        .get(r2_idx)
-        .copied()
-        .unwrap_or(usize::MAX);
+    let r1_start = boundaries.get(r1_idx).copied().unwrap_or(usize::MAX);
+    let r2_start = boundaries.get(r2_idx).copied().unwrap_or(usize::MAX);
     let region0 = (r1_start / 2).min(pair_count);
     let region1 = (r2_start.saturating_sub(r1_start) / 2).min(pair_count - region0);
     (region0, region1)
@@ -10430,6 +10578,136 @@ pub fn pack_mpeg1_layer3_long_scale_factors_for_granule(
     pack_mpeg1_layer3_long_scale_factors(scale_factors, selection)
 }
 
+/// Minimum bit width that represents `value` as an unsigned integer (0 → 0).
+fn min_scale_factor_width(value: u8) -> u8 {
+    let mut width = 0_u8;
+    while u16::from(value) >= (1_u16 << width) {
+        width += 1;
+    }
+    width
+}
+
+/// Selects an MPEG-2 LSF long-block scale-factor partition (ISO/IEC 13818-3
+/// §2.4.3.2) for the given per-band scale factors.
+///
+/// Both `preflag == 0` partition branches are evaluated and the feasible one
+/// with the fewest total scale-factor bits is chosen (group sizes `[6,5,5,5]`
+/// breaks ties). Returns an error when no `preflag == 0` branch can represent
+/// the scale factors (a group exceeds its branch's bit-width capacity).
+pub fn select_mpeg2_layer3_lsf_long_scale_factor_compress(
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> Result<Mpeg2Layer3LsfScaleFactorCompress, Error> {
+    // (group_sizes, per-group inclusive slen ceilings) for the two preflag=0
+    // branches. Branch 1's final group must vanish (slen == 0).
+    const BRANCHES: [([u8; 4], [u8; 4]); 2] =
+        [([6, 5, 5, 5], [4, 4, 3, 3]), ([6, 5, 7, 3], [4, 4, 3, 0])];
+
+    let mut best: Option<Mpeg2Layer3LsfScaleFactorCompress> = None;
+    let mut best_bits = usize::MAX;
+
+    for (branch, (group_sizes, slen_caps)) in BRANCHES.iter().enumerate() {
+        let mut slen = [0_u8; 4];
+        let mut start = 0_usize;
+        let mut feasible = true;
+        for group in 0..4 {
+            let len = usize::from(group_sizes[group]);
+            let group_max = scale_factors[start..start + len]
+                .iter()
+                .copied()
+                .max()
+                .unwrap_or(0);
+            let width = min_scale_factor_width(group_max);
+            if width > slen_caps[group] {
+                feasible = false;
+                break;
+            }
+            slen[group] = width;
+            start += len;
+        }
+        if !feasible {
+            continue;
+        }
+
+        let total_bits: usize = (0..4)
+            .map(|group| usize::from(group_sizes[group]) * usize::from(slen[group]))
+            .sum();
+
+        let scalefac_compress = if branch == 0 {
+            (u16::from(slen[0] * 5 + slen[1]) << 4) | (u16::from(slen[2]) << 2) | u16::from(slen[3])
+        } else {
+            400 + ((u16::from(slen[0] * 5 + slen[1]) << 2) | u16::from(slen[2]))
+        };
+
+        if total_bits < best_bits {
+            best_bits = total_bits;
+            best = Some(Mpeg2Layer3LsfScaleFactorCompress {
+                scalefac_compress,
+                group_sizes: *group_sizes,
+                slen,
+            });
+        }
+    }
+
+    best.ok_or(Error::InvalidInput(
+        "MP3 scale factor exceeds MPEG-2 LSF Layer III compress range",
+    ))
+}
+
+/// Packs MPEG-2 LSF long-block scale-factor values using a partition selected
+/// by [`select_mpeg2_layer3_lsf_long_scale_factor_compress`].
+pub fn pack_mpeg2_layer3_lsf_long_scale_factors(
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    selection: Mpeg2Layer3LsfScaleFactorCompress,
+) -> Result<PackedBits, Error> {
+    if usize::from(
+        selection
+            .group_sizes
+            .iter()
+            .copied()
+            .map(u16::from)
+            .sum::<u16>(),
+    ) != MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT
+    {
+        return Err(Error::InvalidInput(
+            "MPEG-2 LSF Layer III scale-factor groups must cover 21 bands",
+        ));
+    }
+
+    let mut writer = CoreBitWriter::new();
+    let mut start = 0_usize;
+    for group in 0..4 {
+        let len = usize::from(selection.group_sizes[group]);
+        for &scale_factor in &scale_factors[start..start + len] {
+            write_mp3_scale_factor(&mut writer, scale_factor, selection.slen[group])?;
+        }
+        start += len;
+    }
+
+    let bit_len = writer.bit_len();
+    Ok(PackedBits {
+        bytes: writer.finish_byte_aligned(),
+        bit_len,
+    })
+}
+
+/// Applies MPEG-2 LSF scale-factor compression metadata to side info.
+pub fn apply_mpeg2_lsf_scale_factor_compress_to_granule(
+    granule: &mut Layer3GranuleChannelInfo,
+    selection: Mpeg2Layer3LsfScaleFactorCompress,
+) {
+    granule.scalefac_compress = selection.scalefac_compress;
+}
+
+/// Packs MPEG-2 LSF long-block scale factors and updates side-info metadata.
+pub fn pack_mpeg2_layer3_lsf_long_scale_factors_for_granule(
+    granule: &mut Layer3GranuleChannelInfo,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+) -> Result<PackedBits, Error> {
+    let selection = select_mpeg2_layer3_lsf_long_scale_factor_compress(scale_factors)?;
+    apply_mpeg2_lsf_scale_factor_compress_to_granule(granule, selection);
+    pack_mpeg2_layer3_lsf_long_scale_factors(scale_factors, selection)
+}
+
 /// Selects deterministic MPEG-1 Layer III long-block scale factors from coefficients.
 pub fn select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum(
     quantized: &[i32],
@@ -10500,6 +10778,31 @@ pub fn pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
         granule,
         scale_factor_bits,
         quantized,
+        provider,
+    )
+}
+
+/// Builds one long-block payload for a given sample rate, selecting the
+/// big-value region boundaries from the rate's `sfBandIndex`.
+///
+/// The scale factors are packed with the MPEG-1 long-block grouping; for the
+/// MPEG-2 LSF calibrated-gain path the factors are all zero, which encodes as
+/// `scalefac_compress = 0` (zero scale-factor bits) — identical under both the
+/// MPEG-1 and MPEG-2 LSF decoder derivations.
+fn pack_layer3_long_quantized_spectrum_for_rate_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    quantized: &[i32],
+    sample_rate: u32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let scale_factor_bits =
+        pack_mpeg1_layer3_long_scale_factors_for_granule(granule, scale_factors)?;
+    pack_quantized_spectrum_with_scale_factors_for_rate_and_table_provider(
+        granule,
+        scale_factor_bits,
+        quantized,
+        sample_rate,
         provider,
     )
 }
@@ -10579,6 +10882,29 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
         granule,
         &scale_factors,
         &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+/// Builds one calibrated-gain long-block payload using the big-value region
+/// boundaries for `pcm.sample_rate` (MPEG-1 or MPEG-2 LSF).
+fn pack_layer3_pcm_long_block_with_calibrated_gain_for_rate_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let quantized = quantize_pcm_long_block(pcm, channel, start_frame, step)?;
+    let scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+    let packed = pack_layer3_long_quantized_spectrum_for_rate_and_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        pcm.sample_rate,
         provider,
     )?;
     granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
@@ -11661,14 +11987,18 @@ fn pack_mpeg1_layer3_pcm_frame_payloads_with_table_provider(
             )
             .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
         for channel in 0..header.channel_count() {
-            let payload = pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider(
-                &mut side_info.granules[granule][channel],
-                pcm,
-                channel,
-                granule_start,
-                step,
-                provider,
-            )?;
+            // Rate-aware variant: for the three MPEG-1 rates this resolves to the
+            // MPEG-1 region boundaries (byte-identical output); for MPEG-2 LSF it
+            // uses the LSF boundaries so the big-value regions match the decoder.
+            let payload =
+                pack_layer3_pcm_long_block_with_calibrated_gain_for_rate_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    provider,
+                )?;
             payloads.push(payload);
         }
     }
@@ -11903,9 +12233,11 @@ fn prepare_mpeg1_layer3_pcm_frame_side_info(
     header: FrameHeader,
     pcm: &AudioBuffer,
 ) -> Result<Layer3SideInfo, Error> {
-    if header.version != MpegVersion::Mpeg1 || header.layer != Layer::Layer3 {
+    // MPEG-1 and MPEG-2 LSF Layer III share this single-granule-aware side-info
+    // layout; MPEG-2.5 (ISO-unspecified) is not produced by this encoder.
+    if header.version == MpegVersion::Mpeg25 || header.layer != Layer::Layer3 {
         return Err(Error::UnsupportedFeature(
-            "MP3 PCM frame payload currently requires MPEG-1 Layer III",
+            "MP3 PCM frame payload currently requires MPEG-1 or MPEG-2 LSF Layer III",
         ));
     }
     if header.sample_rate != pcm.sample_rate {
@@ -11934,6 +12266,35 @@ fn mpeg1_layer3_header_for_pcm(pcm: &AudioBuffer) -> Result<FrameHeader, Error> 
         layer: Layer::Layer3,
         protection_absent: true,
         bitrate_kbps: 128,
+        sample_rate: pcm.sample_rate,
+        padding: false,
+        channel_mode: if pcm.channels == 1 {
+            ChannelMode::SingleChannel
+        } else {
+            ChannelMode::Stereo
+        },
+    };
+    header.to_bytes()?;
+    Ok(header)
+}
+
+fn mpeg2_layer3_header_for_pcm(pcm: &AudioBuffer, bitrate_kbps: u16) -> Result<FrameHeader, Error> {
+    if pcm.channels != 1 && pcm.channels != 2 {
+        return Err(Error::UnsupportedFeature(
+            "MP3 encode currently supports mono/stereo only",
+        ));
+    }
+    if !matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-2 LSF Layer III encode supports 16/22.05/24 kHz",
+        ));
+    }
+
+    let header = FrameHeader {
+        version: MpegVersion::Mpeg2,
+        layer: Layer::Layer3,
+        protection_absent: true,
+        bitrate_kbps,
         sample_rate: pcm.sample_rate,
         padding: false,
         channel_mode: if pcm.channels == 1 {
@@ -12332,7 +12693,8 @@ mod tests {
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
         experimental_unit_magnitude_table_provider, layer3_analysis_subband_block,
-        layer3_header_for_capacity, layer3_long_block_spectrum, layer3_main_data_capacity_bits,
+        layer3_header_for_capacity, layer3_long_block_spectrum, layer3_long_scalefactor_band_index,
+        layer3_long_scalefactor_band_range, layer3_main_data_capacity_bits,
         layer3_main_data_capacity_bytes, mdct_long_block, mpeg1_layer3_global_gain_for_step,
         mpeg1_layer3_long_scalefactor_band_index, mpeg1_layer3_long_scalefactor_band_range,
         mpeg1_layer3_quality_guard_candidate_is_better,
@@ -12352,7 +12714,8 @@ mod tests {
         pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
         pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider,
         pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider,
-        pack_quantized_spectrum_for_granule,
+        pack_mpeg2_layer3_lsf_long_scale_factors,
+        pack_mpeg2_layer3_lsf_long_scale_factors_for_granule, pack_quantized_spectrum_for_granule,
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
         pack_quantized_spectrum_with_table_provider, plan_spectral_regions, quantize_long_block,
@@ -12375,15 +12738,16 @@ mod tests {
         select_mpeg1_layer3_pcm_frame_step_with_table_provider,
         select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider,
         select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider,
-        select_mpeg1_layer3_reservoir_frame_details_with_table_provider, BitWriter, ChannelMode,
-        FrameHeader, Layer, Layer3BigValueMagnitude, Layer3BigValuePair,
-        Layer3BigValueRegionTableSelection, Layer3BigValueTableSelection,
-        Layer3Count1MagnitudeQuad, Layer3Count1Quad, Layer3Count1TableSelection,
-        Layer3EntropyTableProvider, Layer3EntropyTables, Layer3GranuleChannelInfo,
-        Layer3PcmFrameStepSelection, Layer3QualityGuardPerceptualCandidate,
-        Layer3ScaleFactorCompress, Layer3SideInfo, Layer3SpectralRegions, Layer3WindowSwitching,
-        MpegVersion, ALIAS_REDUCTION_C, LONG_BLOCK_GRANULE_SAMPLES,
-        MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
+        select_mpeg1_layer3_reservoir_frame_details_with_table_provider,
+        select_mpeg2_layer3_lsf_long_scale_factor_compress, BitWriter, ChannelMode, FrameHeader,
+        Layer, Layer3BigValueMagnitude, Layer3BigValuePair, Layer3BigValueRegionTableSelection,
+        Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad, Layer3Count1Quad,
+        Layer3Count1TableSelection, Layer3EntropyTableProvider, Layer3EntropyTables,
+        Layer3GranuleChannelInfo, Layer3PcmFrameStepSelection,
+        Layer3QualityGuardPerceptualCandidate, Layer3ScaleFactorCompress, Layer3SideInfo,
+        Layer3SpectralRegions, Layer3WindowSwitching, MpegVersion, ALIAS_REDUCTION_C,
+        LONG_BLOCK_GRANULE_SAMPLES, MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES,
+        MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
         MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
         MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS,
     };
@@ -13094,12 +13458,14 @@ mod tests {
             Error::InvalidInput("MP3 header sample rate does not match PCM")
         ));
 
-        let non_mpeg1 = FrameHeader {
-            version: MpegVersion::Mpeg2,
+        // MPEG-2 LSF is now supported; MPEG-2.5 (ISO-unspecified) is rejected by
+        // the shared payload preparation regardless of sample rate.
+        let mpeg25 = FrameHeader {
+            version: MpegVersion::Mpeg25,
             ..header
         };
         let err = assemble_mpeg1_layer3_pcm_frame_with_selected_scale_factors_and_table_provider(
-            non_mpeg1,
+            mpeg25,
             &pcm,
             0,
             1.0,
@@ -13108,7 +13474,9 @@ mod tests {
         .unwrap_err();
         assert!(matches!(
             err,
-            Error::UnsupportedFeature("MP3 PCM frame payload currently requires MPEG-1 Layer III")
+            Error::UnsupportedFeature(
+                "MP3 PCM frame payload currently requires MPEG-1 or MPEG-2 LSF Layer III"
+            )
         ));
     }
 
@@ -13982,6 +14350,85 @@ mod tests {
             },
         )
         .is_err());
+    }
+
+    /// Mirrors the ISO/IEC 13818-3 §2.4.3.2 decoder partition derivation so
+    /// tests can confirm the encoder's `scalefac_compress` reconstructs the
+    /// same group sizes and bit widths a conformant decoder would compute.
+    fn decode_mpeg2_lsf_long_partition(scalefac_compress: u16) -> ([u8; 4], [u8; 4]) {
+        if scalefac_compress < 400 {
+            let high = scalefac_compress >> 4;
+            let slen = [
+                (high / 5) as u8,
+                (high % 5) as u8,
+                ((scalefac_compress & 0xf) >> 2) as u8,
+                (scalefac_compress & 0x3) as u8,
+            ];
+            ([6, 5, 5, 5], slen)
+        } else {
+            let t = scalefac_compress - 400;
+            let high = t >> 2;
+            let slen = [(high / 5) as u8, (high % 5) as u8, (t & 0x3) as u8, 0];
+            ([6, 5, 7, 3], slen)
+        }
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_compress_decodes_to_selected_partition() {
+        // A spread of per-band scale factors exercising distinct group maxima.
+        let mut scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        scale_factors[0] = 7; // group 0 (bands 0..6): needs slen 3
+        scale_factors[7] = 3; // group 1 (bands 6..11): needs slen 2
+        scale_factors[12] = 1; // group 2 (bands 11..16): needs slen 1
+        scale_factors[18] = 2; // group 3 (bands 16..21): needs slen 2
+
+        let selection = select_mpeg2_layer3_lsf_long_scale_factor_compress(&scale_factors).unwrap();
+        assert!(selection.scalefac_compress < 500);
+
+        // The serialized scalefac_compress must round-trip through the decoder
+        // derivation to the identical partition the encoder packed with.
+        let (groups, slen) = decode_mpeg2_lsf_long_partition(selection.scalefac_compress);
+        assert_eq!(groups, selection.group_sizes);
+        assert_eq!(slen, selection.slen);
+
+        // Every band fits its group's bit width, so packing succeeds and the
+        // bit length equals the sum of group_size * slen.
+        let packed = pack_mpeg2_layer3_lsf_long_scale_factors(&scale_factors, selection).unwrap();
+        let expected_bits: usize = (0..4)
+            .map(|g| usize::from(selection.group_sizes[g]) * usize::from(selection.slen[g]))
+            .sum();
+        assert_eq!(packed.bit_len, expected_bits);
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_compress_prefers_branch_zero_for_silence() {
+        let scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        let selection = select_mpeg2_layer3_lsf_long_scale_factor_compress(&scale_factors).unwrap();
+        assert_eq!(selection.scalefac_compress, 0);
+        assert_eq!(selection.group_sizes, [6, 5, 5, 5]);
+        assert_eq!(selection.slen, [0, 0, 0, 0]);
+        let packed = pack_mpeg2_layer3_lsf_long_scale_factors(&scale_factors, selection).unwrap();
+        assert_eq!(packed.bit_len, 0);
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_compress_for_granule_records_scalefac_compress() {
+        let mut scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        scale_factors[3] = 4;
+        let mut granule = Layer3GranuleChannelInfo::default();
+        let selection = select_mpeg2_layer3_lsf_long_scale_factor_compress(&scale_factors).unwrap();
+        pack_mpeg2_layer3_lsf_long_scale_factors_for_granule(&mut granule, &scale_factors).unwrap();
+        assert_eq!(granule.scalefac_compress, selection.scalefac_compress);
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_compress_rejects_uncodable_high_band() {
+        // Band 20 lands in the final group of both preflag=0 branches, whose
+        // bit-width caps are 3 (branch 0) and 0 (branch 1). A value of 8 needs
+        // four bits, so neither branch can represent it.
+        let mut scale_factors = [0_u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+        scale_factors[20] = 8;
+        assert!(select_mpeg2_layer3_lsf_long_scale_factor_compress(&scale_factors).is_err());
     }
 
     #[test]
@@ -16539,7 +16986,9 @@ mod tests {
             Error::UnsupportedFeature("MP3 encode currently supports mono/stereo only")
         ));
 
-        let pcm = AudioBuffer::new(22_050, 1, vec![0.0; 576]).unwrap();
+        // 22_000 Hz is not an MPEG-1, MPEG-2 LSF, or MPEG-2.5 Layer III rate.
+        // (22_050 Hz is now supported via the MPEG-2 LSF path.)
+        let pcm = AudioBuffer::new(22_000, 1, vec![0.0; 576]).unwrap();
         let err = encode(&pcm).unwrap_err();
 
         assert!(matches!(err, Error::UnsupportedFeature("MP3 sample rate")));
@@ -16750,5 +17199,70 @@ mod tests {
         // residual band that carries no transmitted scale factor.
         assert_eq!(cursor, 418);
         assert!(mpeg1_layer3_long_scalefactor_band_range(21, 44_100).is_err());
+    }
+
+    #[test]
+    fn general_long_scalefactor_band_index_covers_iso_rates() {
+        // MPEG-1 (ISO/IEC 11172-3) and MPEG-2 LSF (ISO/IEC 13818-3) rates.
+        for rate in [32_000_u32, 44_100, 48_000, 16_000, 22_050, 24_000] {
+            let index = layer3_long_scalefactor_band_index(rate).unwrap();
+            assert_eq!(index[0], 0, "{rate}: first boundary must be line 0");
+            assert_eq!(
+                index[MPEG1_LAYER3_LONG_SCALEFACTOR_BAND_BOUNDARIES - 1],
+                576,
+                "{rate}: long block spans 576 lines"
+            );
+            for pair in index.windows(2) {
+                assert!(
+                    pair[1] > pair[0],
+                    "{rate}: boundaries must increase strictly ({} !> {})",
+                    pair[1],
+                    pair[0]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn general_long_scalefactor_band_index_matches_mpeg1_for_mpeg1_rates() {
+        for rate in [32_000_u32, 44_100, 48_000] {
+            assert_eq!(
+                layer3_long_scalefactor_band_index(rate).unwrap(),
+                mpeg1_layer3_long_scalefactor_band_index(rate).unwrap(),
+            );
+        }
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_band_tables_match_iso_13818_3() {
+        // 16 kHz shares the 22.05 kHz table; 24 kHz diverges from band 12 up.
+        assert_eq!(
+            layer3_long_scalefactor_band_index(16_000).unwrap(),
+            layer3_long_scalefactor_band_index(22_050).unwrap(),
+        );
+        assert_ne!(
+            layer3_long_scalefactor_band_index(24_000).unwrap(),
+            layer3_long_scalefactor_band_index(22_050).unwrap(),
+        );
+        // Spot-check the normative boundaries (ISO/IEC 13818-3 Table B.8).
+        assert_eq!(layer3_long_scalefactor_band_index(22_050).unwrap()[12], 116);
+        assert_eq!(layer3_long_scalefactor_band_index(24_000).unwrap()[12], 114);
+    }
+
+    #[test]
+    fn mpeg2_lsf_long_band_range_excludes_mpeg25_rates() {
+        // 24 kHz transmitted bands tile contiguously up to the residual band.
+        let mut cursor = 0_usize;
+        for band in 0..MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
+            let (start, end) = layer3_long_scalefactor_band_range(band, 24_000).unwrap();
+            assert_eq!(start, cursor, "band {band} is not contiguous");
+            assert!(end > start, "band {band} is empty");
+            cursor = end;
+        }
+        assert_eq!(cursor, 540);
+        // MPEG-2.5 (8/11.025/12 kHz) is outside ISO 11172-3 / 13818-3.
+        for rate in [8_000_u32, 11_025, 12_000] {
+            assert!(layer3_long_scalefactor_band_index(rate).is_err());
+        }
     }
 }
