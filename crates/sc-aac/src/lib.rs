@@ -5898,6 +5898,51 @@ pub fn encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    channel: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<u8>, Error> {
+    let selections =
+        select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            channel,
+            pcm,
+            start_frame,
+            offsets,
+            scale_factor_magnitude_bias,
+            candidates,
+            max_quantized_abs,
+            target_bitrate_bps,
+            scale_factor_table,
+        )?;
+    let starts = pcm_frame_starts(pcm, start_frame)?;
+    let mut out = Vec::new();
+    for (start_frame, selection) in starts.into_iter().zip(selections.into_iter()) {
+        out.extend_from_slice(
+            &encode_pcm_mono_long_block_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
+                adts,
+                channel,
+                pcm,
+                start_frame,
+                selection.step,
+                offsets,
+                scale_factor_magnitude_bias,
+                scale_factor_table,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
 /// Encodes a mono AAC-LC ADTS stream from PCM with internally selected scale factors.
 pub fn encode_pcm_mono_long_block_adts_stream_with_selected_scale_factors(
     adts: AdtsConfig,
@@ -7004,6 +7049,54 @@ pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_a
         max_frame_len_bytes,
         scale_factor_table,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+    adts: AdtsConfig,
+    left: AacLongBlockConfig,
+    right: AacLongBlockConfig,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    offsets: &[usize],
+    scale_factor_magnitude_bias: i16,
+    candidates: &[f32],
+    max_quantized_abs: u32,
+    target_bitrate_bps: u32,
+    scale_factor_table: &[HuffmanEntry<AacScaleFactorDelta>],
+) -> Result<Vec<u8>, Error> {
+    let selections =
+        select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            left,
+            right,
+            pcm,
+            start_frame,
+            offsets,
+            scale_factor_magnitude_bias,
+            candidates,
+            max_quantized_abs,
+            target_bitrate_bps,
+            scale_factor_table,
+        )?;
+    let starts = pcm_frame_starts(pcm, start_frame)?;
+    let mut out = Vec::new();
+    for (start_frame, selection) in starts.into_iter().zip(selections.into_iter()) {
+        out.extend_from_slice(
+            &encode_pcm_stereo_long_block_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost(
+                adts,
+                left,
+                right,
+                pcm,
+                start_frame,
+                selection.step,
+                offsets,
+                scale_factor_magnitude_bias,
+                scale_factor_table,
+            )?,
+        );
+    }
+    Ok(out)
 }
 
 /// Encodes an independent-stereo AAC-LC ADTS stream from PCM with internally selected scale factors.

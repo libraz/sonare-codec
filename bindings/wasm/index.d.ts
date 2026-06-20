@@ -113,6 +113,37 @@ export function encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
   min_bits_per_granule_channel: number
 ): Uint8Array;
 
+export function encode_mp3_perceptual_scale_factor_band_bias(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  step: number,
+  band_start: number,
+  band_end: number,
+  bias: number
+): Uint8Array;
+
+export function encode_mp3_perceptual_quantized_band_gain(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  step: number,
+  band_start: number,
+  band_end: number,
+  gain: number
+): Uint8Array;
+
+export function encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  step: number,
+  band_start: number,
+  band_end: number,
+  gain: number,
+  global_gain_bias: number
+): Uint8Array;
+
 export function encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
   sample_rate: number,
   channels: number,
@@ -150,6 +181,19 @@ export function mp3_perceptual_reservoir_frame_details_with_bitrate(
  * [frame_index, step, payload_bit_len, frame_len, padding, frame_capacity_bytes, main_data_begin, reservoir_after, perceptual_granules, calibrated_granules, quality_guard_compared_granules, quality_guard_distortion_delta, entropy_target_bits, used_entropy_target_budget]...
  */
 export function mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean,
+  min_bits_per_granule_channel: number
+): Float64Array;
+
+/**
+ * Returns entropy-target utilization summary:
+ * [frames, used_entropy_target_frames, payload_bits, entropy_budget_bits, utilization, max_entropy_budget_slack_bits].
+ */
+export function mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate(
   sample_rate: number,
   channels: number,
   samples: Float32Array,
@@ -214,11 +258,52 @@ export function encode_aac_with_recommended_standard_spectral_offsets_and_select
   target_bitrate_bps: number
 ): Uint8Array;
 
+export function encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+  max_quantized_abs: number
+): Uint8Array;
+
+export function encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  max_quantized_abs: number
+): Uint8Array;
+
+export function encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
 export function aac_standard_id_selected_scale_factor_global_gain(
   channels: number
 ): number;
 
 export function aac_standard_id_selected_scale_factor_magnitude_bias(): number;
+
+export function aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(
+  channels: number
+): number;
+
+export function aac_standard_id_selected_scale_factor_balanced_parameters(
+  channels: number
+): Float64Array;
+
+export function aac_standard_id_selected_scale_factor_balanced_gain_deltas(
+  channels: number
+): Float64Array;
+
+export function aac_standard_id_selected_scale_factor_balanced_magnitude_biases(
+  channels: number
+): Float64Array;
 
 export function aac_standard_id_selected_scale_factor_parameters(
   channels: number
@@ -262,6 +347,31 @@ export function encode_m4a_with_standard_spectral_offsets_and_selected_scale_fac
 ): Uint8Array;
 
 export function encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number
+): Uint8Array;
+
+export function encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+  max_quantized_abs: number
+): Uint8Array;
+
+export function encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  max_quantized_abs: number
+): Uint8Array;
+
+export function encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
   sample_rate: number,
   channels: number,
   samples: Float32Array,
@@ -503,6 +613,137 @@ export function aac_recommended_standard_selected_scale_factor_frame_details_wit
 ): Float64Array;
 
 /**
+ * Returns flattened standard-id selected-scale-factor bitrate selections with a max quantized magnitude limit as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+  max_quantized_abs: number,
+): Float64Array;
+
+/**
+ * Returns flattened recommended standard-id selected-scale-factor bitrate selections with a max quantized magnitude limit as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  max_quantized_abs: number,
+): Float64Array;
+
+/**
+ * Returns flattened balanced standard-id selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
+ */
+export function aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns standard-id selected-scale-factor profile summary as [frames, channels, bands, raised_bands, max_delta, mean_delta].
+ */
+export function aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+): Float64Array;
+
+/**
+ * Returns recommended standard-id selected-scale-factor profile summary as [frames, channels, bands, raised_bands, max_delta, mean_delta].
+ */
+export function aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns balanced standard-id selected-scale-factor profile summary as [frames, channels, bands, raised_bands, max_delta, mean_delta].
+ */
+export function aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns standard-id payload breakdown summary as [frames, channels, sections, escape_sections, max_abs, section_bits, scale_factor_bits, spectral_bits, escape_spectral_bits, dominant_spectral_bits, dominant_escape_spectral_bits].
+ */
+export function aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+): Float64Array;
+
+/**
+ * Returns recommended standard-id payload breakdown summary as [frames, channels, sections, escape_sections, max_abs, section_bits, scale_factor_bits, spectral_bits, escape_spectral_bits, dominant_spectral_bits, dominant_escape_spectral_bits].
+ */
+export function aac_recommended_standard_id_payload_breakdown_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns balanced standard-id payload breakdown summary as [frames, channels, sections, escape_sections, max_abs, section_bits, scale_factor_bits, spectral_bits, escape_spectral_bits, dominant_spectral_bits, dominant_escape_spectral_bits].
+ */
+export function aac_balanced_standard_id_payload_breakdown_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns standard-id quality-control profile as [frames, channels, max_frame_len, min_frame_budget_slack, max_abs_limit, max_abs, sections, escape_sections, total_bits, spectral_bits, escape_spectral_bits, scale_factor_bits, scale_factor_bands, raised_scale_factor_bands, max_scale_factor_delta, mean_scale_factor_delta].
+ */
+export function aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized_abs_and_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+  global_gain: number,
+  scale_factor_magnitude_bias: number,
+  max_quantized_abs: number,
+): Float64Array;
+
+/**
+ * Returns balanced standard-id quality-control profile as [frames, channels, max_frame_len, min_frame_budget_slack, max_abs_limit, max_abs, sections, escape_sections, total_bits, spectral_bits, escape_spectral_bits, scale_factor_bits, scale_factor_bands, raised_scale_factor_bands, max_scale_factor_delta, mean_scale_factor_delta].
+ */
+export function aac_balanced_standard_id_quality_control_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
+ * Returns balanced standard-id quality-control candidates as repeated [global_gain, scale_factor_magnitude_bias, max_quantized_abs, profile...].
+ */
+export function aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  target_bitrate_bps: number,
+): Float64Array;
+
+/**
  * Returns flattened production selected-scale-factor bitrate selections as [frame_index, step, frame_len, frame_capacity_bytes, ...].
  */
 export function aac_selected_scale_factor_frame_details_with_bitrate(
@@ -530,7 +771,33 @@ export function mp3_layer3_main_data_capacity_bits(
 
 export function mp3_pcm_step_candidates(): Float32Array;
 
+export function mp3_production_pcm_step_candidates(channels: number): Float32Array;
+
 export function mp3_first_frame_perceptual_candidate_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+export function mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+export function mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
+  sample_rate: number,
+  channels: number,
+  samples: Float32Array,
+  bitrate_kbps: number,
+  crc_protected: boolean
+): Float64Array;
+
+export function mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
   sample_rate: number,
   channels: number,
   samples: Float32Array,

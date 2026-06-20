@@ -15,6 +15,7 @@ pub use sc_mp3::{
     encode_mpeg1_layer3_pcm_frames_with_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_cbr_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_header_and_max_payload_bits_and_table_provider,
@@ -25,19 +26,25 @@ pub use sc_mp3::{
     encode_mpeg1_layer3_pcm_frames_with_header_and_selected_scale_factors_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_max_payload_bits_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_allowed_noise_scale_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_auto_step_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_cbr_bitrate_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_max_payload_bits_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_reservoir_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factor_band_bias_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider,
+    encode_mpeg1_layer3_pcm_frames_with_perceptual_scalefac_scale_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors,
     encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider,
     experimental_unit_magnitude_table_provider, layer3_header_for_capacity,
     layer3_main_data_capacity_bits, layer3_main_data_capacity_bytes, mdct_long_block,
-    mpeg1_layer3_global_gain_for_step, mpeg1_layer3_standard_big_value_table_provider,
+    mpeg1_layer3_entropy_target_utilization_profile, mpeg1_layer3_global_gain_for_step,
+    mpeg1_layer3_production_pcm_step_candidates, mpeg1_layer3_standard_big_value_table_provider,
     mpeg1_layer3_standard_table_provider, pack_big_value_pairs_with_region_tables_and_provider,
     pack_layer3_main_data_payloads, pack_mpeg1_layer3_long_quantized_spectrum_for_granule,
     pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_and_table_provider,
@@ -48,8 +55,12 @@ pub use sc_mp3::{
     pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
     select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
     select_big_value_table_by_bit_cost, select_count1_table_by_bit_cost,
+    select_mpeg1_layer3_entropy_target_utilization_profile_with_table_provider,
     select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider,
+    select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider,
+    select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider,
     select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_provider,
+    select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider,
     select_mpeg1_layer3_long_scale_factor_compress,
     select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
     select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_provider,
@@ -67,14 +78,17 @@ pub use sc_mp3::{
     select_mpeg1_layer3_psychoacoustic_long_scale_factors,
     select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider,
     select_mpeg1_layer3_reservoir_frame_details_with_table_provider, ChannelMode, FrameHeader,
-    Layer, Layer3BigValueMagnitude, Layer3BigValuePair, Layer3BigValueRegionTableSelection,
-    Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad, Layer3Count1Quad,
-    Layer3Count1TableSelection, Layer3EntropyTableProvider, Layer3EntropyTables,
-    Layer3EntropyTargetedReservoirFrameSelection, Layer3GranuleChannelInfo,
+    Layer, Layer3BandSpectralShapeCandidateProfile, Layer3BigValueMagnitude, Layer3BigValuePair,
+    Layer3BigValueRegionTableSelection, Layer3BigValueTableSelection, Layer3Count1MagnitudeQuad,
+    Layer3Count1Quad, Layer3Count1TableSelection, Layer3EntropyTableProvider, Layer3EntropyTables,
+    Layer3EntropyTargetUtilizationProfile, Layer3EntropyTargetedReservoirFrameSelection,
+    Layer3GranuleChannelInfo, Layer3LowBandSpectralShapeCandidateProfile,
     Layer3PcmFrameStepSelection, Layer3PerceptualBitAllocation, Layer3PerceptualCandidateProfile,
-    Layer3ReservoirFrameSelection, Layer3ScaleFactorCompress, Layer3SideInfo,
-    Layer3SpectralRegions, MpegVersion, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
-    MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+    Layer3QualityGuardedCandidateProfile, Layer3QuantizedBandGain, Layer3ReservoirFrameSelection,
+    Layer3ScaleFactorBandBias, Layer3ScaleFactorCompress, Layer3SideInfo, Layer3SpectralRegions,
+    MpegVersion, MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT,
+    MPEG1_LAYER3_MISSING_STANDARD_BIG_VALUE_TABLE_SELECTS,
+    MPEG1_LAYER3_MONO_PRODUCTION_PCM_STEP_CANDIDATES, MPEG1_LAYER3_PCM_STEP_CANDIDATES,
     MPEG1_LAYER3_STANDARD_BIG_VALUE_TABLE_SELECTS, MPEG1_LAYER3_STANDARD_COUNT1_TABLE_SELECTS,
 };
 
@@ -111,6 +125,7 @@ pub use sc_aac::{
     encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
     encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost,
     encode_pcm_mono_long_block_adts_with_scale_factors,
     encode_pcm_mono_long_block_adts_with_scale_factors_by_bit_cost,
@@ -140,6 +155,7 @@ pub use sc_aac::{
     encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
     encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_by_bit_cost,
     encode_pcm_stereo_long_block_adts_with_offsets_and_scale_factors_by_bit_cost,
     encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors_by_bit_cost,
@@ -198,8 +214,8 @@ pub use sc_aac::{
     select_aac_lc_mono_pcm_frame_step_details_with_offsets_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
-    select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
@@ -211,10 +227,10 @@ pub use sc_aac::{
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
-    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
-    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
+    select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cost,
@@ -223,8 +239,8 @@ pub use sc_aac::{
     select_aac_lc_stereo_pcm_frame_step_details_with_offsets_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
-    select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_with_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_with_offsets_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_frame_step_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
@@ -236,10 +252,10 @@ pub use sc_aac::{
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_and_max_frame_len_by_bit_cost,
-    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
-    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate_by_bit_cost,
     select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_frame_len_by_bit_cost,
+    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost,
+    select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_max_frame_len_by_bit_cost,
     select_codebook_by_bit_cost, select_quad_codebook_by_bit_cost,
     select_scale_factors_for_quantized_bands, select_scale_factors_for_quantized_bands_by_offsets,
     select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias,
@@ -268,6 +284,122 @@ pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN: u8 = 128;
 pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_GLOBAL_GAIN: u8 = 126;
 #[cfg(feature = "aac")]
 pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS: i16 = 16;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN: u8 = 136;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GLOBAL_GAIN: u8 = 138;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_BALANCED_MAGNITUDE_BIAS: i16 = 8;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIAS: i16 = 8;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIAS: i16 = 4;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAX_QUANTIZED_ABS: u32 = 2047;
+#[cfg(feature = "aac")]
+pub const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAX_QUANTIZED_ABS: u32 = 1535;
+
+#[cfg(feature = "aac")]
+const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GAIN_DELTAS: &[u8] = &[0, 2, 4, 6, 8];
+#[cfg(feature = "aac")]
+const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GAIN_DELTAS: &[u8] = &[8, 12, 16];
+#[cfg(feature = "aac")]
+const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIASES: &[i16] =
+    &[8, 12, 16, 20];
+#[cfg(feature = "aac")]
+const AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIASES: &[i16] = &[4, 8, 12];
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AacStandardIdSelectedScaleFactorBalanceProfile {
+    pub recommended_global_gain: u8,
+    pub global_gain_deltas: &'static [u8],
+    pub magnitude_biases: &'static [i16],
+    pub selected_global_gain: u8,
+    pub selected_magnitude_bias: i16,
+    pub max_quantized_abs: u32,
+}
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AacSelectedScaleFactorProfile {
+    pub frames: usize,
+    pub channels: usize,
+    pub bands: usize,
+    pub raised_bands: usize,
+    pub max_delta: i16,
+    pub mean_delta: f64,
+}
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AacStandardIdSpectralSectionBreakdown {
+    pub frame_index: usize,
+    pub channel: usize,
+    pub start_band: usize,
+    pub end_band: usize,
+    pub start: usize,
+    pub end: usize,
+    pub codebook_id: u8,
+    pub max_abs: i32,
+    pub spectral_bits: usize,
+    pub best_alternative_codebook_id: Option<u8>,
+    pub best_alternative_spectral_bits: Option<usize>,
+}
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AacStandardIdPayloadBreakdown {
+    pub frames: usize,
+    pub channels: usize,
+    pub sections: usize,
+    pub escape_sections: usize,
+    pub max_abs: i32,
+    pub section_bits: usize,
+    pub scale_factor_bits: usize,
+    pub spectral_bits: usize,
+    pub escape_spectral_bits: usize,
+    pub dominant_spectral_section: Option<AacStandardIdSpectralSectionBreakdown>,
+    pub dominant_escape_section: Option<AacStandardIdSpectralSectionBreakdown>,
+}
+
+#[cfg(feature = "aac")]
+impl AacStandardIdPayloadBreakdown {
+    #[must_use]
+    pub fn total_bits(self) -> usize {
+        self.section_bits + self.scale_factor_bits + self.spectral_bits
+    }
+}
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AacStandardIdQualityControlProfile {
+    pub frames: usize,
+    pub channels: usize,
+    pub max_frame_len: usize,
+    pub min_frame_budget_slack: isize,
+    pub max_quantized_abs_limit: u32,
+    pub max_abs: i32,
+    pub sections: usize,
+    pub escape_sections: usize,
+    pub total_bits: usize,
+    pub spectral_bits: usize,
+    pub escape_spectral_bits: usize,
+    pub scale_factor_bits: usize,
+    pub scale_factor_bands: usize,
+    pub raised_scale_factor_bands: usize,
+    pub max_scale_factor_delta: i16,
+    pub mean_scale_factor_delta: f64,
+}
+
+#[cfg(feature = "aac")]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AacStandardIdQualityControlCandidate {
+    pub global_gain: u8,
+    pub scale_factor_magnitude_bias: i16,
+    pub max_quantized_abs: u32,
+    pub profile: AacStandardIdQualityControlProfile,
+}
 
 /// Decodes supported audio bytes into interleaved PCM.
 pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
@@ -882,6 +1014,57 @@ pub fn aac_standard_id_selected_scale_factor_magnitude_bias() -> i16 {
 }
 
 #[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(
+    channels: u16,
+) -> Result<u32, Error> {
+    Ok(aac_standard_id_selected_scale_factor_balance_profile(channels)?.max_quantized_abs)
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_balance_profile(
+    channels: u16,
+) -> Result<AacStandardIdSelectedScaleFactorBalanceProfile, Error> {
+    match channels {
+        1 => Ok(AacStandardIdSelectedScaleFactorBalanceProfile {
+            recommended_global_gain: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN,
+            global_gain_deltas: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GAIN_DELTAS,
+            magnitude_biases: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIASES,
+            selected_global_gain: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN,
+            selected_magnitude_bias:
+                AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIAS,
+            max_quantized_abs:
+                AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAX_QUANTIZED_ABS,
+        }),
+        2 => Ok(AacStandardIdSelectedScaleFactorBalanceProfile {
+            recommended_global_gain: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_GLOBAL_GAIN,
+            global_gain_deltas: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GAIN_DELTAS,
+            magnitude_biases:
+                AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIASES,
+            selected_global_gain: AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GLOBAL_GAIN,
+            selected_magnitude_bias:
+                AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIAS,
+            max_quantized_abs:
+                AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAX_QUANTIZED_ABS,
+        }),
+        _ => Err(Error::InvalidInput(
+            "AAC standard-id selected-scale-factor balanced profile requires mono or stereo",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_selected_scale_factor_balanced_parameters(
+    channels: u16,
+) -> Result<(u8, i16, u32), Error> {
+    let profile = aac_standard_id_selected_scale_factor_balance_profile(channels)?;
+    Ok((
+        profile.selected_global_gain,
+        profile.selected_magnitude_bias,
+        profile.max_quantized_abs,
+    ))
+}
+
+#[cfg(feature = "aac")]
 pub fn aac_standard_id_selected_scale_factor_parameters(channels: u16) -> Result<(u8, i16), Error> {
     Ok((
         aac_standard_id_selected_scale_factor_global_gain(channels)?,
@@ -901,6 +1084,91 @@ pub fn encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_s
         target_bitrate_bps,
         global_gain,
         scale_factor_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, Error> {
+    let channels = u8::try_from(pcm.channels)
+        .map_err(|_| Error::InvalidInput("AAC channel count is unsupported"))?;
+    let adts = AdtsConfig::aac_lc(pcm.sample_rate, channels);
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
+        .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
+    let channel_config = AacLongBlockConfig::new(
+        global_gain,
+        u8::try_from(offsets.len() - 1)
+            .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
+    );
+    let scale_factor_table = aac_scale_factor_delta_table();
+
+    match pcm.channels {
+        1 => encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            pcm,
+            0,
+            offsets,
+            scale_factor_magnitude_bias,
+            AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+            max_quantized_abs,
+            target_bitrate_bps,
+            &scale_factor_table,
+        ),
+        2 => encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            channel_config,
+            pcm,
+            0,
+            offsets,
+            scale_factor_magnitude_bias,
+            AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+            max_quantized_abs,
+            target_bitrate_bps,
+            &scale_factor_table,
+        ),
+        _ => Err(Error::InvalidInput(
+            "AAC standard spectral-offset selected-scale-factor max-quantized-abs bitrate encode requires mono or stereo PCM",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    let (global_gain, scale_factor_magnitude_bias, max_quantized_abs) =
+        aac_standard_id_selected_scale_factor_balanced_parameters(pcm.channels)?;
+    encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
     )
 }
 
@@ -966,6 +1234,610 @@ pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate
         global_gain,
         scale_factor_magnitude_bias,
     )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let channels = u8::try_from(pcm.channels)
+        .map_err(|_| Error::InvalidInput("AAC standard frame details require u8 channels"))?;
+    let adts = AdtsConfig::aac_lc(pcm.sample_rate, channels);
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate).ok_or(
+        Error::UnsupportedFeature("AAC-LC scale-factor offsets for sample rate"),
+    )?;
+    let channel_config = AacLongBlockConfig::new(
+        global_gain,
+        u8::try_from(offsets.len() - 1)
+            .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
+    );
+    let scale_factor_table = aac_scale_factor_delta_table();
+    match pcm.channels {
+        1 => select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            pcm,
+            0,
+            offsets,
+            scale_factor_magnitude_bias,
+            AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+            max_quantized_abs,
+            target_bitrate_bps,
+            &scale_factor_table,
+        ),
+        2 => select_aac_lc_stereo_pcm_stream_frame_details_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+            adts,
+            channel_config,
+            channel_config,
+            pcm,
+            0,
+            offsets,
+            scale_factor_magnitude_bias,
+            AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+            max_quantized_abs,
+            target_bitrate_bps,
+            &scale_factor_table,
+        ),
+        _ => Err(Error::InvalidInput(
+            "AAC standard selected-scale-factor frame details require mono or stereo PCM",
+        )),
+    }
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<AacPcmFrameStepSelection>, Error> {
+    let (global_gain, scale_factor_magnitude_bias, max_quantized_abs) =
+        aac_standard_id_selected_scale_factor_balanced_parameters(pcm.channels)?;
+    aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<AacSelectedScaleFactorProfile, Error> {
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
+        .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
+    let mut bands = 0usize;
+    let mut raised_bands = 0usize;
+    let mut max_delta = 0i16;
+    let mut delta_sum = 0i64;
+
+    for (frame_index, detail) in details.iter().enumerate() {
+        let start_frame = frame_index
+            .checked_mul(1024)
+            .ok_or(Error::InvalidInput("AAC frame index overflows"))?;
+        for channel in 0..usize::from(pcm.channels) {
+            let quantized = quantize_pcm_long_block(pcm, channel, start_frame, detail.step)?;
+            let scale_factors =
+                select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias(
+                    &quantized,
+                    offsets,
+                    i16::from(global_gain),
+                    scale_factor_magnitude_bias,
+                )?;
+            for scale_factor in scale_factors {
+                let delta = scale_factor - i16::from(global_gain);
+                bands += 1;
+                raised_bands += usize::from(delta > 0);
+                max_delta = max_delta.max(delta);
+                delta_sum += i64::from(delta);
+            }
+        }
+    }
+
+    if bands == 0 {
+        return Err(Error::InvalidInput(
+            "AAC scale-factor profile requires at least one band",
+        ));
+    }
+
+    Ok(AacSelectedScaleFactorProfile {
+        frames: details.len(),
+        channels: usize::from(pcm.channels),
+        bands,
+        raised_bands,
+        max_delta,
+        mean_delta: delta_sum as f64 / bands as f64,
+    })
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_recommended_standard_selected_scale_factor_profile_for_frame_details(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+) -> Result<AacSelectedScaleFactorProfile, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+        pcm,
+        details,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_balanced_standard_selected_scale_factor_profile_for_frame_details(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+) -> Result<AacSelectedScaleFactorProfile, Error> {
+    let profile = aac_standard_id_selected_scale_factor_balance_profile(pcm.channels)?;
+    aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+        pcm,
+        details,
+        profile.selected_global_gain,
+        profile.selected_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
+fn aac_scale_factor_band_index(offsets: &[usize], offset: usize) -> Result<usize, Error> {
+    offsets
+        .iter()
+        .position(|band_offset| *band_offset == offset)
+        .ok_or(Error::InvalidInput(
+            "AAC scale-factor band offset not found",
+        ))
+}
+
+#[cfg(feature = "aac")]
+fn aac_spectral_pairs_for_i32_slice(quantized: &[i32]) -> Result<Vec<AacSpectralPair>, Error> {
+    if quantized.len() % 2 != 0 {
+        return Err(Error::InvalidInput(
+            "AAC spectral pair slice length must be even",
+        ));
+    }
+    quantized
+        .chunks_exact(2)
+        .map(|pair| {
+            Ok(AacSpectralPair::new(
+                i16::try_from(pair[0])
+                    .map_err(|_| Error::InvalidInput("AAC spectral pair x exceeds i16"))?,
+                i16::try_from(pair[1])
+                    .map_err(|_| Error::InvalidInput("AAC spectral pair y exceeds i16"))?,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(feature = "aac")]
+fn aac_spectral_quads_for_i32_slice(quantized: &[i32]) -> Result<Vec<AacSpectralQuad>, Error> {
+    if quantized.len() % 4 != 0 {
+        return Err(Error::InvalidInput(
+            "AAC spectral quad slice length must be divisible by four",
+        ));
+    }
+    quantized
+        .chunks_exact(4)
+        .map(|quad| {
+            Ok(AacSpectralQuad::new(
+                i16::try_from(quad[0])
+                    .map_err(|_| Error::InvalidInput("AAC spectral quad v exceeds i16"))?,
+                i16::try_from(quad[1])
+                    .map_err(|_| Error::InvalidInput("AAC spectral quad w exceeds i16"))?,
+                i16::try_from(quad[2])
+                    .map_err(|_| Error::InvalidInput("AAC spectral quad x exceeds i16"))?,
+                i16::try_from(quad[3])
+                    .map_err(|_| Error::InvalidInput("AAC spectral quad y exceeds i16"))?,
+            ))
+        })
+        .collect()
+}
+
+#[cfg(feature = "aac")]
+fn aac_standard_id_section_codebook_costs(quantized: &[i32]) -> Result<Vec<(u8, usize)>, Error> {
+    if quantized.iter().all(|coeff| *coeff == 0) {
+        return Ok(vec![(0, 0)]);
+    }
+
+    let mut costs = Vec::new();
+    if quantized.len() % 4 == 0 {
+        let quads = aac_spectral_quads_for_i32_slice(quantized)?;
+        for (codebook_id, table) in [
+            (1, aac_signed_quads1_table()),
+            (2, aac_signed_quads2_table()),
+        ] {
+            if let Ok(packed) = pack_spectral_quads_with_table(&quads, table) {
+                costs.push((codebook_id, packed.bit_len));
+            }
+        }
+        for (codebook_id, table) in [
+            (3, aac_unsigned_quads3_table()),
+            (4, aac_unsigned_quads4_table()),
+        ] {
+            if let Ok(packed) = pack_spectral_quads_with_sign_bits(&quads, table) {
+                costs.push((codebook_id, packed.bit_len));
+            }
+        }
+    }
+
+    if quantized.len() % 2 == 0 {
+        let pairs = aac_spectral_pairs_for_i32_slice(quantized)?;
+        for (codebook_id, table) in [
+            (5, aac_signed_pairs5_table()),
+            (6, aac_signed_pairs6_table()),
+        ] {
+            if let Ok(packed) = pack_spectral_pairs_with_table(&pairs, table) {
+                costs.push((codebook_id, packed.bit_len));
+            }
+        }
+        for (codebook_id, table) in [
+            (7, aac_unsigned_pairs7_table()),
+            (8, aac_unsigned_pairs8_table()),
+            (9, aac_unsigned_pairs9_table()),
+            (10, aac_unsigned_pairs10_table()),
+            (11, aac_escape_table()),
+        ] {
+            if let Ok(packed) = pack_spectral_pairs_with_sign_bits(&pairs, table) {
+                costs.push((codebook_id, packed.bit_len));
+            }
+        }
+    }
+
+    if costs.is_empty() {
+        return Err(Error::UnsupportedFeature(
+            "AAC section has no packable standard-id codebook candidates",
+        ));
+    }
+    costs.sort_by_key(|(codebook_id, bit_len)| (*bit_len, *codebook_id));
+    costs.dedup_by_key(|(codebook_id, _)| *codebook_id);
+    Ok(costs)
+}
+
+#[cfg(feature = "aac")]
+fn max_abs_i32(values: &[i32]) -> Result<i32, Error> {
+    values
+        .iter()
+        .map(|value| {
+            value
+                .checked_abs()
+                .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))
+        })
+        .try_fold(0, |acc, value| value.map(|value| acc.max(value)))
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<AacStandardIdPayloadBreakdown, Error> {
+    let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
+        .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
+    let scale_factor_table = aac_scale_factor_delta_table();
+
+    let mut sections = 0usize;
+    let mut escape_sections = 0usize;
+    let mut max_abs = 0i32;
+    let mut section_bits = 0usize;
+    let mut scale_factor_bits = 0usize;
+    let mut spectral_bits = 0usize;
+    let mut escape_spectral_bits = 0usize;
+    let mut dominant_spectral_section = None;
+    let mut dominant_escape_section = None;
+
+    for (frame_index, detail) in details.iter().enumerate() {
+        let start_frame = frame_index
+            .checked_mul(1024)
+            .ok_or(Error::InvalidInput("AAC frame index overflows"))?;
+        for channel in 0..usize::from(pcm.channels) {
+            let quantized = quantize_pcm_long_block(pcm, channel, start_frame, detail.step)?;
+            let planned_sections =
+                plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(&quantized, offsets)?;
+            let scale_factors =
+                select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias(
+                    &quantized,
+                    offsets,
+                    i16::from(global_gain),
+                    scale_factor_magnitude_bias,
+                )?;
+            let scale_factor_deltas = plan_spectral_scale_factor_deltas_by_offsets(
+                &planned_sections,
+                offsets,
+                &scale_factors,
+                i16::from(global_gain),
+            )?;
+            let packed_scale_factors =
+                pack_scale_factor_deltas_with_table(&scale_factor_deltas, &scale_factor_table)?;
+            let split_without_scale_factors =
+                split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_by_bit_cost(
+                    &quantized, offsets,
+                )?;
+            let split_with_scale_factors =
+                split_aac_lc_standard_spectral_payload_with_offsets_and_sign_bits_and_scale_factor_bits_by_bit_cost(
+                    &quantized,
+                    offsets,
+                    packed_scale_factors,
+                )?;
+
+            if split_without_scale_factors.spectral_bits.bit_len
+                != split_with_scale_factors.spectral_bits.bit_len
+            {
+                return Err(Error::InvalidInput(
+                    "AAC standard-id payload split changed spectral bits when adding scale factors",
+                ));
+            }
+
+            sections += planned_sections.len();
+            escape_sections += planned_sections
+                .iter()
+                .filter(|section| section.codebook_id == 11)
+                .count();
+            for section in &planned_sections {
+                let section_payload =
+                    split_aac_lc_standard_sectioned_spectral_payload_with_offsets_and_sign_bits(
+                        std::slice::from_ref(section),
+                        &quantized,
+                        offsets,
+                    )?;
+                let section_spectral_bits = section_payload.spectral_bits.bit_len;
+                let section_max_abs = max_abs_i32(&quantized[section.start..section.end])?;
+                let section_codebook_costs =
+                    aac_standard_id_section_codebook_costs(&quantized[section.start..section.end])?;
+                let best_alternative = section_codebook_costs
+                    .iter()
+                    .copied()
+                    .find(|(codebook_id, _)| *codebook_id != section.codebook_id);
+                let section_breakdown = AacStandardIdSpectralSectionBreakdown {
+                    frame_index,
+                    channel,
+                    start_band: aac_scale_factor_band_index(offsets, section.start)?,
+                    end_band: aac_scale_factor_band_index(offsets, section.end)?,
+                    start: section.start,
+                    end: section.end,
+                    codebook_id: section.codebook_id,
+                    max_abs: section_max_abs,
+                    spectral_bits: section_spectral_bits,
+                    best_alternative_codebook_id: best_alternative
+                        .map(|(codebook_id, _)| codebook_id),
+                    best_alternative_spectral_bits: best_alternative.map(|(_, bit_len)| bit_len),
+                };
+                if section.codebook_id == 11 {
+                    escape_spectral_bits += section_spectral_bits;
+                    if dominant_escape_section.is_none_or(
+                        |dominant: AacStandardIdSpectralSectionBreakdown| {
+                            section_breakdown.spectral_bits > dominant.spectral_bits
+                        },
+                    ) {
+                        dominant_escape_section = Some(section_breakdown);
+                    }
+                }
+                if dominant_spectral_section.is_none_or(
+                    |dominant: AacStandardIdSpectralSectionBreakdown| {
+                        section_breakdown.spectral_bits > dominant.spectral_bits
+                    },
+                ) {
+                    dominant_spectral_section = Some(section_breakdown);
+                }
+            }
+
+            max_abs = max_abs.max(max_abs_i32(&quantized)?);
+            section_bits += split_without_scale_factors
+                .section_and_scale_factor_bits
+                .bit_len;
+            scale_factor_bits += split_with_scale_factors
+                .section_and_scale_factor_bits
+                .bit_len
+                .checked_sub(
+                    split_without_scale_factors
+                        .section_and_scale_factor_bits
+                        .bit_len,
+                )
+                .ok_or(Error::InvalidInput(
+                    "AAC scale-factor bit count underflowed",
+                ))?;
+            spectral_bits += split_with_scale_factors.spectral_bits.bit_len;
+        }
+    }
+
+    Ok(AacStandardIdPayloadBreakdown {
+        frames: details.len(),
+        channels: usize::from(pcm.channels),
+        sections,
+        escape_sections,
+        max_abs,
+        section_bits,
+        scale_factor_bits,
+        spectral_bits,
+        escape_spectral_bits,
+        dominant_spectral_section,
+        dominant_escape_section,
+    })
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_recommended_standard_id_payload_breakdown_for_frame_details(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+) -> Result<AacStandardIdPayloadBreakdown, Error> {
+    let (global_gain, scale_factor_magnitude_bias) =
+        aac_standard_id_selected_scale_factor_parameters(pcm.channels)?;
+    aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+        pcm,
+        details,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_balanced_standard_id_payload_breakdown_for_frame_details(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+) -> Result<AacStandardIdPayloadBreakdown, Error> {
+    let profile = aac_standard_id_selected_scale_factor_balance_profile(pcm.channels)?;
+    aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+        pcm,
+        details,
+        profile.selected_global_gain,
+        profile.selected_magnitude_bias,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_quality_control_profile_for_frame_details_with_magnitude_bias_max_quantized_abs(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<AacStandardIdQualityControlProfile, Error> {
+    let breakdown = aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+        pcm,
+        details,
+        global_gain,
+        scale_factor_magnitude_bias,
+    )?;
+    let scale_factor_profile =
+        aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+            pcm,
+            details,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )?;
+    let max_frame_len = details
+        .iter()
+        .map(|detail| detail.frame_len)
+        .max()
+        .unwrap_or(0);
+    let min_frame_budget_slack = details
+        .iter()
+        .map(|detail| detail.frame_capacity_bytes as isize - detail.frame_len as isize)
+        .min()
+        .unwrap_or(0);
+
+    Ok(AacStandardIdQualityControlProfile {
+        frames: details.len(),
+        channels: usize::from(pcm.channels),
+        max_frame_len,
+        min_frame_budget_slack,
+        max_quantized_abs_limit: max_quantized_abs,
+        max_abs: breakdown.max_abs,
+        sections: breakdown.sections,
+        escape_sections: breakdown.escape_sections,
+        total_bits: breakdown.total_bits(),
+        spectral_bits: breakdown.spectral_bits,
+        escape_spectral_bits: breakdown.escape_spectral_bits,
+        scale_factor_bits: breakdown.scale_factor_bits,
+        scale_factor_bands: scale_factor_profile.bands,
+        raised_scale_factor_bands: scale_factor_profile.raised_bands,
+        max_scale_factor_delta: scale_factor_profile.max_delta,
+        mean_scale_factor_delta: scale_factor_profile.mean_delta,
+    })
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_balanced_standard_id_quality_control_profile_for_frame_details(
+    pcm: &AudioBuffer,
+    details: &[AacPcmFrameStepSelection],
+) -> Result<AacStandardIdQualityControlProfile, Error> {
+    let profile = aac_standard_id_selected_scale_factor_balance_profile(pcm.channels)?;
+    aac_standard_id_quality_control_profile_for_frame_details_with_magnitude_bias_max_quantized_abs(
+        pcm,
+        details,
+        profile.selected_global_gain,
+        profile.selected_magnitude_bias,
+        profile.max_quantized_abs,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_balanced_standard_id_quality_control_profile_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<AacStandardIdQualityControlProfile, Error> {
+    let details = aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+        pcm,
+        target_bitrate_bps,
+    )?;
+    aac_balanced_standard_id_quality_control_profile_for_frame_details(pcm, &details)
+}
+
+#[cfg(feature = "aac")]
+pub fn aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<AacStandardIdQualityControlCandidate>, Error> {
+    let balance_profile = aac_standard_id_selected_scale_factor_balance_profile(pcm.channels)?;
+    let mut candidates = Vec::new();
+
+    for &global_gain_delta in balance_profile.global_gain_deltas {
+        let global_gain = balance_profile
+            .recommended_global_gain
+            .saturating_add(global_gain_delta);
+        for &scale_factor_magnitude_bias in balance_profile.magnitude_biases {
+            let details =
+                aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                    pcm,
+                    target_bitrate_bps,
+                    global_gain,
+                    scale_factor_magnitude_bias,
+                    balance_profile.max_quantized_abs,
+                )?;
+            let profile =
+                aac_standard_id_quality_control_profile_for_frame_details_with_magnitude_bias_max_quantized_abs(
+                    pcm,
+                    &details,
+                    global_gain,
+                    scale_factor_magnitude_bias,
+                    balance_profile.max_quantized_abs,
+                )?;
+
+            if profile.min_frame_budget_slack >= 0
+                && profile.max_abs
+                    <= i32::try_from(balance_profile.max_quantized_abs).unwrap_or(i32::MAX)
+            {
+                candidates.push(AacStandardIdQualityControlCandidate {
+                    global_gain,
+                    scale_factor_magnitude_bias,
+                    max_quantized_abs: balance_profile.max_quantized_abs,
+                    profile,
+                });
+            }
+        }
+    }
+
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "AAC standard-id balanced quality-control profile found no constrained candidates",
+        ));
+    }
+
+    Ok(candidates)
 }
 
 #[cfg(feature = "aac")]
@@ -1052,6 +1924,53 @@ pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_
 ) -> Result<Vec<u8>, Error> {
     mux_aac_adts_as_m4a(
         &encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            pcm,
+            target_bitrate_bps,
+        )?,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(
+        &encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+            pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )?,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(
+        &encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+            pcm,
+            target_bitrate_bps,
+            max_quantized_abs,
+        )?,
+    )
+}
+
+#[cfg(feature = "aac")]
+pub fn encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    pcm: &AudioBuffer,
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, Error> {
+    mux_aac_adts_as_m4a(
+        &encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
             pcm,
             target_bitrate_bps,
         )?,
@@ -1429,7 +2348,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "mp3")]
-    fn production_mono_mp3_uses_entropy_targeted_perceptual_reservoir_path() {
+    fn production_mono_mp3_uses_low_band_gain_entropy_reservoir_path() {
         let frames = 8_usize;
         let samples_per_frame = 1152_usize;
         let samples = (0..(frames * samples_per_frame))
@@ -1441,16 +2360,8 @@ mod tests {
         let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
 
         let production = encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap();
-        let reservoir_details =
-            super::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
-                &pcm,
-                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-                128,
-                false,
-                0,
-                super::mpeg1_layer3_standard_table_provider(),
-            )
-            .unwrap();
+        let production_candidates =
+            super::mpeg1_layer3_production_pcm_step_candidates(pcm.channels).unwrap();
         let perceptual_cbr =
             super::encode_mpeg1_layer3_pcm_frames_with_perceptual_active_cbr_bitrate_and_table_provider(
                 &pcm,
@@ -1462,10 +2373,25 @@ mod tests {
             .unwrap();
         let entropy_targeted_reservoir = super::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
             &pcm,
-            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            production_candidates,
             128,
             false,
             0,
+            super::mpeg1_layer3_standard_table_provider(),
+        )
+        .unwrap();
+        let low_band_gain_reservoir = super::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider(
+            &pcm,
+            &[2.0],
+            128,
+            false,
+            0,
+            super::Layer3QuantizedBandGain {
+                band_start: 0,
+                band_end: 7,
+                gain: 1.5,
+            },
+            -4,
             super::mpeg1_layer3_standard_table_provider(),
         )
         .unwrap();
@@ -1477,24 +2403,24 @@ mod tests {
             let header = super::FrameHeader::parse(&production[offset..offset + 4]).unwrap();
             let mut reader = BitReader::new(&production[offset + 4..]);
             let main_data_begin = reader.read_bits(9).unwrap();
-            assert_eq!(
-                reservoir_details[frame_index].main_data_begin as u32,
-                main_data_begin
-            );
             max_main_data_begin = max_main_data_begin.max(main_data_begin);
             offset += header.frame_len();
             frame_index += 1;
         }
 
         assert_eq!(offset, production.len());
-        assert_eq!(frame_index, reservoir_details.len());
+        assert_eq!(frame_index, frames);
         assert!(
             max_main_data_begin > 0,
             "production MP3 stopped using the bit reservoir"
         );
         assert_eq!(
+            production, low_band_gain_reservoir,
+            "mono production MP3 should use the low-band gain/global-gain-bias entropy reservoir path"
+        );
+        assert_ne!(
             production, entropy_targeted_reservoir,
-            "mono production MP3 should use the entropy-targeted perceptual reservoir path"
+            "mono production MP3 should no longer use the older entropy-targeted perceptual reservoir payload"
         );
         assert_ne!(
             production, perceptual_cbr,
@@ -1528,10 +2454,12 @@ mod tests {
         let pcm = AudioBuffer::new(44_100, 2, samples).unwrap();
 
         let production = encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly).unwrap();
+        let production_candidates =
+            super::mpeg1_layer3_production_pcm_step_candidates(pcm.channels).unwrap();
         let entropy_targeted_details =
             super::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
                 &pcm,
-                super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                production_candidates,
                 128,
                 false,
                 0,
@@ -1558,7 +2486,7 @@ mod tests {
             .unwrap();
         let entropy_targeted_reservoir = super::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
             &pcm,
-            super::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            production_candidates,
             128,
             false,
             0,
@@ -1799,6 +2727,24 @@ mod tests {
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
+        let low_band_profile =
+            super::select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider(
+                &pcm,
+                &profile_candidates,
+                128,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let band_shape_profile =
+            super::select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider(
+                &pcm,
+                &profile_candidates,
+                128,
+                false,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
         let bit_allocation =
             super::select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(&pcm, 128, false, 0)
                 .unwrap();
@@ -1806,6 +2752,22 @@ mod tests {
             super::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_provider(
                 &pcm,
                 0.1,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let scalefac_scale_encoded =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_scalefac_scale_and_table_provider(
+                &pcm,
+                0.1,
+                true,
+                super::mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        let allowed_noise_scaled =
+            super::encode_mpeg1_layer3_pcm_frames_with_perceptual_allowed_noise_scale_and_table_provider(
+                &pcm,
+                0.1,
+                0.5,
                 super::mpeg1_layer3_standard_table_provider(),
             )
             .unwrap();
@@ -1856,6 +2818,27 @@ mod tests {
         assert!(candidate_profile
             .iter()
             .any(|profile| profile.nonzero_scale_factors > 0));
+        assert_eq!(low_band_profile.len(), profile_candidates.len());
+        assert!(low_band_profile.iter().all(|profile| {
+            profile.low_band_abs_sum <= profile.total_abs_sum
+                && profile.low_band_nonzero_lines <= profile.total_nonzero_lines
+        }));
+        assert!(low_band_profile
+            .iter()
+            .any(|profile| profile.low_band_nonzero_lines > 0));
+        assert_eq!(
+            band_shape_profile.len(),
+            profile_candidates.len() * super::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT
+        );
+        assert!(band_shape_profile.iter().all(|profile| {
+            profile.band < super::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT
+                && profile.band_start <= profile.band_end
+                && profile.band_abs_sum <= profile.total_abs_sum
+                && profile.band_nonzero_lines <= profile.total_nonzero_lines
+        }));
+        assert!(band_shape_profile
+            .iter()
+            .any(|profile| profile.band_nonzero_lines > 0));
         assert_eq!(bit_allocation.len(), 2);
         assert_eq!(
             bit_allocation
@@ -1873,6 +2856,10 @@ mod tests {
         assert_eq!(cbr_encoded.len(), bitrate_header.frame_len());
         assert_eq!(active_cbr_encoded.len(), bitrate_header.frame_len());
         assert_eq!(super::detect(&encoded), Some(Format::Mp3));
+        assert_eq!(scalefac_scale_encoded.len(), header.frame_len());
+        assert_eq!(super::detect(&scalefac_scale_encoded), Some(Format::Mp3));
+        assert_eq!(allowed_noise_scaled.len(), header.frame_len());
+        assert_eq!(super::detect(&allowed_noise_scaled), Some(Format::Mp3));
         assert_eq!(super::detect(&budgeted), Some(Format::Mp3));
         assert_eq!(
             super::FrameHeader::parse(&bitrate_encoded[..4]).unwrap(),
@@ -2255,7 +3242,74 @@ mod tests {
             super::aac_standard_id_selected_scale_factor_parameters(2).unwrap(),
             (126, 16)
         );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_balanced_parameters(1).unwrap(),
+            (136, 8, 2047)
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_balanced_parameters(2).unwrap(),
+            (138, 4, 1535)
+        );
+        let mono_balance_profile =
+            super::aac_standard_id_selected_scale_factor_balance_profile(1).unwrap();
+        let stereo_balance_profile =
+            super::aac_standard_id_selected_scale_factor_balance_profile(2).unwrap();
+        assert_eq!(mono_balance_profile.recommended_global_gain, 128);
+        assert_eq!(mono_balance_profile.global_gain_deltas, &[0, 2, 4, 6, 8]);
+        assert_eq!(mono_balance_profile.magnitude_biases, &[8, 12, 16, 20]);
+        assert_eq!(mono_balance_profile.selected_global_gain, 136);
+        assert_eq!(mono_balance_profile.selected_magnitude_bias, 8);
+        assert_eq!(mono_balance_profile.max_quantized_abs, 2047);
+        assert_eq!(stereo_balance_profile.recommended_global_gain, 126);
+        assert_eq!(stereo_balance_profile.global_gain_deltas, &[8, 12, 16]);
+        assert_eq!(stereo_balance_profile.magnitude_biases, &[4, 8, 12]);
+        assert_eq!(stereo_balance_profile.selected_global_gain, 138);
+        assert_eq!(stereo_balance_profile.selected_magnitude_bias, 4);
+        assert_eq!(stereo_balance_profile.max_quantized_abs, 1535);
+        let mono_quality_control_candidates =
+            super::aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+                &mono,
+                selected_mono_target_bitrate,
+            )
+            .unwrap();
+        let stereo_quality_control_candidates =
+            super::aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+                &stereo,
+                selected_stereo_target_bitrate,
+            )
+            .unwrap();
+        assert_eq!(
+            mono_quality_control_candidates.len(),
+            mono_balance_profile.global_gain_deltas.len()
+                * mono_balance_profile.magnitude_biases.len()
+        );
+        assert_eq!(
+            stereo_quality_control_candidates.len(),
+            stereo_balance_profile.global_gain_deltas.len()
+                * stereo_balance_profile.magnitude_biases.len()
+        );
+        assert!(mono_quality_control_candidates.iter().all(|candidate| {
+            candidate.profile.min_frame_budget_slack >= 0
+                && candidate.profile.max_abs <= i32::try_from(candidate.max_quantized_abs).unwrap()
+        }));
+        assert!(stereo_quality_control_candidates.iter().all(|candidate| {
+            candidate.profile.min_frame_budget_slack >= 0
+                && candidate.profile.max_abs <= i32::try_from(candidate.max_quantized_abs).unwrap()
+        }));
+        assert!(mono_quality_control_candidates.iter().any(|candidate| {
+            candidate.global_gain == mono_balance_profile.selected_global_gain
+                && candidate.scale_factor_magnitude_bias
+                    == mono_balance_profile.selected_magnitude_bias
+                && candidate.max_quantized_abs == mono_balance_profile.max_quantized_abs
+        }));
+        assert!(stereo_quality_control_candidates.iter().any(|candidate| {
+            candidate.global_gain == stereo_balance_profile.selected_global_gain
+                && candidate.scale_factor_magnitude_bias
+                    == stereo_balance_profile.selected_magnitude_bias
+                && candidate.max_quantized_abs == stereo_balance_profile.max_quantized_abs
+        }));
         assert!(super::aac_standard_id_selected_scale_factor_global_gain(3).is_err());
+        assert!(super::aac_standard_id_selected_scale_factor_balance_profile(3).is_err());
         assert_eq!(&mono_adts[..2], &[0xff, 0xf1]);
         assert_eq!(&stereo_adts[..2], &[0xff, 0xf1]);
         assert_eq!(mono_adts_high_level, mono_adts);
@@ -2802,8 +3856,199 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
+            super::aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(1).unwrap(),
+            super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAX_QUANTIZED_ABS
+        );
+        assert_eq!(
+            super::aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(2).unwrap(),
+            super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAX_QUANTIZED_ABS
+        );
+        assert_eq!(
             recommended_selected_standard_details,
             high_level_selected_standard_details
+        );
+        let recommended_selected_profile =
+            super::aac_recommended_standard_selected_scale_factor_profile_for_frame_details(
+                &pcm,
+                &recommended_selected_standard_details,
+            )
+            .unwrap();
+        let expected_recommended_selected_profile =
+            super::aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+                &pcm,
+                &recommended_selected_standard_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_profile,
+            expected_recommended_selected_profile
+        );
+        assert_eq!(recommended_selected_profile.frames, 2);
+        assert_eq!(recommended_selected_profile.channels, 1);
+        assert_eq!(recommended_selected_profile.bands, 2 * max_sfb);
+        assert!(recommended_selected_profile.mean_delta.is_finite());
+        let recommended_payload_breakdown =
+            super::aac_recommended_standard_id_payload_breakdown_for_frame_details(
+                &pcm,
+                &recommended_selected_standard_details,
+            )
+            .unwrap();
+        let expected_recommended_payload_breakdown =
+            super::aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+                &pcm,
+                &recommended_selected_standard_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_payload_breakdown,
+            expected_recommended_payload_breakdown
+        );
+        assert_eq!(recommended_payload_breakdown.frames, 2);
+        assert_eq!(recommended_payload_breakdown.channels, 1);
+        assert!(recommended_payload_breakdown.sections > 0);
+        assert!(recommended_payload_breakdown.spectral_bits > 0);
+        assert!(
+            recommended_payload_breakdown.total_bits()
+                >= recommended_payload_breakdown.spectral_bits
+        );
+        let balanced_selected_standard_stream =
+            super::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        let expected_balanced_selected_standard_stream =
+            super::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                &pcm,
+                128_000,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_BALANCED_MAGNITUDE_BIAS,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAX_QUANTIZED_ABS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_standard_stream,
+            expected_balanced_selected_standard_stream
+        );
+        let balanced_selected_standard_details =
+            super::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        let expected_balanced_selected_standard_details =
+            super::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                &pcm,
+                128_000,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_BALANCED_MAGNITUDE_BIAS,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAX_QUANTIZED_ABS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_standard_details,
+            expected_balanced_selected_standard_details
+        );
+        let balanced_selected_profile =
+            super::aac_balanced_standard_selected_scale_factor_profile_for_frame_details(
+                &pcm,
+                &balanced_selected_standard_details,
+            )
+            .unwrap();
+        let expected_balanced_selected_profile =
+            super::aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+                &pcm,
+                &balanced_selected_standard_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_profile,
+            expected_balanced_selected_profile
+        );
+        assert_eq!(balanced_selected_profile.frames, 2);
+        assert_eq!(balanced_selected_profile.channels, 1);
+        assert_eq!(balanced_selected_profile.bands, 2 * max_sfb);
+        assert!(balanced_selected_profile.mean_delta.is_finite());
+        let balanced_payload_breakdown =
+            super::aac_balanced_standard_id_payload_breakdown_for_frame_details(
+                &pcm,
+                &balanced_selected_standard_details,
+            )
+            .unwrap();
+        let expected_balanced_payload_breakdown =
+            super::aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+                &pcm,
+                &balanced_selected_standard_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MONO_BALANCED_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_payload_breakdown,
+            expected_balanced_payload_breakdown
+        );
+        assert_eq!(balanced_payload_breakdown.frames, 2);
+        assert_eq!(balanced_payload_breakdown.channels, 1);
+        assert!(balanced_payload_breakdown.sections > 0);
+        assert!(balanced_payload_breakdown.spectral_bits > 0);
+        let balanced_selected_standard_m4a =
+            super::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &pcm, 128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            super::demux_m4a_as_aac_adts(&balanced_selected_standard_m4a).unwrap(),
+            balanced_selected_standard_stream
+        );
+        let high_level_selected_standard_limited_stream =
+            super::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                &pcm, 128_000, 128, 16, 12,
+            )
+            .unwrap();
+        let core_selected_standard_limited_stream =
+            super::encode_pcm_mono_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 1),
+                super::AacLongBlockConfig::new(128, max_sfb as u8),
+                &pcm,
+                0,
+                long_offsets,
+                16,
+                super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+                12,
+                128_000,
+                &super::aac_scale_factor_delta_table(),
+            )
+            .unwrap();
+        assert_eq!(
+            high_level_selected_standard_limited_stream,
+            core_selected_standard_limited_stream
+        );
+        let recommended_selected_standard_limited_stream =
+            super::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+                &pcm, 128_000, 12,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_limited_stream,
+            high_level_selected_standard_limited_stream
+        );
+        let recommended_selected_standard_limited_details =
+            super::aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+                &pcm, 128_000, 12,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_limited_details
+                .iter()
+                .map(|selection| selection.frame_len)
+                .max(),
+            Some(max_adts_frame_len(
+                &recommended_selected_standard_limited_stream
+            ))
         );
         let recommended_selected_standard_m4a =
             super::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
@@ -2814,6 +4059,12 @@ mod tests {
             recommended_selected_standard_m4a,
             high_level_selected_standard_m4a
         );
+        let recommended_selected_standard_limited_m4a =
+            super::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+                &pcm, 128_000, 12,
+            )
+            .unwrap();
+        assert_eq!(&recommended_selected_standard_limited_m4a[4..8], b"ftyp");
         let standard_bitrate_details =
             super::select_aac_lc_mono_pcm_stream_frame_details_with_standard_spectral_offsets_and_scale_factors_and_bitrate_by_bit_cost(
                 super::AdtsConfig::aac_lc(44_100, 1),
@@ -3020,6 +4271,148 @@ mod tests {
         assert_eq!(
             recommended_selected_standard_stereo_details,
             core_recommended_selected_standard_stereo_details
+        );
+        let recommended_selected_standard_stereo_profile =
+            super::aac_recommended_standard_selected_scale_factor_profile_for_frame_details(
+                &stereo_pcm,
+                &recommended_selected_standard_stereo_details,
+            )
+            .unwrap();
+        let expected_recommended_selected_standard_stereo_profile =
+            super::aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+                &stereo_pcm,
+                &recommended_selected_standard_stereo_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_stereo_profile,
+            expected_recommended_selected_standard_stereo_profile
+        );
+        assert_eq!(recommended_selected_standard_stereo_profile.frames, 2);
+        assert_eq!(recommended_selected_standard_stereo_profile.channels, 2);
+        assert_eq!(
+            recommended_selected_standard_stereo_profile.bands,
+            4 * max_sfb
+        );
+        assert!(recommended_selected_standard_stereo_profile
+            .mean_delta
+            .is_finite());
+        let balanced_selected_standard_stereo_stream =
+            super::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+                &stereo_pcm,
+                256_000,
+            )
+            .unwrap();
+        let expected_balanced_selected_standard_stereo_stream =
+            super::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                &stereo_pcm,
+                256_000,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIAS,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAX_QUANTIZED_ABS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_standard_stereo_stream,
+            expected_balanced_selected_standard_stereo_stream
+        );
+        let balanced_selected_standard_stereo_details =
+            super::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+                &stereo_pcm,
+                256_000,
+            )
+            .unwrap();
+        let expected_balanced_selected_standard_stereo_details =
+            super::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                &stereo_pcm,
+                256_000,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIAS,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAX_QUANTIZED_ABS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_standard_stereo_details,
+            expected_balanced_selected_standard_stereo_details
+        );
+        let balanced_selected_standard_stereo_profile =
+            super::aac_balanced_standard_selected_scale_factor_profile_for_frame_details(
+                &stereo_pcm,
+                &balanced_selected_standard_stereo_details,
+            )
+            .unwrap();
+        let expected_balanced_selected_standard_stereo_profile =
+            super::aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+                &stereo_pcm,
+                &balanced_selected_standard_stereo_details,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_GLOBAL_GAIN,
+                super::AAC_STANDARD_ID_SELECTED_SCALE_FACTOR_STEREO_BALANCED_MAGNITUDE_BIAS,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_selected_standard_stereo_profile,
+            expected_balanced_selected_standard_stereo_profile
+        );
+        assert_eq!(balanced_selected_standard_stereo_profile.frames, 2);
+        assert_eq!(balanced_selected_standard_stereo_profile.channels, 2);
+        assert_eq!(balanced_selected_standard_stereo_profile.bands, 4 * max_sfb);
+        assert!(balanced_selected_standard_stereo_profile
+            .mean_delta
+            .is_finite());
+        let recommended_selected_standard_stereo_limited_stream =
+            super::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+                &stereo_pcm,
+                256_000,
+                12,
+            )
+            .unwrap();
+        let core_recommended_selected_standard_stereo_limited_stream =
+            super::encode_pcm_stereo_long_block_adts_stream_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_max_quantized_abs_and_bitrate_by_bit_cost(
+                super::AdtsConfig::aac_lc(44_100, 2),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                super::AacLongBlockConfig::new(126, max_sfb as u8),
+                &stereo_pcm,
+                0,
+                long_offsets,
+                16,
+                super::AAC_STANDARD_ID_PCM_STEP_CANDIDATES,
+                12,
+                256_000,
+                &super::aac_scale_factor_delta_table(),
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_stereo_limited_stream,
+            core_recommended_selected_standard_stereo_limited_stream
+        );
+        let recommended_selected_standard_stereo_limited_details =
+            super::aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+                &stereo_pcm,
+                256_000,
+                12,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_selected_standard_stereo_limited_details
+                .iter()
+                .map(|selection| selection.frame_len)
+                .max(),
+            Some(max_adts_frame_len(
+                &recommended_selected_standard_stereo_limited_stream
+            ))
+        );
+        let recommended_selected_standard_stereo_limited_m4a =
+            super::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+                &stereo_pcm,
+                256_000,
+                12,
+            )
+            .unwrap();
+        assert_eq!(
+            &recommended_selected_standard_stereo_limited_m4a[4..8],
+            b"ftyp"
         );
         assert_eq!(
             high_level_selected_standard_stereo_details

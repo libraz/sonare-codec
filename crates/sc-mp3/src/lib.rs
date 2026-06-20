@@ -95,6 +95,29 @@ pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     f32::MAX,
 ];
 
+pub const MPEG1_LAYER3_MONO_PRODUCTION_PCM_STEP_CANDIDATES: &[f32] = &[
+    2.0,
+    5.0,
+    10.0,
+    20.0,
+    50.0,
+    100.0,
+    200.0,
+    500.0,
+    1_000.0,
+    f32::MAX,
+];
+
+pub fn mpeg1_layer3_production_pcm_step_candidates(channels: u16) -> Result<&'static [f32], Error> {
+    match channels {
+        1 => Ok(MPEG1_LAYER3_MONO_PRODUCTION_PCM_STEP_CANDIDATES),
+        2 => Ok(MPEG1_LAYER3_PCM_STEP_CANDIDATES),
+        _ => Err(Error::UnsupportedFeature(
+            "MP3 production step candidates require mono/stereo",
+        )),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Layer3PcmFrameStepSelection {
     pub step: f32,
@@ -110,6 +133,56 @@ pub struct Layer3PerceptualCandidateProfile {
     pub nonzero_scale_factors: usize,
     pub scale_factor_bands: usize,
     pub max_scale_factor: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3LowBandSpectralShapeCandidateProfile {
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_capacity_bits: usize,
+    pub low_band_abs_sum: u64,
+    pub total_abs_sum: u64,
+    pub low_band_nonzero_lines: usize,
+    pub total_nonzero_lines: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3BandSpectralShapeCandidateProfile {
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_capacity_bits: usize,
+    pub band: usize,
+    pub band_start: usize,
+    pub band_end: usize,
+    pub band_abs_sum: u64,
+    pub band_nonzero_lines: usize,
+    pub total_abs_sum: u64,
+    pub total_nonzero_lines: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3QualityGuardedCandidateProfile {
+    pub step: f32,
+    pub payload_bit_len: usize,
+    pub frame_capacity_bits: usize,
+    pub perceptual_granules: usize,
+    pub calibrated_granules: usize,
+    pub quality_guard_compared_granules: usize,
+    pub quality_guard_distortion_delta: f64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Layer3ScaleFactorBandBias {
+    pub band_start: usize,
+    pub band_end: usize,
+    pub bias: i8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3QuantizedBandGain {
+    pub band_start: usize,
+    pub band_end: usize,
+    pub gain: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -153,6 +226,16 @@ pub struct Layer3EntropyTargetedReservoirFrameSelection {
     pub quality_guard_distortion_delta: f64,
     pub entropy_target_bits: usize,
     pub used_entropy_target_budget: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer3EntropyTargetUtilizationProfile {
+    pub frames: usize,
+    pub used_entropy_target_frames: usize,
+    pub payload_bits: usize,
+    pub entropy_budget_bits: usize,
+    pub utilization: f64,
+    pub max_entropy_budget_slack_bits: usize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -512,11 +595,11 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 /// Silent input routes through the compact zero-spectral frame scaffold.
 /// Non-silent mono input uses the psychoacoustic scale-factor long-block
 /// scaffold with a constant-bitrate padding schedule and the bit-reservoir
-/// packer. Non-silent mono/stereo now route through the entropy-targeted
-/// perceptual reservoir selector, which feeds the existing FFT masking-based
-/// perceptual-entropy allocation into the frame budget. The quantizer and
-/// quality proxy are still intentionally coarse, so full rate control,
-/// stereo true-polyphase readiness, and VBR are still incomplete.
+/// packer. Non-silent mono routes through the entropy-targeted low-band
+/// gain/global-gain-bias reservoir profile, while stereo keeps the
+/// entropy-targeted perceptual reservoir selector. The quantizer and quality
+/// proxy are still intentionally coarse, so full rate control, stereo
+/// true-polyphase readiness, and VBR are still incomplete.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(
@@ -524,10 +607,25 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         ));
     }
 
-    if pcm.samples.iter().any(|sample| *sample != 0.0) {
+    if pcm.samples.iter().any(|sample| *sample != 0.0) && pcm.channels == 1 {
+        encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider(
+            pcm,
+            &[2.0],
+            128,
+            false,
+            0,
+            Layer3QuantizedBandGain {
+                band_start: 0,
+                band_end: 7,
+                gain: 1.5,
+            },
+            -4,
+            mpeg1_layer3_standard_table_provider(),
+        )
+    } else if pcm.samples.iter().any(|sample| *sample != 0.0) {
         encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
             pcm,
-            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            mpeg1_layer3_production_pcm_step_candidates(pcm.channels)?,
             128,
             false,
             0,
@@ -578,6 +676,94 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factors_and_table_pr
     let header = mpeg1_layer3_header_for_pcm(pcm)?;
     encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factors_and_table_provider(
         header, pcm, step, provider,
+    )
+}
+
+/// Encodes PCM through the perceptual scale-factor path with explicit
+/// `scalefac_scale`.
+///
+/// This diagnostic helper lets rate-control work compare the normal 0.5-step
+/// scale-factor attenuation (`false`) with the coarser 1.0-step attenuation
+/// (`true`) before changing production selection.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_scalefac_scale_and_table_provider(
+    pcm: &AudioBuffer,
+    step: f32,
+    scalefac_scale: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scalefac_scale_and_table_provider(
+        header,
+        pcm,
+        step,
+        scalefac_scale,
+        provider,
+    )
+}
+
+/// Encodes PCM through the perceptual scale-factor path with an explicit
+/// allowed-noise multiplier.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_allowed_noise_scale_and_table_provider(
+    pcm: &AudioBuffer,
+    step: f32,
+    allowed_noise_scale: f64,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_allowed_noise_scale_and_table_provider(
+        header,
+        pcm,
+        step,
+        allowed_noise_scale,
+        provider,
+    )
+}
+
+/// Encodes PCM through the perceptual scale-factor path with a diagnostic
+/// per-band scale-factor bias applied after allocation.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factor_band_bias_and_table_provider(
+    pcm: &AudioBuffer,
+    step: f32,
+    band_bias: Layer3ScaleFactorBandBias,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factor_band_bias_and_table_provider(
+        header, pcm, step, band_bias, provider,
+    )
+}
+
+/// Encodes PCM through the perceptual scale-factor path with a diagnostic
+/// per-band gain applied to quantized spectral coefficients after allocation.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_table_provider(
+    pcm: &AudioBuffer,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_quantized_band_gain_and_table_provider(
+        header, pcm, step, band_gain, provider,
+    )
+}
+
+/// Encodes PCM through the perceptual scale-factor path with diagnostic
+/// quantized band gain and a global-gain bias.
+pub fn encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+    pcm: &AudioBuffer,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let header = mpeg1_layer3_header_for_pcm(pcm)?;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+        header,
+        pcm,
+        step,
+        band_gain,
+        global_gain_bias,
+        provider,
     )
 }
 
@@ -970,6 +1156,10 @@ enum Layer3ReservoirPayloadMode {
     Calibrated,
     PerceptualActive,
     PerceptualQualityGuarded,
+    PerceptualQuantizedBandGainGlobalGainBias {
+        band_gain: Layer3QuantizedBandGain,
+        global_gain_bias: i16,
+    },
 }
 
 /// Packs one Layer III frame at the finest quantizer step whose byte-padded
@@ -993,7 +1183,7 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
     }
     let frame_granules = header.layer3_granule_count() * header.channel_count();
     let mut best: Option<Layer3ReservoirPackedFrame> = None;
-    let mut best_active: Option<Layer3ReservoirPackedFrame> = None;
+    let mut best_active: Option<(Layer3ReservoirPackedFrame, usize)> = None;
     for &step in candidates {
         if !step.is_finite() || step <= 0.0 {
             return Err(Error::InvalidInput(
@@ -1066,6 +1256,29 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
                     },
                 )
             }
+            Layer3ReservoirPayloadMode::PerceptualQuantizedBandGainGlobalGainBias {
+                band_gain,
+                global_gain_bias,
+            } => {
+                pack_mpeg1_layer3_pcm_frame_perceptual_quantized_band_gain_and_global_gain_bias_payloads_with_table_provider(
+                    header,
+                    pcm,
+                    start_frame,
+                    step,
+                    band_gain,
+                    global_gain_bias,
+                    provider,
+                )
+                .map(|(side_info, main_data)| Layer3ReservoirPackedFrame {
+                    step,
+                    side_info,
+                    main_data,
+                    perceptual_granules: frame_granules,
+                    calibrated_granules: 0,
+                    quality_guard_compared_granules: 0,
+                    quality_guard_distortion_delta: 0.0,
+                })
+            }
         };
         let Ok(candidate) = candidate_result else {
             continue;
@@ -1079,24 +1292,51 @@ fn pack_mpeg1_layer3_reservoir_frame_with_table_provider(
         if layer3_side_info_exceeds_part2_3_limit(&candidate.side_info, header) {
             continue;
         }
-        let active_candidate = matches!(mode, Layer3ReservoirPayloadMode::PerceptualActive)
-            && header.channel_count() == 1
-            && count_mpeg1_layer3_pcm_frame_perceptual_nonzero_scale_factors(
+        let active_scale_factors = if matches!(
+            mode,
+            Layer3ReservoirPayloadMode::PerceptualActive
+                | Layer3ReservoirPayloadMode::PerceptualQualityGuarded
+        ) && header.channel_count() == 1
+        {
+            count_mpeg1_layer3_pcm_frame_perceptual_nonzero_scale_factors(
                 header,
                 pcm,
                 start_frame,
                 step,
-            )? > 0;
-        if active_candidate {
-            best_active =
-                select_better_mpeg1_layer3_reservoir_candidate(best_active, candidate.clone());
+            )?
+        } else {
+            0
+        };
+        if active_scale_factors > 0 {
+            best_active = select_better_mpeg1_layer3_active_reservoir_candidate(
+                best_active,
+                candidate.clone(),
+                active_scale_factors,
+            );
         }
         // Prefer the smallest fitting step (finest quantization, best quality).
         best = select_better_mpeg1_layer3_reservoir_candidate(best, candidate);
     }
     best_active
+        .map(|(candidate, _)| candidate)
         .or(best)
         .ok_or(Error::UnsupportedFeature("MP3 reservoir step search"))
+}
+
+fn select_better_mpeg1_layer3_active_reservoir_candidate(
+    selected: Option<(Layer3ReservoirPackedFrame, usize)>,
+    candidate: Layer3ReservoirPackedFrame,
+    nonzero_scale_factors: usize,
+) -> Option<(Layer3ReservoirPackedFrame, usize)> {
+    match selected {
+        Some((best, best_nonzero))
+            if nonzero_scale_factors < best_nonzero
+                || (nonzero_scale_factors == best_nonzero && candidate.step >= best.step) =>
+        {
+            Some((best, best_nonzero))
+        }
+        _ => Some((candidate, nonzero_scale_factors)),
+    }
 }
 
 fn select_better_mpeg1_layer3_reservoir_candidate(
@@ -1460,13 +1700,85 @@ pub fn select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_w
     .collect()
 }
 
+/// Summarizes how much of the rounded entropy-target frame budgets were used.
+///
+/// The budget calculation matches the entropy-targeted reservoir selector:
+/// per-frame entropy targets are rounded up to whole bytes, clamped to the
+/// available frame plus borrowed reservoir budget, and then compared with the
+/// actually selected main-data payload.
+pub fn mpeg1_layer3_entropy_target_utilization_profile(
+    details: &[Layer3EntropyTargetedReservoirFrameSelection],
+) -> Layer3EntropyTargetUtilizationProfile {
+    let mut used_entropy_target_frames = 0_usize;
+    let mut payload_bits = 0_usize;
+    let mut entropy_budget_bits = 0_usize;
+    let mut max_entropy_budget_slack_bits = 0_usize;
+
+    for detail in details {
+        if !detail.used_entropy_target_budget {
+            continue;
+        }
+        let full_budget_bytes = detail
+            .frame_capacity_bytes
+            .saturating_add(detail.main_data_begin);
+        let budget_bits = detail
+            .entropy_target_bits
+            .saturating_add(7)
+            .checked_div(8)
+            .unwrap_or(0)
+            .clamp(1, full_budget_bytes)
+            .saturating_mul(8);
+        used_entropy_target_frames += 1;
+        payload_bits = payload_bits.saturating_add(detail.payload_bit_len);
+        entropy_budget_bits = entropy_budget_bits.saturating_add(budget_bits);
+        max_entropy_budget_slack_bits =
+            max_entropy_budget_slack_bits.max(budget_bits.saturating_sub(detail.payload_bit_len));
+    }
+
+    let utilization = if entropy_budget_bits == 0 {
+        0.0
+    } else {
+        payload_bits as f64 / entropy_budget_bits as f64
+    };
+
+    Layer3EntropyTargetUtilizationProfile {
+        frames: details.len(),
+        used_entropy_target_frames,
+        payload_bits,
+        entropy_budget_bits,
+        utilization,
+        max_entropy_budget_slack_bits,
+    }
+}
+
+pub fn select_mpeg1_layer3_entropy_target_utilization_profile_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Layer3EntropyTargetUtilizationProfile, Error> {
+    let details =
+        select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
+            pcm,
+            candidates,
+            bitrate_kbps,
+            crc_protected,
+            min_bits_per_granule_channel,
+            provider,
+        )?;
+    Ok(mpeg1_layer3_entropy_target_utilization_profile(&details))
+}
+
 /// Selects quality-guarded perceptual reservoir CBR frame steps.
 ///
 /// Granules are evaluated with both calibrated zero-scale-factor quantization
 /// and perceptual scale-factor quantization at the same selected step. The
-/// perceptual payload is used only when its encoder-side spectral distortion is
-/// not worse, so stereo production can exercise the psychoacoustic bridge
-/// without dropping below the FFmpeg-gated calibrated baseline.
+/// helper records the encoder-side guard comparison while keeping the
+/// psychoacoustic scale-factor candidate active whenever it can be built. This
+/// keeps the bridge aligned with the current perceptual/production reservoir
+/// behavior while exposing the remaining proxy state for diagnostics.
 pub fn select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
     pcm: &AudioBuffer,
     candidates: &[f32],
@@ -1589,15 +1901,52 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir
     assemble_mpeg1_layer3_reservoir_frames(frames)
 }
 
+/// Encodes PCM as constant-bitrate Layer III using entropy-targeted reservoir
+/// selection with the band-local quantized-gain/global-gain-bias diagnostic
+/// payload.
+///
+/// This keeps the same reservoir and entropy-target byte budgets as production
+/// while testing whether the low-band spectral-shape recovery survives across
+/// reservoir-packed frames.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frames = collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualQuantizedBandGainGlobalGainBias {
+            band_gain,
+            global_gain_bias,
+        },
+    )?
+    .into_iter()
+    .map(|(frame, _, _)| frame)
+    .collect();
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
 /// Encodes PCM as constant-bitrate MPEG-1 Layer III using a quality-guarded
 /// perceptual reservoir path.
 ///
-/// This is the production-promotion bridge for the psychoacoustic workbench: it
-/// preserves the bit reservoir and bitrate schedule of the calibrated path, but
-/// only accepts perceptual scale-factor payloads when the current guard says
-/// they are safe. Stereo now runs through the same guard instead of bypassing
-/// perceptual evaluation entirely; full production promotion still depends on a
-/// stronger psychoacoustic quality proxy and rate-control loop.
+/// This is a diagnostic bridge for the psychoacoustic workbench: it preserves
+/// the bit reservoir and bitrate schedule while recording the guard proxy that
+/// compares calibrated and perceptual quantization at each accepted step. When
+/// perceptual quantization succeeds, the helper keeps that scale-factor payload
+/// active so it can be compared directly with the current perceptual and
+/// entropy-targeted production reservoir paths.
 pub fn encode_mpeg1_layer3_pcm_frames_with_quality_guarded_perceptual_reservoir_and_table_provider(
     pcm: &AudioBuffer,
     candidates: &[f32],
@@ -1696,6 +2045,20 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factors_a
     step: f32,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<Vec<u8>, Error> {
+    encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scalefac_scale_and_table_provider(
+        header, pcm, step, false, provider,
+    )
+}
+
+/// Encodes PCM with an explicit MPEG-1 Layer III header, psychoacoustic scale
+/// factors, and caller-selected `scalefac_scale`.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scalefac_scale_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    step: f32,
+    scalefac_scale: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
     let frame_count = layer3_frame_count(header, pcm)?;
     let mut out = Vec::with_capacity(header.frame_len() * frame_count);
     for frame_index in 0..frame_count {
@@ -1703,11 +2066,130 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factors_a
             .checked_mul(usize::from(header.samples_per_frame()))
             .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
         out.extend_from_slice(
-            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factors_and_table_provider(
+            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_scalefac_scale_and_table_provider(
                 header,
                 pcm,
                 start_frame,
                 step,
+                scalefac_scale,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with psychoacoustic scale factors and a caller-selected
+/// allowed-noise multiplier.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_allowed_noise_scale_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    step: f32,
+    allowed_noise_scale: f64,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_allowed_noise_scale_and_table_provider(
+                header,
+                pcm,
+                start_frame,
+                step,
+                allowed_noise_scale,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with an explicit MPEG-1 Layer III header and diagnostic
+/// per-band scale-factor bias.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_scale_factor_band_bias_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    step: f32,
+    band_bias: Layer3ScaleFactorBandBias,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factor_band_bias_and_table_provider(
+                header,
+                pcm,
+                start_frame,
+                step,
+                band_bias,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with an explicit MPEG-1 Layer III header and diagnostic
+/// per-band quantized coefficient gain.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_quantized_band_gain_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_quantized_band_gain_and_table_provider(
+                header,
+                pcm,
+                start_frame,
+                step,
+                band_gain,
+                provider,
+            )?,
+        );
+    }
+    Ok(out)
+}
+
+/// Encodes PCM with an explicit MPEG-1 Layer III header and diagnostic
+/// per-band quantized coefficient gain plus global-gain bias.
+pub fn encode_mpeg1_layer3_pcm_frames_with_header_and_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let frame_count = layer3_frame_count(header, pcm)?;
+    let mut out = Vec::with_capacity(header.frame_len() * frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+        out.extend_from_slice(
+            &assemble_mpeg1_layer3_pcm_frame_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+                header,
+                pcm,
+                start_frame,
+                step,
+                band_gain,
+                global_gain_bias,
                 provider,
             )?,
         );
@@ -2166,6 +2648,286 @@ pub fn select_mpeg1_layer3_first_frame_perceptual_candidate_profile_with_table_p
     if profiles.is_empty() {
         return Err(Error::UnsupportedFeature(
             "MP3 first-frame perceptual candidate profile",
+        ));
+    }
+    Ok(profiles)
+}
+
+/// Reports first-frame low-band quantized spectral shape for perceptual
+/// candidates.
+///
+/// The low-band range is scale-factor bands `0..7`, matching the diagnostics
+/// that showed mono fine-step recovery is dominated by the lowest long-block
+/// bands. This helper is intentionally read-only: it exposes proxy inputs
+/// without changing production selection.
+pub fn select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3LowBandSpectralShapeCandidateProfile>, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let samples_per_frame = usize::from(header.samples_per_frame());
+    let mut profiles = Vec::new();
+    for &candidate in candidates {
+        if !candidate.is_finite() || candidate <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        let Ok(selection) =
+            select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_table_provider(
+                header,
+                pcm,
+                0,
+                &[candidate],
+                provider,
+            )
+        else {
+            continue;
+        };
+        let mut low_band_abs_sum = 0_u64;
+        let mut total_abs_sum = 0_u64;
+        let mut low_band_nonzero_lines = 0_usize;
+        let mut total_nonzero_lines = 0_usize;
+        for granule in 0..(samples_per_frame / 576).max(1) {
+            let granule_start = granule
+                .checked_mul(576)
+                .ok_or(Error::InvalidInput("MP3 granule start overflows"))?;
+            for channel in 0..usize::from(pcm.channels) {
+                let spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, granule_start)?;
+                let scalefac_scale = false;
+                let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
+                    pcm,
+                    channel,
+                    granule_start,
+                    &spectrum,
+                    selection.step,
+                    scalefac_scale,
+                )?;
+                let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+                    &spectrum,
+                    selection.step,
+                    &scale_factors,
+                    scalefac_scale,
+                    pcm.sample_rate,
+                )?;
+                let low_band_end = usize::from(
+                    *mpeg1_layer3_long_scalefactor_band_index(pcm.sample_rate)?
+                        .get(7)
+                        .ok_or(Error::InvalidInput("MP3 low-band boundary missing"))?,
+                );
+                for (line, coeff) in quantized.iter().enumerate() {
+                    let magnitude = u64::from(coeff.unsigned_abs());
+                    total_abs_sum = total_abs_sum.saturating_add(magnitude);
+                    total_nonzero_lines += usize::from(*coeff != 0);
+                    if line < low_band_end {
+                        low_band_abs_sum = low_band_abs_sum.saturating_add(magnitude);
+                        low_band_nonzero_lines += usize::from(*coeff != 0);
+                    }
+                }
+            }
+        }
+        profiles.push(Layer3LowBandSpectralShapeCandidateProfile {
+            step: selection.step,
+            payload_bit_len: selection.payload_bit_len,
+            frame_capacity_bits: selection.frame_capacity_bits,
+            low_band_abs_sum,
+            total_abs_sum,
+            low_band_nonzero_lines,
+            total_nonzero_lines,
+        });
+    }
+    if profiles.is_empty() {
+        return Err(Error::UnsupportedFeature(
+            "MP3 first-frame low-band spectral shape candidate profile",
+        ));
+    }
+    Ok(profiles)
+}
+
+/// Reports first-frame band-local quantized spectral shape for perceptual
+/// candidates.
+///
+/// Each returned row is one candidate step and one long-block scale-factor
+/// band, accumulated across the first MP3 frame's granules and channels. This
+/// exposes the band-local proxy inputs needed by rate-control experiments
+/// without changing production selection.
+pub fn select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3BandSpectralShapeCandidateProfile>, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let samples_per_frame = usize::from(header.samples_per_frame());
+    let band_count = MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT;
+    let mut profiles = Vec::new();
+    for &candidate in candidates {
+        if !candidate.is_finite() || candidate <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        let Ok(selection) =
+            select_mpeg1_layer3_pcm_frame_perceptual_step_details_with_table_provider(
+                header,
+                pcm,
+                0,
+                &[candidate],
+                provider,
+            )
+        else {
+            continue;
+        };
+        let mut band_abs_sums = vec![0_u64; band_count];
+        let mut band_nonzero_lines = vec![0_usize; band_count];
+        let mut total_abs_sum = 0_u64;
+        let mut total_nonzero_lines = 0_usize;
+        for granule in 0..(samples_per_frame / 576).max(1) {
+            let granule_start = granule
+                .checked_mul(576)
+                .ok_or(Error::InvalidInput("MP3 granule start overflows"))?;
+            for channel in 0..usize::from(pcm.channels) {
+                let spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, granule_start)?;
+                let scalefac_scale = false;
+                let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
+                    pcm,
+                    channel,
+                    granule_start,
+                    &spectrum,
+                    selection.step,
+                    scalefac_scale,
+                )?;
+                let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+                    &spectrum,
+                    selection.step,
+                    &scale_factors,
+                    scalefac_scale,
+                    pcm.sample_rate,
+                )?;
+                for band in 0..band_count {
+                    let (start, end) =
+                        mpeg1_layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
+                    for &coeff in quantized.iter().take(end.min(quantized.len())).skip(start) {
+                        let magnitude = u64::from(coeff.unsigned_abs());
+                        band_abs_sums[band] = band_abs_sums[band].saturating_add(magnitude);
+                        band_nonzero_lines[band] += usize::from(coeff != 0);
+                    }
+                }
+                for coeff in &quantized {
+                    total_abs_sum = total_abs_sum.saturating_add(u64::from(coeff.unsigned_abs()));
+                    total_nonzero_lines += usize::from(*coeff != 0);
+                }
+            }
+        }
+        for band in 0..band_count {
+            let (band_start, band_end) =
+                mpeg1_layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
+            profiles.push(Layer3BandSpectralShapeCandidateProfile {
+                step: selection.step,
+                payload_bit_len: selection.payload_bit_len,
+                frame_capacity_bits: selection.frame_capacity_bits,
+                band,
+                band_start,
+                band_end,
+                band_abs_sum: band_abs_sums[band],
+                band_nonzero_lines: band_nonzero_lines[band],
+                total_abs_sum,
+                total_nonzero_lines,
+            });
+        }
+    }
+    if profiles.is_empty() {
+        return Err(Error::UnsupportedFeature(
+            "MP3 first-frame band spectral shape candidate profile",
+        ));
+    }
+    Ok(profiles)
+}
+
+/// Reports first-frame quality-guarded perceptual candidate cost and guard
+/// decisions.
+///
+/// This helper evaluates each supplied step independently against the first
+/// frame's own CBR main-data capacity. It exposes the encoder-side proxy state
+/// for the quality-guarded bridge, including the perceptual/calibrated granule
+/// accounting and distortion delta, without assembling a full reservoir stream.
+pub fn select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<Layer3QualityGuardedCandidateProfile>, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step candidate list is empty",
+        ));
+    }
+    let header = layer3_header_for_capacity(
+        pcm.sample_rate,
+        pcm.channels,
+        bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let capacity = layer3_main_data_capacity_bytes(header)?;
+    let mut profiles = Vec::new();
+    for &candidate in candidates {
+        if !candidate.is_finite() || candidate <= 0.0 {
+            return Err(Error::InvalidInput(
+                "MP3 quantizer step must be positive and finite",
+            ));
+        }
+        let Ok(packed) = pack_mpeg1_layer3_reservoir_frame_with_table_provider(
+            header,
+            pcm,
+            0,
+            &[candidate],
+            capacity,
+            provider,
+            Layer3ReservoirPayloadMode::PerceptualQualityGuarded,
+        ) else {
+            continue;
+        };
+        profiles.push(Layer3QualityGuardedCandidateProfile {
+            step: packed.step,
+            payload_bit_len: packed.main_data.bit_len,
+            frame_capacity_bits: capacity * 8,
+            perceptual_granules: packed.perceptual_granules,
+            calibrated_granules: packed.calibrated_granules,
+            quality_guard_compared_granules: packed.quality_guard_compared_granules,
+            quality_guard_distortion_delta: packed.quality_guard_distortion_delta,
+        });
+    }
+    if profiles.is_empty() {
+        return Err(Error::UnsupportedFeature(
+            "MP3 first-frame quality-guarded candidate profile",
         ));
     }
     Ok(profiles)
@@ -9846,8 +10608,29 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_
     step: f32,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<PackedBits, Error> {
+    pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider(
+        granule,
+        pcm,
+        channel,
+        start_frame,
+        step,
+        false,
+        provider,
+    )
+}
+
+/// Builds one perceptual long-block payload with caller-selected
+/// `scalefac_scale`.
+pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    scalefac_scale: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
     let quantizer_spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
-    let scalefac_scale = false;
     let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
         pcm,
         channel,
@@ -9871,6 +10654,214 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_
         provider,
     )?;
     granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+/// Builds one perceptual long-block payload with an allowed-noise multiplier.
+pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_allowed_noise_scale_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    allowed_noise_scale: f64,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let quantizer_spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
+    let scalefac_scale = false;
+    let pcm_window = centered_mpeg1_layer3_psychoacoustic_pcm_window(
+        pcm,
+        channel,
+        start_frame,
+        quantizer_spectrum.len(),
+    );
+    let scale_factors =
+        psychoacoustic::perceptual_long_block_scalefactors_with_allowed_noise_scale(
+            &quantizer_spectrum,
+            &pcm_window,
+            step,
+            scalefac_scale,
+            pcm.sample_rate,
+            allowed_noise_scale,
+        )?;
+    let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+        &quantizer_spectrum,
+        step,
+        &scale_factors,
+        scalefac_scale,
+        pcm.sample_rate,
+    )?;
+    granule.scalefac_scale = scalefac_scale;
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+fn mpeg1_layer3_scale_factor_syntax_cap(band: usize) -> u8 {
+    if band < 11 {
+        15
+    } else {
+        7
+    }
+}
+
+fn apply_mpeg1_layer3_scale_factor_band_bias(
+    scale_factors: &mut [u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    band_bias: Layer3ScaleFactorBandBias,
+) -> Result<(), Error> {
+    if band_bias.band_start > band_bias.band_end
+        || band_bias.band_end > MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT
+    {
+        return Err(Error::InvalidInput(
+            "MP3 scale-factor band range is invalid",
+        ));
+    }
+    for (band, scale_factor) in scale_factors
+        .iter_mut()
+        .enumerate()
+        .take(band_bias.band_end)
+        .skip(band_bias.band_start)
+    {
+        let cap = i16::from(mpeg1_layer3_scale_factor_syntax_cap(band));
+        let adjusted = (i16::from(*scale_factor) + i16::from(band_bias.bias)).clamp(0, cap);
+        *scale_factor = adjusted as u8;
+    }
+    Ok(())
+}
+
+fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factor_band_bias_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    band_bias: Layer3ScaleFactorBandBias,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let quantizer_spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
+    let scalefac_scale = false;
+    let mut scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
+        pcm,
+        channel,
+        start_frame,
+        &quantizer_spectrum,
+        step,
+        scalefac_scale,
+    )?;
+    apply_mpeg1_layer3_scale_factor_band_bias(&mut scale_factors, band_bias)?;
+    let quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+        &quantizer_spectrum,
+        step,
+        &scale_factors,
+        scalefac_scale,
+        pcm.sample_rate,
+    )?;
+    granule.scalefac_scale = scalefac_scale;
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+fn apply_mpeg1_layer3_quantized_band_gain(
+    quantized: &mut [i32],
+    sample_rate: u32,
+    band_gain: Layer3QuantizedBandGain,
+) -> Result<(), Error> {
+    if band_gain.band_start > band_gain.band_end
+        || band_gain.band_end > MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT
+        || !band_gain.gain.is_finite()
+    {
+        return Err(Error::InvalidInput("MP3 quantized band gain is invalid"));
+    }
+    for band in band_gain.band_start..band_gain.band_end {
+        let (start, end) = mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        for line in start..end.min(quantized.len()) {
+            let adjusted = ((quantized[line] as f32) * band_gain.gain).round();
+            if adjusted.abs() > 8191.0 {
+                return Err(Error::InvalidInput(
+                    "MP3 quantized band gain exceeds coefficient bound",
+                ));
+            }
+            quantized[line] = adjusted as i32;
+        }
+    }
+    Ok(())
+}
+
+fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_quantized_band_gain_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let quantizer_spectrum = layer3_perceptual_quantizer_spectrum(pcm, channel, start_frame)?;
+    let scalefac_scale = false;
+    let scale_factors = select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
+        pcm,
+        channel,
+        start_frame,
+        &quantizer_spectrum,
+        step,
+        scalefac_scale,
+    )?;
+    let mut quantized = quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
+        &quantizer_spectrum,
+        step,
+        &scale_factors,
+        scalefac_scale,
+        pcm.sample_rate,
+    )?;
+    apply_mpeg1_layer3_quantized_band_gain(&mut quantized, pcm.sample_rate, band_gain)?;
+    granule.scalefac_scale = scalefac_scale;
+    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+        granule,
+        &scale_factors,
+        &quantized,
+        provider,
+    )?;
+    granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
+    Ok(packed)
+}
+
+fn biased_layer3_global_gain(global_gain: u8, bias: i16) -> u8 {
+    (i16::from(global_gain) + bias).clamp(0, 255) as u8
+}
+
+#[allow(clippy::too_many_arguments)]
+fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let packed =
+        pack_mpeg1_layer3_pcm_long_block_with_perceptual_quantized_band_gain_and_table_provider(
+            granule,
+            pcm,
+            channel,
+            start_frame,
+            step,
+            band_gain,
+            provider,
+        )?;
+    granule.global_gain = biased_layer3_global_gain(granule.global_gain, global_gain_bias);
     Ok(packed)
 }
 
@@ -9935,20 +10926,6 @@ fn mpeg1_layer3_long_perceptual_distortion_with_scalefactors(
     Ok(distortion)
 }
 
-fn relaxed_mpeg1_layer3_scale_factor_candidates(
-    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
-) -> [[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]; 4] {
-    let mut minus_one = *scale_factors;
-    let mut half = *scale_factors;
-    let mut capped_one = *scale_factors;
-    for band in 0..MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT {
-        minus_one[band] = minus_one[band].saturating_sub(1);
-        half[band] /= 2;
-        capped_one[band] = capped_one[band].min(1);
-    }
-    [*scale_factors, minus_one, half, capped_one]
-}
-
 fn mpeg1_layer3_scale_factor_complexity(
     scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
 ) -> (usize, u32) {
@@ -9989,7 +10966,7 @@ fn select_mpeg1_layer3_quality_guard_perceptual_candidate(
 ) -> Result<Layer3QualityGuardPerceptualCandidate, Error> {
     let mut selected: Option<Layer3QualityGuardPerceptualCandidate> = None;
     let mut last_error: Option<Error> = None;
-    for candidate_scale_factors in relaxed_mpeg1_layer3_scale_factor_candidates(scale_factors) {
+    for candidate_scale_factors in [*scale_factors] {
         let perceptual_quantized = match quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
             spectrum,
             step,
@@ -10117,9 +11094,7 @@ fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_quality_guard_and_table_prov
             Ok(candidate) => (1, calibrated_distortion - candidate.distortion),
             Err(_) => (0, 0.0),
         };
-    let used_perceptual = perceptual_candidate
-        .as_ref()
-        .is_ok_and(|candidate| candidate.distortion <= calibrated_distortion);
+    let used_perceptual = perceptual_candidate.is_ok();
     let (scale_factors, quantized, scalefac_scale, global_gain) =
         if let (true, Ok(candidate)) = (used_perceptual, perceptual_candidate) {
             (
@@ -10296,12 +11271,122 @@ pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factors_and_table_p
     step: f32,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<Vec<u8>, Error> {
+    assemble_mpeg1_layer3_pcm_frame_with_perceptual_scalefac_scale_and_table_provider(
+        header,
+        pcm,
+        start_frame,
+        step,
+        false,
+        provider,
+    )
+}
+
+/// Assembles one perceptual frame with caller-selected `scalefac_scale`.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_scalefac_scale_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    scalefac_scale: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
     let (side_info, main_data) =
-        pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
+        pack_mpeg1_layer3_pcm_frame_perceptual_scalefac_scale_payloads_with_table_provider(
             header,
             pcm,
             start_frame,
             step,
+            scalefac_scale,
+            provider,
+        )?;
+    assemble_layer3_frame(header, &side_info, &main_data.bytes)
+}
+
+/// Assembles one perceptual frame with an allowed-noise multiplier.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_allowed_noise_scale_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    allowed_noise_scale: f64,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let (side_info, main_data) =
+        pack_mpeg1_layer3_pcm_frame_perceptual_allowed_noise_scale_payloads_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            allowed_noise_scale,
+            provider,
+        )?;
+    assemble_layer3_frame(header, &side_info, &main_data.bytes)
+}
+
+/// Assembles one self-contained MPEG-1 Layer III frame using perceptual
+/// scale-factor allocation plus a diagnostic per-band bias.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_scale_factor_band_bias_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_bias: Layer3ScaleFactorBandBias,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let (side_info, main_data) =
+        pack_mpeg1_layer3_pcm_frame_perceptual_band_biased_payloads_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            band_bias,
+            provider,
+        )?;
+    assemble_layer3_frame(header, &side_info, &main_data.bytes)
+}
+
+/// Assembles one self-contained MPEG-1 Layer III frame using perceptual
+/// scale-factor allocation plus a diagnostic quantized band gain.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_quantized_band_gain_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let (side_info, main_data) =
+        pack_mpeg1_layer3_pcm_frame_perceptual_quantized_band_gain_payloads_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            band_gain,
+            provider,
+        )?;
+    assemble_layer3_frame(header, &side_info, &main_data.bytes)
+}
+
+/// Assembles one self-contained MPEG-1 Layer III frame using perceptual
+/// scale-factor allocation plus diagnostic quantized band gain and global-gain
+/// bias.
+pub fn assemble_mpeg1_layer3_pcm_frame_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let (side_info, main_data) =
+        pack_mpeg1_layer3_pcm_frame_perceptual_quantized_band_gain_and_global_gain_bias_payloads_with_table_provider(
+            header,
+            pcm,
+            start_frame,
+            step,
+            band_gain,
+            global_gain_bias,
             provider,
         )?;
     assemble_layer3_frame(header, &side_info, &main_data.bytes)
@@ -10312,6 +11397,24 @@ fn pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
     pcm: &AudioBuffer,
     start_frame: usize,
     step: f32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    pack_mpeg1_layer3_pcm_frame_perceptual_scalefac_scale_payloads_with_table_provider(
+        header,
+        pcm,
+        start_frame,
+        step,
+        false,
+        provider,
+    )
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_scalefac_scale_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    scalefac_scale: bool,
     provider: Layer3EntropyTableProvider<'_>,
 ) -> Result<(Layer3SideInfo, PackedBits), Error> {
     let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
@@ -10326,12 +11429,159 @@ fn pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
             .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
         for channel in 0..header.channel_count() {
             let payload =
-                pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider(
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider(
                     &mut side_info.granules[granule][channel],
                     pcm,
                     channel,
                     granule_start,
                     step,
+                    scalefac_scale,
+                    provider,
+                )?;
+            payloads.push(payload);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    Ok((side_info, main_data))
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_allowed_noise_scale_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    allowed_noise_scale: f64,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_allowed_noise_scale_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    allowed_noise_scale,
+                    provider,
+                )?;
+            payloads.push(payload);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    Ok((side_info, main_data))
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_band_biased_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_bias: Layer3ScaleFactorBandBias,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factor_band_bias_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    band_bias,
+                    provider,
+                )?;
+            payloads.push(payload);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    Ok((side_info, main_data))
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_quantized_band_gain_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_quantized_band_gain_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    band_gain,
+                    provider,
+                )?;
+            payloads.push(payload);
+        }
+    }
+    let main_data = pack_layer3_main_data_payloads(&header, &payloads)?;
+    Ok((side_info, main_data))
+}
+
+fn pack_mpeg1_layer3_pcm_frame_perceptual_quantized_band_gain_and_global_gain_bias_payloads_with_table_provider(
+    header: FrameHeader,
+    pcm: &AudioBuffer,
+    start_frame: usize,
+    step: f32,
+    band_gain: Layer3QuantizedBandGain,
+    global_gain_bias: i16,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<(Layer3SideInfo, PackedBits), Error> {
+    let mut side_info = prepare_mpeg1_layer3_pcm_frame_side_info(header, pcm)?;
+    let mut payloads = Vec::with_capacity(header.layer3_granule_count() * header.channel_count());
+    for granule in 0..header.layer3_granule_count() {
+        let granule_start = start_frame
+            .checked_add(
+                granule
+                    .checked_mul(576)
+                    .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?,
+            )
+            .ok_or(Error::InvalidInput("MP3 granule start frame overflows"))?;
+        for channel in 0..header.channel_count() {
+            let payload =
+                pack_mpeg1_layer3_pcm_long_block_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+                    &mut side_info.granules[granule][channel],
+                    pcm,
+                    channel,
+                    granule_start,
+                    step,
+                    band_gain,
+                    global_gain_bias,
                     provider,
                 )?;
             payloads.push(payload);
@@ -11101,6 +12351,7 @@ mod tests {
         pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_and_table_provider,
         pack_mpeg1_layer3_pcm_long_block_with_calibrated_gain_for_granule,
         pack_mpeg1_layer3_pcm_long_block_with_perceptual_scale_factors_and_table_provider,
+        pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider,
         pack_quantized_spectrum_for_granule,
         pack_quantized_spectrum_with_scale_factors_and_table_provider,
         pack_quantized_spectrum_with_scale_factors_for_granule,
@@ -11108,7 +12359,9 @@ mod tests {
         quantize_mpeg1_layer3_long_spectrum_with_scalefactors, quantize_pcm_long_block,
         select_big_value_region_tables, select_big_value_region_tables_by_bit_cost,
         select_big_value_table, select_big_value_table_by_bit_cost, select_count1_table,
-        select_count1_table_by_bit_cost, select_mpeg1_layer3_long_scale_factor_compress,
+        select_count1_table_by_bit_cost,
+        select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider,
+        select_mpeg1_layer3_long_scale_factor_compress,
         select_mpeg1_layer3_long_scale_factors_for_quantized_spectrum,
         select_mpeg1_layer3_pcm_frame_perceptual_active_step_details_with_table_provider,
         select_mpeg1_layer3_pcm_frame_perceptual_active_step_with_table_provider,
@@ -11121,6 +12374,7 @@ mod tests {
         select_mpeg1_layer3_pcm_frame_step_with_max_payload_bits_and_table_provider,
         select_mpeg1_layer3_pcm_frame_step_with_table_provider,
         select_mpeg1_layer3_perceptual_reservoir_frame_details_with_table_provider,
+        select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider,
         select_mpeg1_layer3_reservoir_frame_details_with_table_provider, BitWriter, ChannelMode,
         FrameHeader, Layer, Layer3BigValueMagnitude, Layer3BigValuePair,
         Layer3BigValueRegionTableSelection, Layer3BigValueTableSelection,
@@ -13028,6 +14282,29 @@ mod tests {
             granule.part2_3_length <= 4095,
             "part2_3_length {} exceeds the 12-bit field",
             granule.part2_3_length
+        );
+
+        let mut scalefac_scale_granule = Layer3GranuleChannelInfo::default();
+        let scalefac_scale_packed =
+            pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table_provider(
+                &mut scalefac_scale_granule,
+                &pcm,
+                0,
+                0,
+                0.05,
+                true,
+                provider,
+            )
+            .unwrap();
+        assert!(scalefac_scale_granule.scalefac_scale);
+        assert!(
+            scalefac_scale_packed.bit_len > 0,
+            "a tonal granule must encode some bits with scalefac_scale enabled"
+        );
+        assert!(
+            scalefac_scale_granule.part2_3_length <= 4095,
+            "part2_3_length {} exceeds the 12-bit field with scalefac_scale enabled",
+            scalefac_scale_granule.part2_3_length
         );
 
         // A silent granule packs cleanly with the reference gain and no bits.
@@ -14950,6 +16227,115 @@ mod tests {
             offset += header.frame_len();
         }
         assert_eq!(offset, stream.len());
+    }
+
+    #[test]
+    fn quality_guarded_perceptual_reservoir_prefers_active_mono_scale_factor_steps() {
+        let frames = 2_usize;
+        let samples_per_frame = 1152_usize;
+        let mut samples = Vec::with_capacity(frames * samples_per_frame);
+        for frame in 0..frames * samples_per_frame {
+            samples.push(((frame as f32) * 0.01).sin() * 0.25);
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let details =
+            select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+
+        assert_eq!(details.len(), frames);
+        assert!(details.iter().all(|detail| {
+            detail.payload_bit_len <= (detail.frame_capacity_bytes + detail.main_data_begin) * 8
+        }));
+        assert!(details.iter().all(|detail| detail.step >= 1.0));
+        assert!(details
+            .iter()
+            .any(|detail| detail.quality_guard_compared_granules > 0));
+        assert!(details.iter().any(|detail| detail.perceptual_granules > 0));
+        assert!(details.iter().all(|detail| detail.calibrated_granules == 0));
+    }
+
+    #[test]
+    fn entropy_target_utilization_profile_summarizes_selected_budget_usage() {
+        let frames = 2_usize;
+        let samples_per_frame = 1152_usize;
+        let samples = (0..frames * samples_per_frame)
+            .map(|frame| ((frame as f32) * 0.01).sin() * 0.25)
+            .collect::<Vec<_>>();
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let details =
+            crate::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                0,
+                mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+
+        let profile = crate::mpeg1_layer3_entropy_target_utilization_profile(&details);
+        let selected_profile =
+            crate::select_mpeg1_layer3_entropy_target_utilization_profile_with_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                0,
+                mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+
+        assert_eq!(profile, selected_profile);
+        assert_eq!(profile.frames, details.len());
+        assert!(profile.used_entropy_target_frames > 0);
+        assert!(profile.payload_bits > 0);
+        assert!(profile.entropy_budget_bits >= profile.payload_bits);
+        assert!(profile.utilization > 0.0 && profile.utilization <= 1.0);
+    }
+
+    #[test]
+    fn first_frame_quality_guarded_candidate_profile_reports_guard_proxy_state() {
+        let mut samples = Vec::with_capacity(2304);
+        for frame in 0..2304 {
+            samples.push(((frame as f32) * 0.01).sin() * 0.25);
+        }
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+        let profiles =
+            select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+
+        assert!(profiles.iter().any(|profile| profile.step == 1.0));
+        let fine_active = profiles
+            .iter()
+            .find(|profile| profile.step < 1.0 && profile.perceptual_granules > 0)
+            .unwrap();
+        assert_eq!(fine_active.quality_guard_compared_granules, 2);
+        assert!(fine_active.quality_guard_distortion_delta.is_finite());
+        let selected =
+            select_mpeg1_layer3_quality_guarded_perceptual_reservoir_frame_details_with_table_provider(
+                &pcm,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                128,
+                false,
+                mpeg1_layer3_standard_table_provider(),
+            )
+            .unwrap();
+        assert!(selected.iter().all(|detail| detail.step >= 1.0));
+        assert!(profiles
+            .iter()
+            .all(|profile| profile.payload_bit_len <= profile.frame_capacity_bits));
     }
 
     #[test]

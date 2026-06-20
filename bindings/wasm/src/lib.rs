@@ -257,9 +257,11 @@ pub fn encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
 ) -> Result<Vec<u8>, String> {
     let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
         .map_err(|err| err.to_string())?;
+    let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
+        .map_err(|err| err.to_string())?;
     sonare_codec::encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
         &pcm,
-        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        candidates,
         bitrate_kbps,
         crc_protected,
         min_bits_per_granule_channel,
@@ -283,6 +285,84 @@ pub fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
         sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
         bitrate_kbps,
         crc_protected,
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_mp3_perceptual_scale_factor_band_bias(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    step: f32,
+    band_start: usize,
+    band_end: usize,
+    bias: i8,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_scale_factor_band_bias_and_table_provider(
+        &pcm,
+        step,
+        sonare_codec::Layer3ScaleFactorBandBias {
+            band_start,
+            band_end,
+            bias,
+        },
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_mp3_perceptual_quantized_band_gain(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    step: f32,
+    band_start: usize,
+    band_end: usize,
+    gain: f32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_table_provider(
+        &pcm,
+        step,
+        sonare_codec::Layer3QuantizedBandGain {
+            band_start,
+            band_end,
+            gain,
+        },
+        sonare_codec::mpeg1_layer3_standard_table_provider(),
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+#[allow(clippy::too_many_arguments)]
+pub fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    step: f32,
+    band_start: usize,
+    band_end: usize,
+    gain: f32,
+    global_gain_bias: i16,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_mpeg1_layer3_pcm_frames_with_perceptual_quantized_band_gain_and_global_gain_bias_and_table_provider(
+        &pcm,
+        step,
+        sonare_codec::Layer3QuantizedBandGain {
+            band_start,
+            band_end,
+            gain,
+        },
+        global_gain_bias,
         sonare_codec::mpeg1_layer3_standard_table_provider(),
     )
     .map_err(|err| err.to_string())
@@ -376,6 +456,62 @@ pub fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_
 }
 
 #[wasm_bindgen]
+pub fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        max_quantized_abs,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
 pub fn encode_m4a(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Vec<u8>, String> {
     let aac = encode_aac(sample_rate, channels, samples)?;
     sonare_codec::mux_aac_adts_as_m4a(&aac).map_err(|err| err.to_string())
@@ -461,6 +597,62 @@ pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_
 }
 
 #[wasm_bindgen]
+pub fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        global_gain,
+        scale_factor_magnitude_bias,
+        max_quantized_abs,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+        max_quantized_abs,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<u8>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
 pub fn demux_m4a_as_aac_adts(input: &[u8]) -> Result<Vec<u8>, String> {
     sonare_codec::demux_m4a_as_aac_adts(input).map_err(|err| err.to_string())
 }
@@ -498,6 +690,54 @@ pub fn aac_standard_id_selected_scale_factor_global_gain(channels: u16) -> Resul
 #[wasm_bindgen]
 pub fn aac_standard_id_selected_scale_factor_magnitude_bias() -> i16 {
     sonare_codec::aac_standard_id_selected_scale_factor_magnitude_bias()
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(
+    channels: u16,
+) -> Result<u32, String> {
+    sonare_codec::aac_standard_id_selected_scale_factor_balanced_max_quantized_abs(channels)
+        .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_selected_scale_factor_balanced_parameters(
+    channels: u16,
+) -> Result<Vec<f64>, String> {
+    let (global_gain, magnitude_bias, max_quantized_abs) =
+        sonare_codec::aac_standard_id_selected_scale_factor_balanced_parameters(channels)
+            .map_err(|err| err.to_string())?;
+    Ok(vec![
+        f64::from(global_gain),
+        f64::from(magnitude_bias),
+        f64::from(max_quantized_abs),
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_selected_scale_factor_balanced_gain_deltas(
+    channels: u16,
+) -> Result<Vec<f64>, String> {
+    let profile = sonare_codec::aac_standard_id_selected_scale_factor_balance_profile(channels)
+        .map_err(|err| err.to_string())?;
+    Ok(profile
+        .global_gain_deltas
+        .iter()
+        .map(|&delta| f64::from(delta))
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_selected_scale_factor_balanced_magnitude_biases(
+    channels: u16,
+) -> Result<Vec<f64>, String> {
+    let profile = sonare_codec::aac_standard_id_selected_scale_factor_balance_profile(channels)
+        .map_err(|err| err.to_string())?;
+    Ok(profile
+        .magnitude_biases
+        .iter()
+        .map(|&bias| f64::from(bias))
+        .collect())
 }
 
 #[wasm_bindgen]
@@ -1295,6 +1535,407 @@ pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate
 }
 
 #[wasm_bindgen]
+pub fn aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    max_quantized_abs: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            max_quantized_abs,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(details
+        .iter()
+        .enumerate()
+        .flat_map(|(frame_index, detail)| {
+            [
+                frame_index as f64,
+                f64::from(detail.step),
+                detail.frame_len as f64,
+                detail.frame_capacity_bytes as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(|err| err.to_string())?;
+    let profile =
+        sonare_codec::aac_standard_selected_scale_factor_profile_for_frame_details_with_magnitude_bias(
+            &pcm,
+            &details,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        profile.frames as f64,
+        profile.channels as f64,
+        profile.bands as f64,
+        profile.raised_bands as f64,
+        f64::from(profile.max_delta),
+        profile.mean_delta,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+    let profile =
+        sonare_codec::aac_recommended_standard_selected_scale_factor_profile_for_frame_details(
+            &pcm, &details,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        profile.frames as f64,
+        profile.channels as f64,
+        profile.bands as f64,
+        profile.raised_bands as f64,
+        f64::from(profile.max_delta),
+        profile.mean_delta,
+    ])
+}
+
+#[wasm_bindgen]
+pub fn aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+    let profile =
+        sonare_codec::aac_balanced_standard_selected_scale_factor_profile_for_frame_details(
+            &pcm, &details,
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        profile.frames as f64,
+        profile.channels as f64,
+        profile.bands as f64,
+        profile.raised_bands as f64,
+        f64::from(profile.max_delta),
+        profile.mean_delta,
+    ])
+}
+
+fn flatten_aac_standard_id_payload_breakdown(
+    breakdown: sonare_codec::AacStandardIdPayloadBreakdown,
+) -> Vec<f64> {
+    vec![
+        breakdown.frames as f64,
+        breakdown.channels as f64,
+        breakdown.sections as f64,
+        breakdown.escape_sections as f64,
+        breakdown.max_abs as f64,
+        breakdown.section_bits as f64,
+        breakdown.scale_factor_bits as f64,
+        breakdown.spectral_bits as f64,
+        breakdown.escape_spectral_bits as f64,
+        breakdown
+            .dominant_spectral_section
+            .map_or(0.0, |section| section.spectral_bits as f64),
+        breakdown
+            .dominant_escape_section
+            .map_or(0.0, |section| section.spectral_bits as f64),
+    ]
+}
+
+fn flatten_aac_standard_id_quality_control_profile(
+    profile: sonare_codec::AacStandardIdQualityControlProfile,
+) -> Vec<f64> {
+    vec![
+        profile.frames as f64,
+        profile.channels as f64,
+        profile.max_frame_len as f64,
+        profile.min_frame_budget_slack as f64,
+        profile.max_quantized_abs_limit as f64,
+        profile.max_abs as f64,
+        profile.sections as f64,
+        profile.escape_sections as f64,
+        profile.total_bits as f64,
+        profile.spectral_bits as f64,
+        profile.escape_spectral_bits as f64,
+        profile.scale_factor_bits as f64,
+        profile.scale_factor_bands as f64,
+        profile.raised_scale_factor_bands as f64,
+        f64::from(profile.max_scale_factor_delta),
+        profile.mean_scale_factor_delta,
+    ]
+}
+
+fn flatten_aac_standard_id_quality_control_candidate(
+    candidate: sonare_codec::AacStandardIdQualityControlCandidate,
+) -> Vec<f64> {
+    let mut flattened = vec![
+        f64::from(candidate.global_gain),
+        f64::from(candidate.scale_factor_magnitude_bias),
+        candidate.max_quantized_abs as f64,
+    ];
+    flattened.extend(flatten_aac_standard_id_quality_control_profile(
+        candidate.profile,
+    ));
+    flattened
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(|err| err.to_string())?;
+    let breakdown =
+        sonare_codec::aac_standard_id_payload_breakdown_for_frame_details_with_magnitude_bias(
+            &pcm,
+            &details,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(flatten_aac_standard_id_payload_breakdown(breakdown))
+}
+
+#[wasm_bindgen]
+pub fn aac_recommended_standard_id_payload_breakdown_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+    let breakdown = sonare_codec::aac_recommended_standard_id_payload_breakdown_for_frame_details(
+        &pcm, &details,
+    )
+    .map_err(|err| err.to_string())?;
+    Ok(flatten_aac_standard_id_payload_breakdown(breakdown))
+}
+
+#[wasm_bindgen]
+pub fn aac_balanced_standard_id_payload_breakdown_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_balanced_standard_selected_scale_factor_frame_details_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+    let breakdown =
+        sonare_codec::aac_balanced_standard_id_payload_breakdown_for_frame_details(&pcm, &details)
+            .map_err(|err| err.to_string())?;
+    Ok(flatten_aac_standard_id_payload_breakdown(breakdown))
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized_abs_and_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+    global_gain: u8,
+    scale_factor_magnitude_bias: i16,
+    max_quantized_abs: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let details =
+        sonare_codec::aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )
+        .map_err(|err| err.to_string())?;
+    let profile =
+        sonare_codec::aac_standard_id_quality_control_profile_for_frame_details_with_magnitude_bias_max_quantized_abs(
+            &pcm,
+            &details,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(flatten_aac_standard_id_quality_control_profile(profile))
+}
+
+#[wasm_bindgen]
+pub fn aac_balanced_standard_id_quality_control_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    sonare_codec::aac_balanced_standard_id_quality_control_profile_with_bitrate(
+        &pcm,
+        target_bitrate_bps,
+    )
+    .map(flatten_aac_standard_id_quality_control_profile)
+    .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
+pub fn aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    target_bitrate_bps: u32,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let candidates =
+        sonare_codec::aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(candidates
+        .into_iter()
+        .flat_map(flatten_aac_standard_id_quality_control_candidate)
+        .collect())
+}
+
+#[wasm_bindgen]
 pub fn aac_selected_scale_factor_frame_details_with_bitrate(
     sample_rate: u32,
     channels: u16,
@@ -1393,6 +2034,13 @@ pub fn mp3_pcm_step_candidates() -> Vec<f32> {
 }
 
 #[wasm_bindgen]
+pub fn mp3_production_pcm_step_candidates(channels: u16) -> Result<Vec<f32>, String> {
+    sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
+        .map(|candidates| candidates.to_vec())
+        .map_err(|err| err.to_string())
+}
+
+#[wasm_bindgen]
 pub fn mp3_first_frame_perceptual_candidate_profile_with_bitrate(
     sample_rate: u32,
     channels: u16,
@@ -1421,6 +2069,113 @@ pub fn mp3_first_frame_perceptual_candidate_profile_with_bitrate(
                 profile.nonzero_scale_factors as f64,
                 profile.scale_factor_bands as f64,
                 f64::from(profile.max_scale_factor),
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let profiles =
+        sonare_codec::select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile_with_table_provider(
+            &pcm,
+            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            bitrate_kbps,
+            crc_protected,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(profiles
+        .into_iter()
+        .flat_map(|profile| {
+            [
+                f64::from(profile.step),
+                profile.payload_bit_len as f64,
+                profile.frame_capacity_bits as f64,
+                profile.low_band_abs_sum as f64,
+                profile.total_abs_sum as f64,
+                profile.low_band_nonzero_lines as f64,
+                profile.total_nonzero_lines as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let profiles =
+        sonare_codec::select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_with_table_provider(
+            &pcm,
+            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            bitrate_kbps,
+            crc_protected,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(profiles
+        .into_iter()
+        .flat_map(|profile| {
+            [
+                f64::from(profile.step),
+                profile.payload_bit_len as f64,
+                profile.frame_capacity_bits as f64,
+                profile.band as f64,
+                profile.band_start as f64,
+                profile.band_end as f64,
+                profile.band_abs_sum as f64,
+                profile.band_nonzero_lines as f64,
+                profile.total_abs_sum as f64,
+                profile.total_nonzero_lines as f64,
+            ]
+        })
+        .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let profiles = sonare_codec::select_mpeg1_layer3_first_frame_quality_guarded_candidate_profile_with_table_provider(
+            &pcm,
+            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            bitrate_kbps,
+            crc_protected,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(profiles
+        .into_iter()
+        .flat_map(|profile| {
+            [
+                f64::from(profile.step),
+                profile.payload_bit_len as f64,
+                profile.frame_capacity_bits as f64,
+                profile.perceptual_granules as f64,
+                profile.calibrated_granules as f64,
+                profile.quality_guard_compared_granules as f64,
+                profile.quality_guard_distortion_delta,
             ]
         })
         .collect())
@@ -1568,10 +2323,12 @@ pub fn mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
 ) -> Result<Vec<f64>, String> {
     let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
         .map_err(|err| err.to_string())?;
+    let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
+        .map_err(|err| err.to_string())?;
     let details =
         sonare_codec::select_mpeg1_layer3_entropy_targeted_perceptual_reservoir_frame_details_with_table_provider(
             &pcm,
-            sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            candidates,
             bitrate_kbps,
             crc_protected,
             min_bits_per_granule_channel,
@@ -1600,6 +2357,40 @@ pub fn mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
             ]
         })
         .collect())
+}
+
+#[wasm_bindgen]
+pub fn mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate(
+    sample_rate: u32,
+    channels: u16,
+    samples: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+) -> Result<Vec<f64>, String> {
+    let pcm = sonare_codec::AudioBuffer::new(sample_rate, channels, samples.to_vec())
+        .map_err(|err| err.to_string())?;
+    let candidates = sonare_codec::mpeg1_layer3_production_pcm_step_candidates(channels)
+        .map_err(|err| err.to_string())?;
+    let profile =
+        sonare_codec::select_mpeg1_layer3_entropy_target_utilization_profile_with_table_provider(
+            &pcm,
+            candidates,
+            bitrate_kbps,
+            crc_protected,
+            min_bits_per_granule_channel,
+            sonare_codec::mpeg1_layer3_standard_table_provider(),
+        )
+        .map_err(|err| err.to_string())?;
+
+    Ok(vec![
+        profile.frames as f64,
+        profile.used_entropy_target_frames as f64,
+        profile.payload_bits as f64,
+        profile.entropy_budget_bits as f64,
+        profile.utilization,
+        profile.max_entropy_budget_slack_bits as f64,
+    ])
 }
 
 #[wasm_bindgen]
@@ -1698,20 +2489,32 @@ fn is_m4a_container(input: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
+        aac_balanced_standard_id_payload_breakdown_with_bitrate,
+        aac_balanced_standard_id_quality_control_profile_with_bitrate,
+        aac_balanced_standard_selected_scale_factor_profile_with_bitrate,
         aac_codebook6_unit_section_plan, aac_escape_table, aac_lc_adts_max_frame_len_for_bitrate,
         aac_lc_default_production_bitrate_bps, aac_lc_pcm_step_candidates,
         aac_mixed_unit_payload_bit_lengths, aac_mixed_unit_section_plan,
-        aac_quad_unit_section_plan,
+        aac_quad_unit_section_plan, aac_recommended_standard_id_payload_breakdown_with_bitrate,
         aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate,
+        aac_recommended_standard_selected_scale_factor_profile_with_bitrate,
         aac_scale_factor_delta_table, aac_selected_scale_factor_frame_details_with_bitrate,
         aac_signed_pairs5_table, aac_signed_pairs6_table, aac_signed_quads1_table,
         aac_signed_quads2_table, aac_standard_escape_payload_bit_lengths,
-        aac_standard_id_pcm_step_candidates, aac_standard_id_selected_scale_factor_global_gain,
+        aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate,
+        aac_standard_id_pcm_step_candidates,
+        aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate,
+        aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized_abs_and_bitrate,
+        aac_standard_id_selected_scale_factor_balanced_gain_deltas,
+        aac_standard_id_selected_scale_factor_balanced_magnitude_biases,
+        aac_standard_id_selected_scale_factor_balanced_parameters,
+        aac_standard_id_selected_scale_factor_global_gain,
         aac_standard_id_selected_scale_factor_magnitude_bias,
         aac_standard_id_selected_scale_factor_parameters,
         aac_standard_mixed_offsets_payload_bit_lengths, aac_standard_mixed_payload_bit_lengths,
         aac_standard_mono_offsets_bitrate_frame_details, aac_standard_offsets_section_plan,
         aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate,
+        aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrate,
         aac_standard_stereo_offsets_bitrate_frame_details, aac_standard_unit_section_plan,
         aac_unsigned_pairs10_table, aac_unsigned_pairs7_table,
         aac_unsigned_pairs7_unit_magnitude_table, aac_unsigned_pairs8_table,
@@ -1730,15 +2533,20 @@ mod tests {
         encode_m4a_with_selected_scale_factors_and_bitrate,
         encode_m4a_with_standard_spectral_offsets_and_bitrate, encode_mp3,
         encode_mp3_cbr_with_bitrate, encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate,
-        encode_mp3_perceptual_active_cbr_with_bitrate,
-        encode_mp3_perceptual_reservoir_with_bitrate,
+        encode_mp3_perceptual_active_cbr_with_bitrate, encode_mp3_perceptual_quantized_band_gain,
+        encode_mp3_perceptual_quantized_band_gain_global_gain_bias,
+        encode_mp3_perceptual_reservoir_with_bitrate, encode_mp3_perceptual_scale_factor_band_bias,
         encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate, encode_mp3_with_bitrate,
         mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate,
+        mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate,
+        mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate,
+        mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate,
         mp3_first_frame_perceptual_candidate_profile_with_bitrate,
+        mp3_first_frame_quality_guarded_candidate_profile_with_bitrate,
         mp3_layer3_main_data_capacity_bits, mp3_layer3_main_data_capacity_bytes,
         mp3_missing_standard_big_value_table_selects, mp3_pcm_step_candidates,
         mp3_perceptual_bit_allocation_with_bitrate,
-        mp3_perceptual_reservoir_frame_details_with_bitrate,
+        mp3_perceptual_reservoir_frame_details_with_bitrate, mp3_production_pcm_step_candidates,
         mp3_quality_guarded_perceptual_reservoir_frame_details_with_bitrate,
         mp3_reservoir_frame_details_with_bitrate, mp3_standard_big_value_table_selects,
         mp3_standard_count1_table_selects, StreamDecoder,
@@ -2139,6 +2947,22 @@ mod tests {
         assert!(entropy_targeted_details
             .chunks_exact(entropy_targeted_detail_width)
             .any(|detail| detail[13] == 1.0));
+        let entropy_profile =
+            mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate(
+                44_100, 1, &samples, 128, false, 0,
+            )
+            .unwrap();
+        let used_entropy_frames = entropy_targeted_details
+            .chunks_exact(entropy_targeted_detail_width)
+            .filter(|detail| detail[13] == 1.0)
+            .count();
+        assert_eq!(entropy_profile.len(), 6);
+        assert_eq!(entropy_profile[0], frames as f64);
+        assert_eq!(entropy_profile[1], used_entropy_frames as f64);
+        assert!(entropy_profile[2] > 0.0);
+        assert!(entropy_profile[3] >= entropy_profile[2]);
+        assert!(entropy_profile[4] > 0.0 && entropy_profile[4] <= 1.0);
+        assert!(entropy_profile[5] >= 0.0);
         let entropy_targeted = encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
             44_100, 1, &samples, 128, false, 0,
         )
@@ -2243,6 +3067,33 @@ mod tests {
             vec![126.0, 16.0]
         );
         assert!(aac_standard_id_selected_scale_factor_parameters(3).is_err());
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_parameters(1).unwrap(),
+            vec![136.0, 8.0, 2047.0]
+        );
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_parameters(2).unwrap(),
+            vec![138.0, 4.0, 1535.0]
+        );
+        assert!(aac_standard_id_selected_scale_factor_balanced_parameters(3).is_err());
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_gain_deltas(1).unwrap(),
+            vec![0.0, 2.0, 4.0, 6.0, 8.0]
+        );
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_gain_deltas(2).unwrap(),
+            vec![8.0, 12.0, 16.0]
+        );
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_magnitude_biases(1).unwrap(),
+            vec![8.0, 12.0, 16.0, 20.0]
+        );
+        assert_eq!(
+            aac_standard_id_selected_scale_factor_balanced_magnitude_biases(2).unwrap(),
+            vec![4.0, 8.0, 12.0]
+        );
+        assert!(aac_standard_id_selected_scale_factor_balanced_gain_deltas(3).is_err());
+        assert!(aac_standard_id_selected_scale_factor_balanced_magnitude_biases(3).is_err());
         assert_eq!(
             aac_standard_id_selected_scale_factor_global_gain(1).unwrap(),
             128
@@ -2489,6 +3340,124 @@ mod tests {
             recommended_standard_selected_details,
             standard_selected_details
         );
+        let standard_selected_profile =
+            aac_standard_selected_scale_factor_profile_with_magnitude_bias_and_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+                128,
+                16,
+            )
+            .unwrap();
+        assert_eq!(
+            standard_selected_profile,
+            vec![2.0, 1.0, 98.0, 0.0, 0.0, 0.0]
+        );
+        let recommended_standard_selected_profile =
+            aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            recommended_standard_selected_profile,
+            standard_selected_profile
+        );
+        let balanced_standard_selected_profile =
+            aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap();
+        assert_eq!(
+            balanced_standard_selected_profile,
+            standard_selected_profile
+        );
+        let standard_payload_breakdown =
+            aac_standard_id_payload_breakdown_with_magnitude_bias_and_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+                128,
+                16,
+            )
+            .unwrap();
+        assert_eq!(standard_payload_breakdown.len(), 11);
+        assert_eq!(standard_payload_breakdown[0], 2.0);
+        assert_eq!(standard_payload_breakdown[1], 1.0);
+        assert_eq!(standard_payload_breakdown[3], 0.0);
+        assert_eq!(standard_payload_breakdown[4], 0.0);
+        assert_eq!(standard_payload_breakdown[8], 0.0);
+        assert_eq!(standard_payload_breakdown[10], 0.0);
+        assert_eq!(
+            aac_recommended_standard_id_payload_breakdown_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap(),
+            standard_payload_breakdown
+        );
+        assert_eq!(
+            aac_balanced_standard_id_payload_breakdown_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap(),
+            standard_payload_breakdown
+        );
+        let explicit_balanced_quality_profile =
+            aac_standard_id_quality_control_profile_with_magnitude_bias_max_quantized_abs_and_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+                136,
+                8,
+                2047,
+            )
+            .unwrap();
+        let balanced_quality_profile =
+            aac_balanced_standard_id_quality_control_profile_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap();
+        assert_eq!(balanced_quality_profile.len(), 16);
+        assert_eq!(balanced_quality_profile, explicit_balanced_quality_profile);
+        assert_eq!(balanced_quality_profile[0], 2.0);
+        assert_eq!(balanced_quality_profile[1], 1.0);
+        assert!(balanced_quality_profile[3] >= 0.0);
+        assert_eq!(balanced_quality_profile[4], 2047.0);
+        assert_eq!(balanced_quality_profile[5], 0.0);
+        assert_eq!(balanced_quality_profile[10], 0.0);
+        assert_eq!(balanced_quality_profile[13], 0.0);
+        let balanced_quality_candidates =
+            aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
+                44_100,
+                1,
+                &[0.0; 2048],
+                128_000,
+            )
+            .unwrap();
+        assert!(!balanced_quality_candidates.is_empty());
+        assert_eq!(balanced_quality_candidates.len() % 19, 0);
+        assert!(balanced_quality_candidates
+            .chunks_exact(19)
+            .any(|candidate| candidate[0] == 136.0
+                && candidate[1] == 8.0
+                && candidate[2] == 2047.0));
         let production_selected_details =
             aac_selected_scale_factor_frame_details_with_bitrate(44_100, 1, &[0.0; 2048], 128_000)
                 .unwrap();
@@ -2573,6 +3542,11 @@ mod tests {
         let mp3_steps = mp3_pcm_step_candidates();
         assert!(mp3_steps.contains(&0.2));
         assert!(!mp3_steps.contains(&0.15));
+        let mp3_mono_production_steps = mp3_production_pcm_step_candidates(1).unwrap();
+        assert_eq!(mp3_mono_production_steps[0], 2.0);
+        assert!(!mp3_mono_production_steps.contains(&0.2));
+        assert_eq!(mp3_production_pcm_step_candidates(2).unwrap(), mp3_steps);
+        assert!(mp3_production_pcm_step_candidates(3).is_err());
         assert_eq!(
             mp3_standard_big_value_table_selects(),
             vec![
@@ -2603,6 +3577,98 @@ mod tests {
         assert!(mp3_candidate_profile
             .chunks_exact(6)
             .any(|candidate| { candidate[3] > 0.0 && candidate[5] > 0.0 }));
+        let mp3_low_band_profile =
+            mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
+                44_100,
+                1,
+                &mp3_samples,
+                128,
+                false,
+            )
+            .unwrap();
+        assert_eq!(mp3_low_band_profile.len(), mp3_steps.len() * 7);
+        assert_eq!(mp3_low_band_profile[0], f64::from(mp3_steps[0]));
+        assert!(mp3_low_band_profile.chunks_exact(7).any(|candidate| {
+            candidate[3] > 0.0
+                && candidate[3] <= candidate[4]
+                && candidate[5] > 0.0
+                && candidate[5] <= candidate[6]
+        }));
+        let mp3_band_shape_profile =
+            mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
+                44_100,
+                1,
+                &mp3_samples,
+                128,
+                false,
+            )
+            .unwrap();
+        assert_eq!(mp3_band_shape_profile.len(), mp3_steps.len() * 21 * 10);
+        assert_eq!(mp3_band_shape_profile[0], f64::from(mp3_steps[0]));
+        assert!(mp3_band_shape_profile.chunks_exact(10).any(|candidate| {
+            candidate[3] >= 0.0
+                && candidate[3] < 21.0
+                && candidate[4] <= candidate[5]
+                && candidate[6] > 0.0
+                && candidate[6] <= candidate[8]
+                && candidate[7] <= candidate[9]
+        }));
+        let band_biased_mp3 = encode_mp3_perceptual_scale_factor_band_bias(
+            44_100,
+            1,
+            &mp3_samples[..1152],
+            0.2,
+            0,
+            7,
+            2,
+        )
+        .unwrap();
+        let band_gain_mp3 = encode_mp3_perceptual_quantized_band_gain(
+            44_100,
+            1,
+            &mp3_samples[..1152],
+            0.2,
+            0,
+            7,
+            1.5,
+        )
+        .unwrap();
+        let band_gain_matched_mp3 = encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
+            44_100,
+            1,
+            &mp3_samples[..1152],
+            2.0,
+            0,
+            7,
+            1.5,
+            -4,
+        )
+        .unwrap();
+        assert_eq!(
+            sonare_codec::detect(&band_biased_mp3),
+            Some(sonare_codec::Format::Mp3)
+        );
+        assert_eq!(
+            sonare_codec::detect(&band_gain_mp3),
+            Some(sonare_codec::Format::Mp3)
+        );
+        assert_eq!(
+            sonare_codec::detect(&band_gain_matched_mp3),
+            Some(sonare_codec::Format::Mp3)
+        );
+        let mp3_guarded_profile = mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
+            44_100,
+            1,
+            &mp3_samples,
+            128,
+            false,
+        )
+        .unwrap();
+        assert_eq!(mp3_guarded_profile.len(), mp3_steps.len() * 7);
+        assert_eq!(mp3_guarded_profile[0], f64::from(mp3_steps[0]));
+        assert!(mp3_guarded_profile
+            .chunks_exact(7)
+            .any(|candidate| candidate[3] > 0.0 && candidate[5] > 0.0));
         let mp3_bit_allocation =
             mp3_perceptual_bit_allocation_with_bitrate(44_100, 1, &mp3_samples, 128, false, 0)
                 .unwrap();

@@ -16,6 +16,9 @@ import init, {
   aac_standard_id_selected_scale_factor_global_gain,
   aac_standard_id_selected_scale_factor_magnitude_bias,
   aac_standard_id_selected_scale_factor_parameters,
+  aac_standard_id_selected_scale_factor_balanced_parameters,
+  aac_standard_id_selected_scale_factor_balanced_gain_deltas,
+  aac_standard_id_selected_scale_factor_balanced_magnitude_biases,
   aac_unsigned_pairs7_unit_magnitude_table,
   encode_audio,
   encode_audio_production,
@@ -26,6 +29,12 @@ import init, {
   encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate,
   aac_standard_selected_scale_factor_frame_details_with_magnitude_bias_and_bitrate,
   aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate,
+  aac_recommended_standard_selected_scale_factor_profile_with_bitrate,
+  aac_balanced_standard_selected_scale_factor_profile_with_bitrate,
+  aac_recommended_standard_id_payload_breakdown_with_bitrate,
+  aac_balanced_standard_id_payload_breakdown_with_bitrate,
+  aac_balanced_standard_id_quality_control_profile_with_bitrate,
+  aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate,
   aac_selected_scale_factor_frame_details_with_bitrate,
   encode_m4a_with_bitrate,
   encode_m4a_with_selected_scale_factors_and_bitrate,
@@ -35,11 +44,19 @@ import init, {
   encode_mp3_with_bitrate,
   encode_mp3_cbr_with_bitrate,
   encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate,
+  encode_mp3_perceptual_scale_factor_band_bias,
+  encode_mp3_perceptual_quantized_band_gain,
+  encode_mp3_perceptual_quantized_band_gain_global_gain_bias,
   mp3_layer3_main_data_capacity_bytes,
   mp3_pcm_step_candidates,
+  mp3_production_pcm_step_candidates,
   mp3_first_frame_perceptual_candidate_profile_with_bitrate,
+  mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate,
+  mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate,
+  mp3_first_frame_quality_guarded_candidate_profile_with_bitrate,
   mp3_perceptual_bit_allocation_with_bitrate,
   mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate,
+  mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate,
   mp3_standard_big_value_table_selects,
   StreamDecoder,
 } from "@libraz/sonare-codec";
@@ -68,6 +85,8 @@ const aacStandard128k = encode_aac_with_standard_spectral_offsets_and_bitrate(
   128000,
   128
 );
+const aacBalancedGainDeltas = aac_standard_id_selected_scale_factor_balanced_gain_deltas(1);
+const aacBalancedBiases = aac_standard_id_selected_scale_factor_balanced_magnitude_biases(1);
 const aacStandardSelected128k =
   encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
     44100,
@@ -77,6 +96,48 @@ const aacStandardSelected128k =
   );
 const aacStandardSelectedDetails =
   aac_recommended_standard_selected_scale_factor_frame_details_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacStandardSelectedProfile =
+  aac_recommended_standard_selected_scale_factor_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacBalancedSelectedProfile =
+  aac_balanced_standard_selected_scale_factor_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacStandardPayloadBreakdown =
+  aac_recommended_standard_id_payload_breakdown_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacBalancedPayloadBreakdown =
+  aac_balanced_standard_id_payload_breakdown_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacBalancedQualityProfile =
+  aac_balanced_standard_id_quality_control_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(2048),
+    128000
+  );
+const aacBalancedQualityCandidates =
+  aac_standard_id_quality_control_candidates_for_balance_profile_with_bitrate(
     44100,
     1,
     new Float32Array(2048),
@@ -122,8 +183,65 @@ const aacStandardIdSteps = Array.from(aac_standard_id_pcm_step_candidates());
 const aacCodebook7 = aac_unsigned_pairs7_unit_magnitude_table();
 const mp3Capacity = mp3_layer3_main_data_capacity_bytes(44100, 1, 128, false, false);
 const mp3Steps = Array.from(mp3_pcm_step_candidates());
+const mp3MonoProductionSteps = Array.from(mp3_production_pcm_step_candidates(1));
 const mp3CandidateProfile = Array.from(
   mp3_first_frame_perceptual_candidate_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(1152 * 3),
+    128,
+    false
+  )
+);
+const mp3LowBandShapeProfile = Array.from(
+  mp3_first_frame_low_band_spectral_shape_candidate_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(1152 * 3),
+    128,
+    false
+  )
+);
+const mp3BandShapeProfile = Array.from(
+  mp3_first_frame_band_spectral_shape_candidate_profile_with_bitrate(
+    44100,
+    1,
+    new Float32Array(1152 * 3),
+    128,
+    false
+  )
+);
+const bandBiasedMp3 = encode_mp3_perceptual_scale_factor_band_bias(
+  44100,
+  1,
+  new Float32Array(1152),
+  0.2,
+  0,
+  7,
+  2
+);
+const bandGainMp3 = encode_mp3_perceptual_quantized_band_gain(
+  44100,
+  1,
+  new Float32Array(1152),
+  0.2,
+  0,
+  7,
+  1.5
+);
+const bandGainMatchedMp3 =
+  encode_mp3_perceptual_quantized_band_gain_global_gain_bias(
+    44100,
+    1,
+    new Float32Array(1152),
+    2.0,
+    0,
+    7,
+    1.5,
+    -4
+  );
+const mp3GuardedCandidateProfile = Array.from(
+  mp3_first_frame_quality_guarded_candidate_profile_with_bitrate(
     44100,
     1,
     new Float32Array(1152 * 3),
@@ -143,6 +261,16 @@ const mp3BitAllocation = Array.from(
 );
 const mp3EntropyTargetedReservoirDetails = Array.from(
   mp3_entropy_targeted_perceptual_reservoir_frame_details_with_bitrate(
+    44100,
+    1,
+    new Float32Array(1152 * 3),
+    128,
+    false,
+    0
+  )
+);
+const mp3EntropyTargetedReservoirUtilization = Array.from(
+  mp3_entropy_targeted_perceptual_reservoir_utilization_profile_with_bitrate(
     44100,
     1,
     new Float32Array(1152 * 3),
@@ -179,14 +307,20 @@ section planning backed by core-owned unit fixtures, standard table-set
 section planning that now uses direct signed quad codebook 1/2, unsigned-quad
 codebook 3/4, direct signed pair codebook 5/6, and standard unsigned/escape codebooks, MP3 Layer III step candidates and main-data capacity,
 standard MP3 Huffman selector lists, AAC
-default production bitrate lookup, and caller-selected AAC/MP3 bitrate encoding. The MP3 bitrate
+default production bitrate lookup, and caller-selected AAC/MP3 bitrate encoding. The AAC
+standard-id payload breakdown helpers report `[frames, channels, sections,
+escape_sections, max_abs, section_bits, scale_factor_bits, spectral_bits,
+escape_spectral_bits, dominant_spectral_bits, dominant_escape_spectral_bits]`.
+The MP3 bitrate
 helpers include fixed-padding and CBR padding-scheduled variants, the
 perceptual active CBR diagnostic encoder, and flattened reservoir frame
 telemetry including frame length, padding, `main_data_begin`, and reservoir
 state plus perceptual-vs-calibrated granule counts, quality-guard comparison
 count, and encoder-side distortion delta for the MP3 reservoir diagnostics. The
 perceptual reservoir helper exposes matching telemetry for the mono/stereo
-production psychoacoustic scale-factor reservoir path, and the quality-guarded
+production psychoacoustic scale-factor reservoir path; the entropy-targeted
+helper also exposes utilization summary `[frames, used_frames, payload_bits,
+entropy_budget_bits, utilization, max_slack_bits]`, and the quality-guarded
 perceptual reservoir helper remains available as a comparison diagnostic. The mixed AAC helper
 also reports section/spectral/scale-factor split payload bit lengths for the
 current caller-table workbench, and the standard escape/mixed helpers report

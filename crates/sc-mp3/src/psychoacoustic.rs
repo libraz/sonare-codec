@@ -451,7 +451,11 @@ pub fn distribute_bits_by_perceptual_entropy(
     // Proportional share with largest-remainder rounding for an exact total.
     let mut assigned = 0usize;
     let mut fractional: Vec<(usize, f64)> = Vec::with_capacity(n);
-    for (index, (&pe, slot)) in perceptual_entropy.iter().zip(targets.iter_mut()).enumerate() {
+    for (index, (&pe, slot)) in perceptual_entropy
+        .iter()
+        .zip(targets.iter_mut())
+        .enumerate()
+    {
         let exact = remainder as f64 * pe / sum;
         let floor = exact.floor();
         let whole = floor as usize;
@@ -678,6 +682,33 @@ pub fn perceptual_long_block_scalefactors(
     scalefac_scale: bool,
     sample_rate: u32,
 ) -> Result<[u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    perceptual_long_block_scalefactors_with_allowed_noise_scale(
+        mdct_spectrum,
+        pcm_window,
+        step,
+        scalefac_scale,
+        sample_rate,
+        1.0,
+    )
+}
+
+/// Derives perceptual long-block scale factors with a caller-supplied
+/// allowed-noise multiplier. Values below 1.0 tighten the masking target and
+/// can force more scale-factor allocation; 1.0 matches
+/// [`perceptual_long_block_scalefactors`].
+pub fn perceptual_long_block_scalefactors_with_allowed_noise_scale(
+    mdct_spectrum: &[f32],
+    pcm_window: &[f64],
+    step: f32,
+    scalefac_scale: bool,
+    sample_rate: u32,
+    allowed_noise_scale: f64,
+) -> Result<[u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT], Error> {
+    if !allowed_noise_scale.is_finite() || allowed_noise_scale <= 0.0 {
+        return Err(Error::InvalidInput(
+            "MP3 allowed-noise scale must be positive and finite",
+        ));
+    }
     let fft_len = pcm_window.len();
     let window = hann_window(fft_len)?;
     let windowed: Vec<f64> = pcm_window
@@ -689,8 +720,11 @@ pub fn perceptual_long_block_scalefactors(
     let tonality = windowed_tonality(&energy, TONALITY_WINDOW_BINS)?;
     let barks = bin_barks(energy.len(), sample_rate, fft_len)?;
     let threshold = spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
-    let allowed =
+    let mut allowed =
         perceptual_band_allowed_noise(mdct_spectrum, &energy, &threshold, sample_rate, fft_len)?;
+    for target in &mut allowed {
+        *target *= allowed_noise_scale;
+    }
     allocate_long_block_scalefactors(mdct_spectrum, &allowed, step, scalefac_scale, sample_rate)
 }
 
@@ -1484,8 +1518,7 @@ mod tests {
     fn bit_distribution_favors_higher_entropy_granules_and_sums_exactly() {
         // Granule 0 demands three times the entropy of granule 1, so after the
         // shared floor it receives three times the remaining budget.
-        let targets =
-            distribute_bits_by_perceptual_entropy(&[3.0, 1.0], 800, 100).unwrap();
+        let targets = distribute_bits_by_perceptual_entropy(&[3.0, 1.0], 800, 100).unwrap();
         assert_eq!(targets, vec![550, 250]);
         assert_eq!(targets.iter().sum::<usize>(), 800);
         assert!(targets[0] > targets[1]);
@@ -1495,8 +1528,7 @@ mod tests {
     fn bit_distribution_is_exact_with_awkward_rounding() {
         // Equal demand over a budget that does not divide evenly still sums to the
         // exact total via largest-remainder rounding.
-        let targets =
-            distribute_bits_by_perceptual_entropy(&[1.0, 1.0, 1.0], 1001, 0).unwrap();
+        let targets = distribute_bits_by_perceptual_entropy(&[1.0, 1.0, 1.0], 1001, 0).unwrap();
         assert_eq!(targets.iter().sum::<usize>(), 1001);
         // Each granule is within one bit of an even share.
         for &t in &targets {
@@ -1515,8 +1547,7 @@ mod tests {
     #[test]
     fn bit_distribution_handles_floors_exceeding_the_budget() {
         // Floors that cannot be met collapse to an even split of the whole budget.
-        let targets =
-            distribute_bits_by_perceptual_entropy(&[5.0, 1.0], 150, 100).unwrap();
+        let targets = distribute_bits_by_perceptual_entropy(&[5.0, 1.0], 150, 100).unwrap();
         assert_eq!(targets, vec![75, 75]);
         assert_eq!(targets.iter().sum::<usize>(), 150);
     }
@@ -1572,7 +1603,11 @@ mod tests {
     #[test]
     fn silent_stereo_is_safe_and_defaults_to_mid_side() {
         let zero = [0.0_f64; 64];
-        assert!(approx(side_energy_fraction(&zero, &zero).unwrap(), 0.0, 1.0e-15));
+        assert!(approx(
+            side_energy_fraction(&zero, &zero).unwrap(),
+            0.0,
+            1.0e-15
+        ));
         assert!(should_use_mid_side(&zero, &zero).unwrap());
     }
 
