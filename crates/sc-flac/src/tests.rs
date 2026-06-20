@@ -1,6 +1,7 @@
 use super::*;
 
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use super::{
         crc16, crc8, decode, decode_subframe, parse_frame_header, parse_streaminfo,
