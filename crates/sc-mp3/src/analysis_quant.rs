@@ -641,6 +641,173 @@ pub fn mdct_long_block(samples: &[f32; 36]) -> Result<Vec<f32>, Error> {
     mdct(&apply_window(samples, &window)?)
 }
 
+/// Number of frequency lines a Layer III short block (block_type 2) produces for
+/// one subband: three windows of six lines each.
+pub const SHORT_BLOCK_LINES: usize = 18;
+
+/// Start offsets, within the 36-sample hybrid buffer, of the three short-block
+/// analysis windows. The windows are 12 samples long and hop by 6, so the first
+/// and last six samples of the buffer lie under the zero tails of the short
+/// window and contribute nothing (ISO/IEC 11172-3 §2.4.3.4).
+const SHORT_BLOCK_WINDOW_OFFSETS: [usize; 3] = [6, 12, 18];
+
+/// Runs the Layer III short-block analysis windows and MDCTs for one subband.
+///
+/// The 36-sample hybrid buffer is transformed as three 12-sample sine-windowed
+/// MDCTs taken at 6-sample hops (offsets 6, 12, 18). Each MDCT yields six lines,
+/// returned as three consecutive window-major groups (18 lines total), matching
+/// the short-block hybrid filterbank of ISO/IEC 11172-3 §2.4.3.4. Consecutive
+/// windows overlap by 50%, so an inverse MDCT-12 with the same short window and
+/// 6-sample overlap-add reconstructs the doubly-covered central region.
+pub fn mdct_short_block(samples: &[f32; 36]) -> Result<Vec<f32>, Error> {
+    let window = sine_window(12)?;
+    let mut lines = Vec::with_capacity(SHORT_BLOCK_LINES);
+    for offset in SHORT_BLOCK_WINDOW_OFFSETS {
+        let segment = &samples[offset..offset + 12];
+        lines.extend(mdct(&apply_window(segment, &window)?)?);
+    }
+    Ok(lines)
+}
+
+/// Number of equal sub-windows the transient detector splits a granule into.
+/// Twelve divides the 576-sample granule evenly (48 samples each).
+const LAYER3_TRANSIENT_CHUNKS: usize = 12;
+
+/// Energy-jump ratio, over the running average of the preceding sub-windows,
+/// that marks an attack. Deliberately high so steady tones never trip it.
+const LAYER3_TRANSIENT_RATIO: f64 = 8.0;
+
+/// Reports whether a span of PCM holds a transient (attack) that a single long
+/// block would smear into pre-echo, signalling that short blocks should be used.
+///
+/// The samples are split into [`LAYER3_TRANSIENT_CHUNKS`] equal sub-windows and a
+/// transient is flagged when any sub-window's energy exceeds
+/// [`LAYER3_TRANSIENT_RATIO`] times the running average of the preceding
+/// sub-windows while also being a meaningful fraction of the span's peak energy.
+/// Flat energy (steady tones, noise) and slow swells never trip it, so long-block
+/// coding is abandoned only for genuine attacks. A span shorter than the chunk
+/// count is treated as non-transient.
+pub fn layer3_granule_is_transient(samples: &[f32]) -> bool {
+    let chunk = samples.len() / LAYER3_TRANSIENT_CHUNKS;
+    if chunk == 0 {
+        return false;
+    }
+    let mut energy = [0.0_f64; LAYER3_TRANSIENT_CHUNKS];
+    for (c, slot) in energy.iter_mut().enumerate() {
+        let part = &samples[c * chunk..(c + 1) * chunk];
+        *slot = part.iter().map(|&x| f64::from(x) * f64::from(x)).sum();
+    }
+    let max = energy.iter().copied().fold(0.0_f64, f64::max);
+    if max <= 0.0 {
+        return false;
+    }
+    let mut prev_sum = energy[0];
+    for (i, &e) in energy.iter().enumerate().skip(1) {
+        // Floor the running average so a near-silent lead-in does not make the
+        // ratio explode on ordinary noise.
+        let prev_avg = (prev_sum / i as f64).max(max * 1.0e-3);
+        if e > LAYER3_TRANSIENT_RATIO * prev_avg && e > 0.05 * max {
+            return true;
+        }
+        prev_sum += e;
+    }
+    false
+}
+
+/// The window type chosen for one Layer III granule (ISO/IEC 11172-3 §2.4.1.7).
+///
+/// `Long` is the normal single 36-point block. `Short` is the three-window
+/// block used for transients. Because the overlap-add must remain continuous, a
+/// `Short` block is reached only through a `Start` window (long→short) and left
+/// only through a `Stop` window (short→long).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Layer3BlockType {
+    Long,
+    Start,
+    Short,
+    Stop,
+}
+
+impl Layer3BlockType {
+    /// Returns the 2-bit `block_type` field value as serialized in the side info
+    /// (`0` long, `1` start, `2` short, `3` stop). The `Long` case reports `0`
+    /// but is normally written with the `window_switching` flag cleared.
+    #[must_use]
+    pub fn block_type_bits(self) -> u8 {
+        match self {
+            Layer3BlockType::Long => 0,
+            Layer3BlockType::Start => 1,
+            Layer3BlockType::Short => 2,
+            Layer3BlockType::Stop => 3,
+        }
+    }
+
+    /// Reports whether this is a window-switched (non-long) block, i.e. whether
+    /// the granule sets the `window_switching` flag in the side info.
+    #[must_use]
+    pub fn is_window_switched(self) -> bool {
+        !matches!(self, Layer3BlockType::Long)
+    }
+}
+
+/// Builds the per-granule block-type schedule from per-granule transient flags.
+///
+/// Each transient granule becomes a `Short` block. To keep the overlap-add
+/// continuous, every maximal run of `Short` granules is bracketed by a `Start`
+/// window on the preceding granule and a `Stop` window on the following one (a
+/// lone `Long` granule trapped between two `Short` runs is promoted to `Short`
+/// so runs stay contiguous and a single granule never has to be both start and
+/// stop). Granules with no transient and no short neighbour stay `Long`.
+///
+/// At a stream boundary a leading or trailing short run cannot be bracketed
+/// (there is no granule before the first or after the last); such a run is coded
+/// `Short` directly, which is sound because the missing neighbour contributes no
+/// overlap energy there.
+#[must_use]
+pub fn build_layer3_block_schedule(transient: &[bool]) -> Vec<Layer3BlockType> {
+    let n = transient.len();
+    let mut types = vec![Layer3BlockType::Long; n];
+    for (slot, &is_transient) in transient.iter().enumerate() {
+        if is_transient {
+            types[slot] = Layer3BlockType::Short;
+        }
+    }
+
+    // Promote any `Long` trapped between two `Short` granules until stable, so
+    // every short run is contiguous.
+    loop {
+        let mut changed = false;
+        for i in 1..n.saturating_sub(1) {
+            if types[i] == Layer3BlockType::Long
+                && types[i - 1] == Layer3BlockType::Short
+                && types[i + 1] == Layer3BlockType::Short
+            {
+                types[i] = Layer3BlockType::Short;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    // Bracket each short run: the long granule before it becomes a start window,
+    // the long granule after it a stop window.
+    for i in 0..n {
+        if types[i] != Layer3BlockType::Short {
+            continue;
+        }
+        if i > 0 && types[i - 1] == Layer3BlockType::Long {
+            types[i - 1] = Layer3BlockType::Start;
+        }
+        if i + 1 < n && types[i + 1] == Layer3BlockType::Long {
+            types[i + 1] = Layer3BlockType::Stop;
+        }
+    }
+
+    types
+}
+
 /// Runs Layer III long-block analysis and scalar spectral quantization.
 pub fn quantize_long_block(samples: &[f32; 36], step: f32) -> Result<Vec<i32>, Error> {
     quantize_spectrum(&mdct_long_block(samples)?, step, 8191)
@@ -908,6 +1075,26 @@ pub(crate) fn long_block_scalefactor_quantizer_gain(scale_factor: u8, scalefac_s
     2.0_f32.powf(0.75 * multiplier * f32::from(scale_factor))
 }
 
+/// Per-(band, window) scale-factor gain applied to a short-block line before
+/// rounding.
+///
+/// The decoder requantizes a short-block line with two extra exponents on top
+/// of the long-block law (ISO/IEC 11172-3 §2.4.3.4): the window's
+/// `subblock_gain` attenuates by `2^(-2·subblock_gain)` and the band's scale
+/// factor by `2^(-0.5·(1+scalefac_scale)·sf)`. Because the power-law quantizer
+/// raises the magnitude to the 3/4 power, the encoder pre-amplifies the
+/// pre-rounded value by `2^(0.75·(0.5·(1+scalefac_scale)·sf + 2·subblock_gain))`
+/// so the decoder reconstructs the line exactly.
+pub(crate) fn short_block_scalefactor_quantizer_gain(
+    scale_factor: u8,
+    subblock_gain: u8,
+    scalefac_scale: bool,
+) -> f32 {
+    let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
+    let exponent = 0.75 * (multiplier * f32::from(scale_factor) + 2.0 * f32::from(subblock_gain));
+    2.0_f32.powf(exponent)
+}
+
 /// Quantizes a long-block spectrum (576 lines) with per-band scale-factor
 /// noise shaping.
 ///
@@ -1003,6 +1190,80 @@ pub(crate) fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors_and_magnitud
         } else {
             quantized
         });
+    }
+    Ok(out)
+}
+
+/// Quantizes a reordered short-block spectrum (576 lines) with per-(band,
+/// window) scale-factor noise shaping and per-window `subblock_gain`.
+///
+/// The spectrum must already be in bitstream reorder order
+/// ([`crate::layer3_short_reorder_map`]): grouped by short scale-factor band,
+/// then by window, then by frequency. Each line is quantized with the ISO power
+/// law `is = nint(|xr|^0.75 / step)` and pre-amplified by its band/window gain
+/// ([`short_block_scalefactor_quantizer_gain`]) so the decoder's per-band
+/// attenuation and `subblock_gain` reconstruct `xr`. The highest short band
+/// (index 12, no transmitted scale factor) shapes with `subblock_gain` only.
+///
+/// `scale_factors[band][window]` supplies the transmitted scale factor for the
+/// twelve coded short bands; `subblock_gain[window]` applies to every line of
+/// that window. The caller is responsible for any sign convention.
+pub fn quantize_mpeg1_layer3_short_spectrum_with_scalefactors(
+    reordered_spectrum: &[f32],
+    step: f32,
+    scale_factors: &[[u8; LAYER3_SHORT_WINDOWS]; LAYER3_SHORT_SCALE_FACTOR_BANDS],
+    subblock_gain: &[u8; LAYER3_SHORT_WINDOWS],
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<Vec<i32>, Error> {
+    if !step.is_finite() || step <= 0.0 {
+        return Err(Error::InvalidInput("quantization step must be positive"));
+    }
+    if reordered_spectrum.len() != LAYER3_GRANULE_LINES {
+        return Err(Error::InvalidInput(
+            "short-block spectrum must be one full granule",
+        ));
+    }
+    let index = layer3_short_scalefactor_band_index(sample_rate)?;
+
+    let mut out = Vec::with_capacity(LAYER3_GRANULE_LINES);
+    let mut pos = 0_usize;
+    for band in 0..index.len() - 1 {
+        let width = usize::from(index[band + 1]) - usize::from(index[band]);
+        for window in 0..LAYER3_SHORT_WINDOWS {
+            let scale_factor = scale_factors.get(band).map(|w| w[window]).unwrap_or(0);
+            let gain = short_block_scalefactor_quantizer_gain(
+                scale_factor,
+                subblock_gain[window],
+                scalefac_scale,
+            );
+            for _ in 0..width {
+                let coeff = match reordered_spectrum.get(pos) {
+                    Some(&value) => value,
+                    None => {
+                        return Err(Error::InvalidInput(
+                            "short-block spectrum line out of range",
+                        ))
+                    }
+                };
+                if !coeff.is_finite() {
+                    return Err(Error::InvalidInput("spectral coefficient must be finite"));
+                }
+                let magnitude = (coeff.abs().powf(0.75) / step * gain).round();
+                if magnitude > 8191.0 {
+                    return Err(Error::InvalidInput(
+                        "quantized spectral coefficient exceeds bound",
+                    ));
+                }
+                let quantized = magnitude as i32;
+                out.push(if coeff.is_sign_negative() {
+                    -quantized
+                } else {
+                    quantized
+                });
+                pos += 1;
+            }
+        }
     }
     Ok(out)
 }

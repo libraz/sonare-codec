@@ -113,6 +113,134 @@ pub fn layer3_long_scalefactor_band_range(
     Ok((usize::from(index[band]), usize::from(index[band + 1])))
 }
 
+/// Number of boundary entries in a Layer III short-block scale-factor band
+/// index. The 14 boundaries delimit 13 short bands, each measured in
+/// window-local spectral lines (0..192).
+pub const LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES: usize = 14;
+
+/// Number of spectral lines one short-block window spans (576 / 3).
+pub const LAYER3_SHORT_WINDOW_LINES: usize = 192;
+
+/// Number of frequency lines in one granule.
+pub const LAYER3_GRANULE_LINES: usize = 576;
+
+/// Number of short-block analysis windows per granule.
+pub const LAYER3_SHORT_WINDOWS: usize = 3;
+
+/// Number of short scale-factor bands that carry a transmitted scale factor per
+/// window. The highest short band (index 12) carries none and is quantized flat,
+/// mirroring the long-block residual band (ISO/IEC 11172-3 §2.4.2.7).
+pub const LAYER3_SHORT_SCALE_FACTOR_BANDS: usize = 12;
+
+/// MPEG-1 Layer III short-block scale-factor band boundaries at 44.1 kHz
+/// (ISO/IEC 11172-3 Annex B, `sfBandIndex[].s`). Entry `b` is the first
+/// window-local line of short band `b`; the final entry (192) terminates the
+/// last band. The same partition applies independently to all three windows.
+pub(crate) const MPEG1_LAYER3_SHORT_SFB_44100: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 16, 22, 30, 40, 52, 66, 84, 106, 136, 192];
+
+/// MPEG-1 Layer III short-block scale-factor band boundaries at 48 kHz.
+pub(crate) const MPEG1_LAYER3_SHORT_SFB_48000: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 16, 22, 28, 38, 50, 64, 80, 100, 126, 192];
+
+/// MPEG-1 Layer III short-block scale-factor band boundaries at 32 kHz.
+pub(crate) const MPEG1_LAYER3_SHORT_SFB_32000: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 16, 22, 30, 42, 58, 78, 104, 138, 180, 192];
+
+/// MPEG-2 LSF Layer III short-block scale-factor band boundaries at 22.05 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex[].s`).
+pub(crate) const MPEG2_LAYER3_SHORT_SFB_22050: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 18, 24, 32, 42, 56, 74, 100, 132, 174, 192];
+
+/// MPEG-2 LSF Layer III short-block scale-factor band boundaries at 24 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex[].s`).
+pub(crate) const MPEG2_LAYER3_SHORT_SFB_24000: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 136, 180, 192];
+
+/// MPEG-2 LSF Layer III short-block scale-factor band boundaries at 16 kHz
+/// (ISO/IEC 13818-3 Table B.8, `sfBandIndex[].s`).
+pub(crate) const MPEG2_LAYER3_SHORT_SFB_16000: [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES] =
+    [0, 4, 8, 12, 18, 26, 36, 48, 62, 80, 104, 134, 174, 192];
+
+/// Returns the Layer III short-block scale-factor band index for any sample
+/// rate defined by the MPEG-1 (ISO/IEC 11172-3) or MPEG-2 LSF (ISO/IEC
+/// 13818-3) specifications. MPEG-2.5 rates are outside both and are rejected.
+pub fn layer3_short_scalefactor_band_index(
+    sample_rate: u32,
+) -> Result<&'static [u16; LAYER3_SHORT_SCALEFACTOR_BAND_BOUNDARIES], Error> {
+    match sample_rate {
+        44_100 => Ok(&MPEG1_LAYER3_SHORT_SFB_44100),
+        48_000 => Ok(&MPEG1_LAYER3_SHORT_SFB_48000),
+        32_000 => Ok(&MPEG1_LAYER3_SHORT_SFB_32000),
+        22_050 => Ok(&MPEG2_LAYER3_SHORT_SFB_22050),
+        24_000 => Ok(&MPEG2_LAYER3_SHORT_SFB_24000),
+        16_000 => Ok(&MPEG2_LAYER3_SHORT_SFB_16000),
+        _ => Err(Error::InvalidInput(
+            "MP3 short-block scale-factor band index undefined for sample rate",
+        )),
+    }
+}
+
+/// Builds the Layer III short-block reorder map for the given sample rate.
+///
+/// The short-block hybrid filterbank emits spectral lines window-major within
+/// each subband: `raw[sb*18 + w*6 + line]` holds window `w`'s line for global
+/// frequency line `sb*6 + line`. The bitstream, however, groups the lines by
+/// scale-factor band and then by window (ISO/IEC 11172-3 §2.4.3.4.6), so that
+/// each short band's three windows are coded together.
+///
+/// The returned gather map has `reordered[p] = raw[map[p]]`: position `p` in
+/// bitstream order corresponds to `map[p]` in raw filterbank order. It is a
+/// permutation of `0..576` and depends only on the sample-rate band table.
+pub fn layer3_short_reorder_map(sample_rate: u32) -> Result<[usize; LAYER3_GRANULE_LINES], Error> {
+    let index = layer3_short_scalefactor_band_index(sample_rate)?;
+    let mut map = [0_usize; LAYER3_GRANULE_LINES];
+    let mut pos = 0_usize;
+    for band in 0..index.len() - 1 {
+        let start = usize::from(index[band]);
+        let width = usize::from(index[band + 1]) - start;
+        for window in 0..LAYER3_SHORT_WINDOWS {
+            for line in 0..width {
+                let global_freq = start + line;
+                let subband = global_freq / 6;
+                let subband_line = global_freq % 6;
+                let raw = subband * SHORT_BLOCK_LINES + window * 6 + subband_line;
+                if pos >= LAYER3_GRANULE_LINES || raw >= LAYER3_GRANULE_LINES {
+                    return Err(Error::InvalidInput(
+                        "MP3 short-block reorder map exceeds granule bounds",
+                    ));
+                }
+                map[pos] = raw;
+                pos += 1;
+            }
+        }
+    }
+    if pos != LAYER3_GRANULE_LINES {
+        return Err(Error::InvalidInput(
+            "MP3 short-block scale-factor band index does not tile the granule",
+        ));
+    }
+    Ok(map)
+}
+
+/// Returns the `[start, end)` range, in reordered bitstream lines, of one
+/// short-block scale-factor band across all three windows. Short band `b`
+/// occupies the reordered lines `[s[b]*3, s[b+1]*3)`.
+pub fn layer3_short_scalefactor_band_range(
+    band: usize,
+    sample_rate: u32,
+) -> Result<(usize, usize), Error> {
+    let index = layer3_short_scalefactor_band_index(sample_rate)?;
+    if band + 1 >= index.len() {
+        return Err(Error::InvalidInput(
+            "MP3 short-block scale-factor band index out of range",
+        ));
+    }
+    let start = usize::from(index[band]) * LAYER3_SHORT_WINDOWS;
+    let end = usize::from(index[band + 1]) * LAYER3_SHORT_WINDOWS;
+    Ok((start, end))
+}
+
 pub const MPEG1_LAYER3_PCM_STEP_CANDIDATES: &[f32] = &[
     0.0005,
     0.001,

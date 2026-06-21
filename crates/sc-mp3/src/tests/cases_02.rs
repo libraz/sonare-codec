@@ -10,6 +10,174 @@
         assert_eq!(mdct_long_block(&[0.0; 36]).unwrap(), vec![0.0; 18]);
     }
 
+    /// Inverse of the `sc-core` MDCT-12 used by `mdct_short_block`:
+    /// `x[m] = (2/N) sum_k X[k] cos[(pi/N)(m + 0.5 + N/2)(k + 0.5)]`, N = 6.
+    fn ctrl_imdct_12(lines: &[f32]) -> [f32; 12] {
+        let n = 6.0_f64;
+        let mut out = [0.0_f32; 12];
+        for (m, o) in out.iter_mut().enumerate() {
+            let mut acc = 0.0_f64;
+            for (k, &x) in lines.iter().enumerate() {
+                let angle =
+                    std::f64::consts::PI / n * (m as f64 + 0.5 + n / 2.0) * (k as f64 + 0.5);
+                acc += f64::from(x) * angle.cos();
+            }
+            *o = (2.0 / n * acc) as f32;
+        }
+        out
+    }
+
+    fn ctrl_short_window_12() -> [f32; 12] {
+        let mut w = [0.0_f32; 12];
+        for (i, wi) in w.iter_mut().enumerate() {
+            *wi = (std::f32::consts::PI / 12.0 * (i as f32 + 0.5)).sin();
+        }
+        w
+    }
+
+    #[test]
+    fn short_block_mdct_reconstructs_central_overlap_region() {
+        // The three 12-sample short windows hop by 6 inside the 36-sample buffer
+        // (offsets 6, 12, 18). Windows 0/1 overlap on [12, 18) and windows 1/2 on
+        // [18, 24), so an inverse MDCT-12 + short-window + 6-sample overlap-add
+        // must reconstruct the doubly-covered central region [12, 24) exactly,
+        // confirming the short-block hybrid geometry (Princen-Bradley TDAC).
+        let mut input = [0.0_f32; 36];
+        for (i, slot) in input.iter_mut().enumerate() {
+            *slot = 0.6 * (0.37 * i as f32 + 0.2).sin() - 0.25 * (0.11 * i as f32).cos();
+        }
+
+        let lines = mdct_short_block(&input).unwrap();
+        assert_eq!(lines.len(), 18);
+
+        // Invert each window and overlap-add at the analysis offsets.
+        let window = ctrl_short_window_12();
+        let mut recon = [0.0_f32; 36];
+        for (w, &offset) in [6usize, 12, 18].iter().enumerate() {
+            let time = ctrl_imdct_12(&lines[w * 6..w * 6 + 6]);
+            for n in 0..12 {
+                recon[offset + n] += time[n] * window[n];
+            }
+        }
+
+        for i in 12..24 {
+            assert!(
+                (recon[i] - input[i]).abs() < 1.0e-4,
+                "short-block reconstruction off at {i}: got {} want {}",
+                recon[i],
+                input[i]
+            );
+        }
+
+        // All-zero input transforms to all-zero lines.
+        assert_eq!(mdct_short_block(&[0.0; 36]).unwrap(), vec![0.0; 18]);
+    }
+
+    #[test]
+    fn transient_detector_fires_on_attacks_not_steady_signals() {
+        let sample_rate = 44_100.0_f32;
+
+        // A steady tone has flat energy across the granule: not a transient.
+        let tone: Vec<f32> = (0..576)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * (i as f32 / sample_rate)).sin())
+            .collect();
+        assert!(!layer3_granule_is_transient(&tone));
+
+        // Broadband noise at constant level is also flat energy: not a transient.
+        let mut state = 0x1234_5678_u32;
+        let noise: Vec<f32> = (0..576)
+            .map(|_| {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (state >> 8) as f32 / (1u32 << 24) as f32 - 0.5
+            })
+            .collect();
+        assert!(!layer3_granule_is_transient(&noise));
+
+        // Silence for the first half then a loud burst: a clear attack.
+        let mut attack = vec![0.0_f32; 576];
+        for (i, slot) in attack.iter_mut().enumerate().skip(360) {
+            *slot = 0.8 * (std::f32::consts::TAU * 1_500.0 * (i as f32 / sample_rate)).sin();
+        }
+        assert!(layer3_granule_is_transient(&attack));
+
+        // A slow linear swell is not an attack (no sudden jump).
+        let swell: Vec<f32> = (0..576)
+            .map(|i| {
+                let env = i as f32 / 576.0;
+                env * 0.6 * (std::f32::consts::TAU * 800.0 * (i as f32 / sample_rate)).sin()
+            })
+            .collect();
+        assert!(!layer3_granule_is_transient(&swell));
+
+        // Degenerate spans (empty, shorter than the chunk count, silence) are
+        // never transient.
+        assert!(!layer3_granule_is_transient(&[]));
+        assert!(!layer3_granule_is_transient(&[0.1; 4]));
+        assert!(!layer3_granule_is_transient(&[0.0; 576]));
+    }
+
+    #[test]
+    fn block_schedule_brackets_short_runs_with_start_and_stop() {
+        use Layer3BlockType::{Long, Short, Start, Stop};
+
+        // No transients: every granule stays long.
+        assert_eq!(
+            build_layer3_block_schedule(&[false, false, false]),
+            vec![Long, Long, Long]
+        );
+
+        // An isolated transient is bracketed: long, start, short, stop, long.
+        assert_eq!(
+            build_layer3_block_schedule(&[false, false, true, false, false]),
+            vec![Long, Start, Short, Stop, Long]
+        );
+
+        // Adjacent transients merge into one bracketed run.
+        assert_eq!(
+            build_layer3_block_schedule(&[false, true, true, false]),
+            vec![Start, Short, Short, Stop]
+        );
+
+        // A lone long trapped between two transients is promoted to short, so the
+        // run is contiguous and the single granule is not asked to be both start
+        // and stop.
+        assert_eq!(
+            build_layer3_block_schedule(&[false, true, false, true, false]),
+            vec![Start, Short, Short, Short, Stop]
+        );
+
+        // Two separated runs each get their own bracketing (the long between them
+        // is both a stop for the first run and a start for the second).
+        assert_eq!(
+            build_layer3_block_schedule(&[false, true, false, false, true, false]),
+            vec![Start, Short, Stop, Start, Short, Stop]
+        );
+
+        // A boundary transient cannot be bracketed on the missing side: a leading
+        // run has no start, a trailing run no stop.
+        assert_eq!(
+            build_layer3_block_schedule(&[true, false]),
+            vec![Short, Stop]
+        );
+        assert_eq!(
+            build_layer3_block_schedule(&[false, true]),
+            vec![Start, Short]
+        );
+
+        // Empty input yields an empty schedule.
+        assert_eq!(build_layer3_block_schedule(&[]), Vec::new());
+
+        // Block-type field encodings.
+        assert_eq!(Long.block_type_bits(), 0);
+        assert_eq!(Start.block_type_bits(), 1);
+        assert_eq!(Short.block_type_bits(), 2);
+        assert_eq!(Stop.block_type_bits(), 3);
+        assert!(!Long.is_window_switched());
+        assert!(Start.is_window_switched());
+        assert!(Short.is_window_switched());
+        assert!(Stop.is_window_switched());
+    }
+
     #[test]
     fn builds_layer3_analysis_subband_blocks() {
         let pcm = AudioBuffer::new(
