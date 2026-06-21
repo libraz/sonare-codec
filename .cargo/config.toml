@@ -1,0 +1,6 @@
+# Enable WebAssembly SIMD (simd128) for every wasm32 build. The codec hot paths
+# (filterbank, MDCT, FFT) auto-vectorize through it, which is the primary speed
+# lever for the wasm-centric deployment target. simd128 is stable in all current
+# browsers; build without this file (or override RUSTFLAGS) for ancient runtimes.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

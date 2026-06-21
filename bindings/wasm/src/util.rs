@@ -53,17 +53,17 @@ pub(crate) fn encode_by_name_with_mode(
     pcm: &sonare_codec::AudioBuffer,
     mode: sonare_codec::EncodeMode,
 ) -> Result<Vec<u8>, String> {
-    match format.to_ascii_lowercase().as_str() {
-        "m4a" | "mp4" => {
-            let aac = sonare_codec::encode_with_mode(sonare_codec::Format::Aac, pcm, mode)
-                .map_err(|err| err.to_string())?;
-            sonare_codec::mux_aac_adts_as_m4a(&aac).map_err(|err| err.to_string())
-        }
-        _ => {
-            let format = parse_format(format)?;
-            sonare_codec::encode_with_mode(format, pcm, mode).map_err(|err| err.to_string())
-        }
+    // The M4A/MP4 container wrapper rides on the `aac` codec; without it the
+    // request falls through to `parse_format`, which reports it as unsupported.
+    #[cfg(feature = "aac")]
+    if matches!(format.to_ascii_lowercase().as_str(), "m4a" | "mp4") {
+        let aac = sonare_codec::encode_with_mode(sonare_codec::Format::Aac, pcm, mode)
+            .map_err(|err| err.to_string())?;
+        return sonare_codec::mux_aac_adts_as_m4a(&aac).map_err(|err| err.to_string());
     }
+
+    let format = parse_format(format)?;
+    sonare_codec::encode_with_mode(format, pcm, mode).map_err(|err| err.to_string())
 }
 
 pub(crate) fn is_m4a_container(input: &[u8]) -> bool {

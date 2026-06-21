@@ -13,5 +13,15 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-sonare-codec = { workspace = true, features = ["aac", "opus", "vorbis"] }
+sonare-codec = { workspace = true }
 wasm-bindgen.workspace = true
+
+# Per-codec gates so a bundle can drop the heavy lossy encoders it does not need.
+# The default keeps every codec (decode/wav/flac/mp3 come from sonare-codec's own
+# defaults); build with `--no-default-features --features <subset>` for a smaller
+# wasm artifact.
+[features]
+default = ["aac", "opus", "vorbis"]
+aac = ["sonare-codec/aac"]
+opus = ["sonare-codec/opus"]
+vorbis = ["sonare-codec/vorbis"]

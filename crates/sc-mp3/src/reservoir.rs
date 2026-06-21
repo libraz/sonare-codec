@@ -901,6 +901,329 @@ pub fn encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir
     assemble_mpeg1_layer3_reservoir_frames(frames)
 }
 
+/// MPEG-1 Layer III bitrates (kbit/s) in ascending order, used by the VBR
+/// selector to pick the smallest rate whose frame holds a perceptual payload.
+const MPEG1_LAYER3_VBR_BITRATES_KBPS: [u16; 14] = [
+    32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+];
+
+/// MPEG-2 LSF Layer III bitrates (kbit/s) in ascending order (ISO/IEC 13818-3
+/// §2.4.2.3), used by the VBR selector at the lower-sample-rate LSF rates.
+const MPEG2_LAYER3_LSF_VBR_BITRATES_KBPS: [u16; 14] =
+    [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+
+/// Returns the smallest Layer III header (from the version-appropriate
+/// `bitrates`) whose main-data capacity holds `payload_bytes`, together with
+/// that capacity. Returns `None` when even the top bitrate cannot hold it.
+fn smallest_layer3_header_for_payload(
+    sample_rate: u32,
+    channels: u16,
+    payload_bytes: usize,
+    crc_protected: bool,
+    bitrates: &[u16],
+) -> Result<Option<(FrameHeader, usize)>, Error> {
+    for &kbps in bitrates {
+        let header = layer3_header_for_capacity(sample_rate, channels, kbps, false, crc_protected)?;
+        let capacity = layer3_main_data_capacity_bytes(header)?;
+        if capacity >= payload_bytes {
+            return Ok(Some((header, capacity)));
+        }
+    }
+    Ok(None)
+}
+
+/// Shared variable-bitrate (VBR) Layer III encoder over the perceptual path,
+/// parameterized by the version's bitrate table and top rate.
+///
+/// Each frame is coded independently (no bit reservoir: `main_data_begin = 0`).
+/// For every frame the encoder packs the perceptual payload at the finest
+/// quantizer step whose payload still fits the top-bitrate frame ceiling, then
+/// emits the frame at the *smallest* standard bitrate whose main-data capacity
+/// holds that payload. Simple frames (near silence, steady tones) land on low
+/// bitrates while complex frames rise toward the ceiling, so the average rate
+/// tracks signal demand at a constant quantizer quality. The perceptual payload
+/// is bitrate-independent (the bitrate only sets capacity), so it is packed once
+/// per frame and the header rate is chosen afterwards.
+///
+/// When `mid_side` is set the stereo input is mapped through the orthonormal
+/// mid/side transform before packing and every emitted frame header is marked
+/// [`ChannelMode::JointStereo`] so the decoder applies the inverse matrix. The
+/// relabelling is size-exact (only the channel-mode / `mode_extension` bits
+/// change), so per-frame capacity and rate selection are unaffected.
+///
+/// The quantizer step is the quality/size lever: `candidates` is searched
+/// finest-first and the finest fitting step is used, so a caller wanting a
+/// fixed-quality (lower-bitrate) VBR passes a single coarser step.
+fn encode_layer3_pcm_frames_vbr_perceptual_core(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+    bitrates: &[u16],
+    max_bitrate_kbps: u16,
+    mid_side: bool,
+) -> Result<Vec<u8>, Error> {
+    if candidates.is_empty() {
+        return Err(Error::InvalidInput(
+            "MP3 VBR needs at least one quantizer step",
+        ));
+    }
+
+    // In MS mode the left/right pair is coded as the mid/side pair; otherwise the
+    // input is coded directly. `coded` borrows whichever buffer is packed.
+    let owned_mid_side;
+    let coded: &AudioBuffer = if mid_side {
+        owned_mid_side = mid_side_encode_buffer(pcm)?;
+        &owned_mid_side
+    } else {
+        pcm
+    };
+
+    // The payload packing is bitrate-independent, so the top-rate base header
+    // both counts frames and supplies the per-frame quality ceiling.
+    let base_header = layer3_header_for_capacity(
+        coded.sample_rate,
+        coded.channels,
+        max_bitrate_kbps,
+        false,
+        crc_protected,
+    )?;
+    let frame_count = layer3_frame_count(base_header, coded)?;
+    let max_capacity = layer3_main_data_capacity_bytes(base_header)?;
+    let granules = base_header.layer3_granule_count() * base_header.channel_count();
+
+    let mut frames: Vec<Layer3ReservoirFrame> = Vec::with_capacity(frame_count);
+    for frame_index in 0..frame_count {
+        let start_frame = frame_index
+            .checked_mul(usize::from(base_header.samples_per_frame()))
+            .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
+
+        // Pick the finest step whose perceptual payload fits the top-rate ceiling.
+        // A too-fine step can overflow the quantizer's coefficient bound; that
+        // packing error is treated as "step too fine" and the search continues.
+        let mut chosen: Option<(f32, Layer3SideInfo, PackedBits)> = None;
+        for &step in candidates {
+            if !step.is_finite() || step <= 0.0 {
+                return Err(Error::InvalidInput(
+                    "MP3 quantizer step must be positive and finite",
+                ));
+            }
+            let Ok((side_info, main_data)) =
+                pack_mpeg1_layer3_pcm_frame_perceptual_payloads_with_table_provider(
+                    base_header,
+                    coded,
+                    start_frame,
+                    step,
+                    provider,
+                )
+            else {
+                continue;
+            };
+            // The step must fit the top-rate ceiling and keep every granule's
+            // part2_3_length within its 12-bit side-info field.
+            if main_data.bytes.len() <= max_capacity
+                && !layer3_side_info_exceeds_part2_3_limit(&side_info, base_header)
+            {
+                chosen = Some((step, side_info, main_data));
+                break;
+            }
+        }
+        let (step, mut side_info, main_data) = chosen.ok_or(Error::UnsupportedFeature(
+            "MP3 VBR frame exceeds top bitrate at every quantizer step",
+        ))?;
+
+        let (mut header, capacity) = smallest_layer3_header_for_payload(
+            coded.sample_rate,
+            coded.channels,
+            main_data.bytes.len(),
+            crc_protected,
+            bitrates,
+        )?
+        .ok_or(Error::UnsupportedFeature(
+            "MP3 VBR frame exceeds top bitrate",
+        ))?;
+        if mid_side {
+            header.channel_mode = ChannelMode::JointStereo;
+        }
+
+        side_info.main_data_begin = 0;
+        let payload_bit_len = main_data.bit_len;
+        frames.push(Layer3ReservoirFrame {
+            header,
+            side_info,
+            payload: main_data.bytes,
+            payload_bit_len,
+            capacity,
+            main_data_begin: 0,
+            reservoir_after: 0,
+            step,
+            perceptual_granules: granules,
+            calibrated_granules: 0,
+            quality_guard_compared_granules: 0,
+            quality_guard_distortion_delta: 0.0,
+        });
+    }
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes PCM as variable-bitrate (VBR) MPEG-1 Layer III through the perceptual
+/// path. See [`encode_layer3_pcm_frames_vbr_perceptual_core`] for the per-frame
+/// rate-selection strategy.
+///
+/// The sample rate must be an MPEG-1 rate (32/44.1/48 kHz); `candidates` is the
+/// finest-first quantizer-step list (see [`MPEG1_LAYER3_PCM_STEP_CANDIDATES`]).
+pub fn encode_mpeg1_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 32_000 | 44_100 | 48_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-1 Layer III VBR supports 32/44.1/48 kHz",
+        ));
+    }
+    encode_layer3_pcm_frames_vbr_perceptual_core(
+        pcm,
+        candidates,
+        crc_protected,
+        provider,
+        &MPEG1_LAYER3_VBR_BITRATES_KBPS,
+        320,
+        false,
+    )
+}
+
+/// Encodes PCM as variable-bitrate (VBR) MPEG-2 LSF Layer III through the
+/// perceptual path. See [`encode_layer3_pcm_frames_vbr_perceptual_core`] for the
+/// per-frame rate-selection strategy.
+///
+/// The sample rate must be an MPEG-2 LSF rate (16/22.05/24 kHz); the per-frame
+/// bitrate floats over the LSF table (8..160 kbit/s) instead of the MPEG-1 table.
+/// `candidates` is the finest-first quantizer-step list (see
+/// [`MPEG1_LAYER3_PCM_STEP_CANDIDATES`]).
+pub fn encode_mpeg2_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-2 LSF Layer III VBR supports 16/22.05/24 kHz",
+        ));
+    }
+    encode_layer3_pcm_frames_vbr_perceptual_core(
+        pcm,
+        candidates,
+        crc_protected,
+        provider,
+        &MPEG2_LAYER3_LSF_VBR_BITRATES_KBPS,
+        160,
+        false,
+    )
+}
+
+/// Encodes correlated stereo PCM as MS joint-stereo VBR MPEG-1 Layer III.
+///
+/// The left/right pair is mapped through the orthonormal mid/side transform and
+/// coded through the VBR perceptual core (see
+/// [`encode_layer3_pcm_frames_vbr_perceptual_core`]) with every frame relabelled
+/// [`ChannelMode::JointStereo`]. The caller decides whether MS is worthwhile
+/// (see [`should_encode_stereo_as_mid_side`]); this entry point always applies
+/// it. The sample rate must be an MPEG-1 rate (32/44.1/48 kHz).
+pub fn encode_mpeg1_layer3_pcm_frames_vbr_perceptual_mid_side_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 32_000 | 44_100 | 48_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-1 Layer III VBR supports 32/44.1/48 kHz",
+        ));
+    }
+    encode_layer3_pcm_frames_vbr_perceptual_core(
+        pcm,
+        candidates,
+        crc_protected,
+        provider,
+        &MPEG1_LAYER3_VBR_BITRATES_KBPS,
+        320,
+        true,
+    )
+}
+
+/// Encodes correlated stereo PCM as MS joint-stereo VBR MPEG-2 LSF Layer III.
+///
+/// The MPEG-2 low-sampling-frequency (16/22.05/24 kHz) counterpart of
+/// [`encode_mpeg1_layer3_pcm_frames_vbr_perceptual_mid_side_with_table_provider`]:
+/// the mid/side pair is coded through the VBR core over the LSF bitrate table
+/// (8..160 kbit/s) with every frame relabelled [`ChannelMode::JointStereo`].
+pub fn encode_mpeg2_layer3_pcm_frames_vbr_perceptual_mid_side_with_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-2 LSF Layer III VBR supports 16/22.05/24 kHz",
+        ));
+    }
+    encode_layer3_pcm_frames_vbr_perceptual_core(
+        pcm,
+        candidates,
+        crc_protected,
+        provider,
+        &MPEG2_LAYER3_LSF_VBR_BITRATES_KBPS,
+        160,
+        true,
+    )
+}
+
+/// Encodes PCM as quality-targeted variable-bitrate (VBR) MPEG-1 Layer III.
+///
+/// Unlike [`encode_mpeg1_layer3_pcm_frames_vbr_perceptual_with_table_provider`]
+/// (which searches for the *finest* step that fits, i.e. constant maximum
+/// quality), this fixes the quantizer at `quality_step` for every frame and only
+/// floats the bitrate. A coarser (larger) `quality_step` quantizes more
+/// aggressively, so each frame needs fewer bits and the average bitrate drops —
+/// the step is the quality/size knob, the MP3 counterpart of a LAME `-V`
+/// setting. Simple frames still land on low bitrates and complex frames on high
+/// ones, all at the one fixed quantizer quality.
+///
+/// The sample rate must be an MPEG-1 rate (32/44.1/48 kHz); `quality_step` must
+/// be positive and finite, and fine enough that its payload fits the 320 kbit/s
+/// ceiling (otherwise the frame cannot be coded).
+pub fn encode_mpeg1_layer3_pcm_frames_vbr_quality_with_table_provider(
+    pcm: &AudioBuffer,
+    quality_step: f32,
+    crc_protected: bool,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 32_000 | 44_100 | 48_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-1 Layer III VBR supports 32/44.1/48 kHz",
+        ));
+    }
+    if !quality_step.is_finite() || quality_step <= 0.0 {
+        return Err(Error::InvalidInput(
+            "MP3 quantizer step must be positive and finite",
+        ));
+    }
+    encode_layer3_pcm_frames_vbr_perceptual_core(
+        pcm,
+        &[quality_step],
+        crc_protected,
+        provider,
+        &MPEG1_LAYER3_VBR_BITRATES_KBPS,
+        320,
+        false,
+    )
+}
+
 /// Splits an interleaved stereo buffer into its left and right channels as `f64`.
 ///
 /// Returns an error unless the buffer is stereo with an even sample count. The

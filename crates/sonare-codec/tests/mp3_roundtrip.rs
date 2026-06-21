@@ -441,10 +441,441 @@ fn mp3_mpeg2_lsf_perceptual_reservoir_mid_side_reconstructs_both_channels() {
     let pr = goertzel(&dec_right, sample_rate, tone);
     let power_ratio = pr / pl.max(1.0e-9);
     eprintln!("MPEG-2 LSF MS-perceptual power ratio (right/left)={power_ratio:.3} (target 0.49)");
-    assert!(pl > 0.0 && pr > 0.0, "decoded channels carry no tone energy");
+    assert!(
+        pl > 0.0 && pr > 0.0,
+        "decoded channels carry no tone energy"
+    );
     assert!(
         (0.30..0.70).contains(&power_ratio),
         "MS-perceptual reconstruction lost the channel level difference: ratio={power_ratio:.3}"
+    );
+}
+
+/// Collects the per-frame bitrate (kbit/s) of an MPEG-1 Layer III stream by
+/// walking frame headers, deriving each frame length from its own bitrate and
+/// padding. Returns the list of frame bitrates in stream order.
+fn mpeg1_layer3_frame_bitrates(stream: &[u8]) -> Vec<u16> {
+    const L3_KBPS: [u16; 16] = [
+        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+    ];
+    const RATE: [u32; 4] = [44_100, 48_000, 32_000, 0];
+    let mut rates = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= stream.len() {
+        if stream[pos] != 0xff || (stream[pos + 1] & 0xe0) != 0xe0 {
+            break;
+        }
+        let bitrate_index = (stream[pos + 2] >> 4) & 0x0f;
+        let sr_index = (stream[pos + 2] >> 2) & 0x03;
+        let padding = usize::from((stream[pos + 2] >> 1) & 0x01);
+        let kbps = L3_KBPS[usize::from(bitrate_index)];
+        let sr = RATE[usize::from(sr_index)];
+        if kbps == 0 || sr == 0 {
+            break;
+        }
+        rates.push(kbps);
+        let frame_len = (144 * (u32::from(kbps) * 1_000) / sr) as usize + padding;
+        if frame_len == 0 {
+            break;
+        }
+        pos += frame_len;
+    }
+    rates
+}
+
+#[test]
+fn mp3_vbr_adapts_bitrate_to_frame_complexity() {
+    // A quiet steady tone for the first half then a loud broadband burst for the
+    // second: VBR must spend few bits on the simple frames and more on the
+    // complex ones, so the stream carries at least two distinct frame bitrates,
+    // stays below an all-320 kbit/s stream, and still decodes through Symphonia.
+    let sample_rate = 44_100;
+    let half = 22_050;
+    let mut samples = Vec::with_capacity(half * 2);
+    for i in 0..half {
+        let t = i as f32 / sample_rate as f32;
+        samples.push(0.02 * (std::f32::consts::TAU * 600.0 * t).sin());
+    }
+    for i in 0..half {
+        let t = i as f32 / sample_rate as f32;
+        let v: f32 = (1..=12)
+            .map(|k| (0.07 * (std::f32::consts::TAU * (300.0 * k as f32) * t).sin()))
+            .sum();
+        samples.push(v.clamp(-1.0, 1.0));
+    }
+    let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+
+    let vbr = sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+        &pcm,
+        sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        false,
+        sc_mp3::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("VBR encode");
+
+    let rates = mpeg1_layer3_frame_bitrates(&vbr);
+    assert!(
+        rates.len() >= 8,
+        "expected several frames, got {}",
+        rates.len()
+    );
+    let distinct: std::collections::BTreeSet<u16> = rates.iter().copied().collect();
+    eprintln!("VBR frame bitrates (distinct) = {distinct:?}");
+    assert!(
+        distinct.len() >= 2,
+        "VBR must use more than one bitrate, got {distinct:?}"
+    );
+    let min_rate = *distinct.iter().next().unwrap();
+    let max_rate = *distinct.iter().next_back().unwrap();
+    assert!(
+        min_rate < max_rate,
+        "complex frames must out-spend simple frames: min={min_rate} max={max_rate}"
+    );
+
+    // The adaptive stream must be smaller than coding every frame at 320 kbit/s.
+    let cbr320_bytes: usize = rates
+        .iter()
+        .map(|_| (144 * (320 * 1_000) / sample_rate) as usize)
+        .sum();
+    assert!(
+        vbr.len() < cbr320_bytes,
+        "VBR ({}) should be smaller than all-320 ({cbr320_bytes})",
+        vbr.len()
+    );
+
+    let decoded = sonare_codec::decode(&vbr).expect("Symphonia decode of VBR stream");
+    assert_eq!(decoded.sample_rate, sample_rate);
+    assert_eq!(decoded.channels, 1);
+    assert!(
+        rms(&decoded.samples) > 0.01,
+        "VBR decode is near silent: rms={}",
+        rms(&decoded.samples)
+    );
+}
+
+#[test]
+fn mp3_vbr_rejects_non_mpeg1_rates() {
+    // VBR is scoped to MPEG-1 rates; an LSF rate must be rejected cleanly.
+    let pcm = AudioBuffer::new(24_000, 1, vec![0.1_f32; 4_096]).unwrap();
+    assert!(
+        sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+            &pcm,
+            sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            false,
+            sc_mp3::mpeg1_layer3_standard_table_provider(),
+        )
+        .is_err(),
+        "VBR must reject non-MPEG-1 sample rates"
+    );
+}
+
+/// Collects the per-frame bitrate (kbit/s) of an MPEG-2 LSF Layer III stream by
+/// walking frame headers. LSF Layer III carries 576 samples per frame (factor
+/// 72 instead of 144) and uses the LSF bitrate / sample-rate tables.
+fn lsf_layer3_frame_bitrates(stream: &[u8]) -> Vec<u16> {
+    const LSF_KBPS: [u16; 16] = [
+        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+    ];
+    const LSF_RATE: [u32; 4] = [22_050, 24_000, 16_000, 0];
+    let mut rates = Vec::new();
+    let mut pos = 0usize;
+    while pos + 4 <= stream.len() {
+        if stream[pos] != 0xff || (stream[pos + 1] & 0xe0) != 0xe0 {
+            break;
+        }
+        let bitrate_index = (stream[pos + 2] >> 4) & 0x0f;
+        let sr_index = (stream[pos + 2] >> 2) & 0x03;
+        let padding = usize::from((stream[pos + 2] >> 1) & 0x01);
+        let kbps = LSF_KBPS[usize::from(bitrate_index)];
+        let sr = LSF_RATE[usize::from(sr_index)];
+        if kbps == 0 || sr == 0 {
+            break;
+        }
+        rates.push(kbps);
+        let frame_len = (72 * (u32::from(kbps) * 1_000) / sr) as usize + padding;
+        if frame_len == 0 {
+            break;
+        }
+        pos += frame_len;
+    }
+    rates
+}
+
+#[test]
+fn mp3_mpeg2_lsf_vbr_adapts_bitrate_to_frame_complexity() {
+    // The LSF VBR path mirrors the MPEG-1 one at the lower sample rates: a quiet
+    // steady tone then a loud broadband burst must spread across the LSF bitrate
+    // table (8..160 kbit/s), stay below an all-160 stream, and decode through
+    // Symphonia.
+    let sample_rate = 24_000;
+    let half = 12_000;
+    let mut samples = Vec::with_capacity(half * 2);
+    for i in 0..half {
+        let t = i as f32 / sample_rate as f32;
+        samples.push(0.02 * (std::f32::consts::TAU * 600.0 * t).sin());
+    }
+    for i in 0..half {
+        let t = i as f32 / sample_rate as f32;
+        let v: f32 = (1..=10)
+            .map(|k| (0.07 * (std::f32::consts::TAU * (300.0 * k as f32) * t).sin()))
+            .sum();
+        samples.push(v.clamp(-1.0, 1.0));
+    }
+    let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+
+    let vbr = sc_mp3::encode_mpeg2_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+        &pcm,
+        sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        false,
+        sc_mp3::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("LSF VBR encode");
+
+    let rates = lsf_layer3_frame_bitrates(&vbr);
+    assert!(
+        rates.len() >= 8,
+        "expected several frames, got {}",
+        rates.len()
+    );
+    let distinct: std::collections::BTreeSet<u16> = rates.iter().copied().collect();
+    eprintln!("LSF VBR frame bitrates (distinct) = {distinct:?}");
+    assert!(
+        distinct.len() >= 2,
+        "LSF VBR must use more than one bitrate, got {distinct:?}"
+    );
+    let min_rate = *distinct.iter().next().unwrap();
+    let max_rate = *distinct.iter().next_back().unwrap();
+    assert!(
+        min_rate < max_rate,
+        "complex frames must out-spend simple frames: min={min_rate} max={max_rate}"
+    );
+
+    // The adaptive stream must be smaller than coding every frame at 160 kbit/s.
+    let cbr160_bytes: usize = rates
+        .iter()
+        .map(|_| (72 * (160 * 1_000) / sample_rate) as usize)
+        .sum();
+    assert!(
+        vbr.len() < cbr160_bytes,
+        "LSF VBR ({}) should be smaller than all-160 ({cbr160_bytes})",
+        vbr.len()
+    );
+
+    let decoded = sonare_codec::decode(&vbr).expect("Symphonia decode of LSF VBR stream");
+    assert_eq!(decoded.sample_rate, sample_rate);
+    assert_eq!(decoded.channels, 1);
+    assert!(
+        rms(&decoded.samples) > 0.01,
+        "LSF VBR decode is near silent: rms={}",
+        rms(&decoded.samples)
+    );
+}
+
+#[test]
+fn mp3_mpeg2_lsf_vbr_rejects_mpeg1_rates() {
+    // The LSF VBR entry point is scoped to LSF rates; an MPEG-1 rate must be
+    // rejected cleanly.
+    let pcm = AudioBuffer::new(44_100, 1, vec![0.1_f32; 4_096]).unwrap();
+    assert!(
+        sc_mp3::encode_mpeg2_layer3_pcm_frames_vbr_perceptual_with_table_provider(
+            &pcm,
+            sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            false,
+            sc_mp3::mpeg1_layer3_standard_table_provider(),
+        )
+        .is_err(),
+        "LSF VBR must reject MPEG-1 sample rates"
+    );
+}
+
+#[test]
+fn mp3_vbr_quality_step_trades_size_for_quantizer_coarseness() {
+    // Quality-targeted VBR fixes the quantizer step and floats the bitrate. A
+    // coarser (larger) step quantizes more aggressively, so the stream must
+    // shrink while still decoding and carrying the tone. A tonal-plus-broadband
+    // mono signal gives the quantizer room to drop bits.
+    let sample_rate = 44_100;
+    let frames = 44_100;
+    let samples: Vec<f32> = (0..frames)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let tonal = 0.3 * (std::f32::consts::TAU * 900.0 * t).sin();
+            let texture: f32 = (2..=8)
+                .map(|k| 0.05 * (std::f32::consts::TAU * (700.0 * k as f32) * t).sin())
+                .sum();
+            (tonal + texture).clamp(-1.0, 1.0)
+        })
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+
+    let fine = sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_quality_with_table_provider(
+        &pcm, 0.004, false, provider,
+    )
+    .expect("quality VBR (fine step)");
+    let coarse = sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_quality_with_table_provider(
+        &pcm, 0.03, false, provider,
+    )
+    .expect("quality VBR (coarse step)");
+
+    eprintln!(
+        "quality VBR sizes: fine(0.004)={} coarse(0.03)={}",
+        fine.len(),
+        coarse.len()
+    );
+    assert!(
+        coarse.len() < fine.len(),
+        "a coarser step must lower the bitrate: coarse={} fine={}",
+        coarse.len(),
+        fine.len()
+    );
+
+    for stream in [&fine, &coarse] {
+        let decoded = sonare_codec::decode(stream).expect("Symphonia decode of quality VBR");
+        assert_eq!(decoded.sample_rate, sample_rate);
+        assert_eq!(decoded.channels, 1);
+        assert!(
+            goertzel(&decoded.samples, sample_rate, 900.0) > 0.0,
+            "quality VBR lost the 900 Hz tone"
+        );
+    }
+}
+
+#[test]
+fn mp3_vbr_quality_rejects_invalid_inputs() {
+    // The quality knob must reject non-positive / non-finite steps and non-MPEG-1
+    // sample rates cleanly rather than panicking.
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+    let mono = AudioBuffer::new(44_100, 1, vec![0.1_f32; 4_096]).unwrap();
+    for &bad in &[0.0_f32, -1.0, f32::NAN, f32::INFINITY] {
+        assert!(
+            sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_quality_with_table_provider(
+                &mono, bad, false, provider,
+            )
+            .is_err(),
+            "quantizer step {bad} must be rejected"
+        );
+    }
+    let lsf = AudioBuffer::new(24_000, 1, vec![0.1_f32; 4_096]).unwrap();
+    assert!(
+        sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_quality_with_table_provider(
+            &lsf, 0.01, false, provider,
+        )
+        .is_err(),
+        "quality VBR must reject non-MPEG-1 sample rates"
+    );
+}
+
+/// Builds a correlated stereo signal whose right channel is `right_gain` of the
+/// left (so the side channel is small and MS coding helps): a tonal mix that
+/// rises in level across the buffer to exercise per-frame VBR rate adaptation.
+fn ramping_correlated_stereo(sample_rate: u32, frames: usize, right_gain: f32) -> AudioBuffer {
+    let left: Vec<f32> = (0..frames)
+        .map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let envelope = 0.05 + 0.45 * (i as f32 / frames as f32);
+            envelope
+                * ((std::f32::consts::TAU * 700.0 * t).sin()
+                    + 0.5 * (std::f32::consts::TAU * 1_900.0 * t).sin())
+        })
+        .collect();
+    let interleaved: Vec<f32> = left.iter().flat_map(|&l| [l, right_gain * l]).collect();
+    AudioBuffer::new(sample_rate, 2, interleaved).unwrap()
+}
+
+#[test]
+fn mp3_vbr_mid_side_reconstructs_both_channels_and_adapts_bitrate() {
+    // The MPEG-1 MS-VBR path must mark joint stereo, float the bitrate across
+    // frames, and let Symphonia recover the left/right level difference through
+    // the inverse mid/side matrix. The per-channel tone power ratio isolates the
+    // matrix from the quantizer's absolute quality.
+    let sample_rate = 44_100;
+    let frames = 44_100;
+    let pcm = ramping_correlated_stereo(sample_rate, frames, 0.7);
+
+    let mp3 = sc_mp3::encode_mpeg1_layer3_pcm_frames_vbr_perceptual_mid_side_with_table_provider(
+        &pcm,
+        sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        false,
+        sc_mp3::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("MPEG-1 MS-VBR encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b01,
+        "MS-VBR stream must be coded as joint (MS) stereo"
+    );
+
+    let rates = mpeg1_layer3_frame_bitrates(&mp3);
+    let distinct: std::collections::BTreeSet<u16> = rates.iter().copied().collect();
+    eprintln!("MS-VBR frame bitrates (distinct) = {distinct:?}");
+    assert!(
+        distinct.len() >= 2,
+        "MS-VBR must use more than one bitrate, got {distinct:?}"
+    );
+
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode of MS-VBR stream");
+    assert_eq!(decoded.channels, 2);
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+    let pl = goertzel(&dec_left, sample_rate, 700.0);
+    let pr = goertzel(&dec_right, sample_rate, 700.0);
+    let power_ratio = pr / pl.max(1.0e-9);
+    eprintln!("MS-VBR power ratio (right/left)={power_ratio:.3} (target 0.49)");
+    assert!(
+        pl > 0.0 && pr > 0.0,
+        "decoded channels carry no tone energy"
+    );
+    assert!(
+        (0.30..0.70).contains(&power_ratio),
+        "MS-VBR reconstruction lost the channel level difference: ratio={power_ratio:.3}"
+    );
+}
+
+#[test]
+fn mp3_mpeg2_lsf_vbr_mid_side_reconstructs_both_channels() {
+    // The MPEG-2 LSF MS-VBR counterpart: joint stereo over the LSF bitrate table,
+    // with the inverse mid/side matrix recovered by Symphonia.
+    let sample_rate = 24_000;
+    let frames = 24_000;
+    let pcm = ramping_correlated_stereo(sample_rate, frames, 0.7);
+
+    let mp3 = sc_mp3::encode_mpeg2_layer3_pcm_frames_vbr_perceptual_mid_side_with_table_provider(
+        &pcm,
+        sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        false,
+        sc_mp3::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("MPEG-2 LSF MS-VBR encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b01,
+        "LSF MS-VBR stream must be coded as joint (MS) stereo"
+    );
+
+    let rates = lsf_layer3_frame_bitrates(&mp3);
+    let distinct: std::collections::BTreeSet<u16> = rates.iter().copied().collect();
+    eprintln!("LSF MS-VBR frame bitrates (distinct) = {distinct:?}");
+    assert!(
+        distinct.len() >= 2,
+        "LSF MS-VBR must use more than one bitrate, got {distinct:?}"
+    );
+
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode of LSF MS-VBR stream");
+    assert_eq!(decoded.channels, 2);
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+    let pl = goertzel(&dec_left, sample_rate, 700.0);
+    let pr = goertzel(&dec_right, sample_rate, 700.0);
+    let power_ratio = pr / pl.max(1.0e-9);
+    eprintln!("LSF MS-VBR power ratio (right/left)={power_ratio:.3} (target 0.49)");
+    assert!(
+        pl > 0.0 && pr > 0.0,
+        "decoded channels carry no tone energy"
+    );
+    assert!(
+        (0.30..0.70).contains(&power_ratio),
+        "LSF MS-VBR reconstruction lost the channel level difference: ratio={power_ratio:.3}"
     );
 }
 

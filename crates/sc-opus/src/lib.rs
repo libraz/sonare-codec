@@ -25,6 +25,7 @@ mod quant_band;
 mod quant_bands;
 mod range_coder;
 mod rate;
+mod resample;
 mod tf;
 mod theta;
 mod vbr;
@@ -130,12 +131,11 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 /// Encode interleaved `[-1, 1]` float PCM into an Ogg Opus stream using the
 /// first-party, pure-Rust CELT encoder (no C dependency, so this also works on
 /// the wasm target). The stream is CELT-only fullband at 20 ms per frame.
+///
+/// Opus is internally a 48 kHz codec, so PCM at any other rate is resampled to
+/// 48 kHz before encoding and the original rate is recorded in OpusHead. As with
+/// every Opus decoder, the stream therefore decodes back at 48 kHz.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    if pcm.sample_rate != OPUS_SAMPLE_RATE {
-        return Err(Error::UnsupportedFeature(
-            "Opus encode currently requires 48000 Hz PCM",
-        ));
-    }
     let channel_count = match pcm.channels {
         1 | 2 => usize::from(pcm.channels),
         _ => {
@@ -144,6 +144,15 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
             ))
         }
     };
+    if pcm.sample_rate == 0 {
+        return Err(Error::InvalidInput(
+            "Opus encode requires a non-zero sample rate",
+        ));
+    }
+
+    // Lift to Opus's internal 48 kHz. `resample_to_48k` is a no-op at 48 kHz, so
+    // the existing path stays byte-identical.
+    let resampled = resample::resample_to_48k(&pcm.samples, pcm.channels, pcm.sample_rate);
 
     let bitrate = OPUS_BITRATE_PER_CHANNEL * channel_count as i32;
     let mut encoder = CeltOpusEncoder::new(channel_count, OPUS_CELT_LM, bitrate, true);
@@ -153,7 +162,7 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     // [-1, 1] float into it (and zero-pad the final partial frame).
     let mut packets = Vec::new();
     let mut frame = vec![0.0_f32; frame_samples];
-    for source in pcm.samples.chunks(frame_samples) {
+    for source in resampled.chunks(frame_samples) {
         frame.fill(0.0);
         for (dst, &src) in frame.iter_mut().zip(source) {
             *dst = src * CELT_SIG_SCALE;
@@ -165,7 +174,7 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         packets.push(encoder.encode_packet(&frame));
     }
 
-    Ok(mux_ogg_opus(pcm.channels, packets))
+    Ok(mux_ogg_opus(pcm.channels, pcm.sample_rate, packets))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -346,7 +355,7 @@ fn collect_packets(pages: &[OggPage]) -> Result<Vec<Vec<u8>>, Error> {
     Ok(packets)
 }
 
-fn mux_ogg_opus(channels: u16, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
+fn mux_ogg_opus(channels: u16, input_sample_rate: u32, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
     let mut stream = Vec::new();
     let mut sequence = 0_u32;
     let channels = u8::try_from(channels).expect("validated Opus channel count");
@@ -356,7 +365,9 @@ fn mux_ogg_opus(channels: u16, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
     head.push(1);
     head.push(channels);
     head.extend_from_slice(&OPUS_CELT_PRE_SKIP.to_le_bytes());
-    head.extend_from_slice(&OPUS_SAMPLE_RATE.to_le_bytes());
+    // OpusHead carries the original input sample rate for information only; the
+    // stream is always decoded at 48 kHz (RFC 7845 §5.1).
+    head.extend_from_slice(&input_sample_rate.to_le_bytes());
     head.extend_from_slice(&0_i16.to_le_bytes());
     head.push(0);
     push_ogg_page(&mut stream, &[head], 0x02, 0, &mut sequence);
@@ -619,9 +630,17 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_opus_encode_pcm_shape() {
+        // Non-48 kHz input is now resampled, not rejected.
         let pcm = AudioBuffer::new(44_100, 1, vec![0.0; 1024]).expect("pcm");
-        let err = encode(&pcm).expect_err("sample rate");
-        assert!(matches!(err, Error::UnsupportedFeature(_)));
+        encode(&pcm).expect("44.1 kHz now resamples");
+
+        let pcm = AudioBuffer {
+            sample_rate: 0,
+            channels: 1,
+            samples: vec![0.0; 1024],
+        };
+        let err = encode(&pcm).expect_err("zero sample rate");
+        assert!(matches!(err, Error::InvalidInput(_)));
 
         let pcm = AudioBuffer {
             sample_rate: OPUS_SAMPLE_RATE,
@@ -630,6 +649,49 @@ mod tests {
         };
         let err = encode(&pcm).expect_err("channels");
         assert!(matches!(err, Error::UnsupportedFeature(_)));
+    }
+
+    #[test]
+    fn resamples_non_48k_input_and_decodes_at_48k() {
+        // A 1 kHz tone at 44.1 kHz must encode (via the resampler) and decode
+        // back as a 1 kHz tone at 48 kHz that tracks a reference generated
+        // directly at 48 kHz.
+        let pcm = sine_pcm(44_100, 1, 44_100, 1_000.0);
+        let encoded = encode(&pcm).expect("encode 44.1k");
+        let decoded = decode(&encoded).expect("decode");
+        assert_eq!(decoded.sample_rate, OPUS_SAMPLE_RATE);
+        assert_eq!(decoded.channels, 1);
+
+        let reference: Vec<f32> = (0..decoded.samples.len())
+            .map(|n| (2.0 * std::f32::consts::PI * 1_000.0 * n as f32 / 48_000.0).sin())
+            .collect();
+        let seg = 8_192;
+        let ref_start = 4_000;
+        let mut best = f64::NEG_INFINITY;
+        for d in 0..2_400 {
+            let start = ref_start + d;
+            if start + seg > decoded.samples.len() {
+                break;
+            }
+            let mut dot = 0.0_f64;
+            let mut na = 0.0_f64;
+            let mut nb = 0.0_f64;
+            for i in 0..seg {
+                let a = f64::from(reference[ref_start + i]);
+                let b = f64::from(decoded.samples[start + i]);
+                dot += a * b;
+                na += a * a;
+                nb += b * b;
+            }
+            let corr = dot / (na.sqrt() * nb.sqrt());
+            if corr > best {
+                best = corr;
+            }
+        }
+        assert!(
+            best > 0.9,
+            "resampled Opus tone correlation too low: {best}"
+        );
     }
 
     #[test]
