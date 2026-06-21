@@ -165,7 +165,7 @@
         let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
         let channel = super::AacScaleFactorChannel::new(channel_config, &scale_factors);
         let scale_factor_table = super::aac_scale_factor_delta_zero_table();
-        let spectral_tables = super::aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+        let spectral_tables = super::aac_lc_standard_spectral_tables();
 
         let mono_target_bitrate = 10_000;
         let mono_budget =

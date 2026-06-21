@@ -55,7 +55,7 @@ pub fn perceptual_band_allowed_noise(
 
     let mut allowed = [MIN_ALLOWED_NOISE; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
     for (band, slot) in allowed.iter_mut().enumerate() {
-        let (start, end) = crate::mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        let (start, end) = crate::layer3_long_scalefactor_band_range(band, sample_rate)?;
         let freq_lo = start as f64 * mdct_resolution;
         let freq_hi = end as f64 * mdct_resolution;
 
@@ -112,16 +112,6 @@ pub(crate) fn band_scalefactor_cap(band: usize) -> u8 {
     }
 }
 
-/// Allocates per-band long-block scale factors so quantization noise stays below
-/// the perceptual allowed-noise target.
-///
-/// Starting from zero, the noise-control loop quantizes the spectrum, measures
-/// the requantization-noise energy in each scale-factor band, and raises the
-/// scale factor of every band whose noise exceeds its target and still has
-/// headroom in its syntax width. It repeats until all bands are satisfied or
-/// capped. If amplification would push a band past the quantizer's magnitude
-/// bound, the last allocation that quantized cleanly is returned. The result
-/// feeds [`crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
 /// Largest quantized magnitude the Layer III big-value/count1 partition can
 /// carry, so the `pow(4/3)` reconstruction table covers every valid index.
 const POW_4_3_TABLE_LEN: usize = 8192;
@@ -152,6 +142,16 @@ fn pow_4_3(magnitude: u32) -> f64 {
     }
 }
 
+/// Allocates per-band long-block scale factors so quantization noise stays below
+/// the perceptual allowed-noise target.
+///
+/// Starting from zero, the noise-control loop quantizes the spectrum, measures
+/// the requantization-noise energy in each scale-factor band, and raises the
+/// scale factor of every band whose noise exceeds its target and still has
+/// headroom in its syntax width. It repeats until all bands are satisfied or
+/// capped. If amplification would push a band past the quantizer's magnitude
+/// bound, the last allocation that quantized cleanly is returned. The result
+/// feeds [`crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
 pub fn allocate_long_block_scalefactors(
     mdct_spectrum: &[f32],
     allowed_noise: &[f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
@@ -202,7 +202,7 @@ pub fn allocate_long_block_scalefactors(
             if scale_factors[band] >= band_scalefactor_cap(band) {
                 continue;
             }
-            let (start, end) = crate::mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+            let (start, end) = crate::layer3_long_scalefactor_band_range(band, sample_rate)?;
             let attenuation = 2.0_f64.powf(-multiplier * f64::from(scale_factors[band]));
 
             let mut noise = 0.0_f64;

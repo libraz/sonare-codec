@@ -104,6 +104,20 @@ impl FrameHeader {
         }
     }
 
+    /// Returns the largest `main_data_begin` backward pointer the side info can
+    /// encode for this version. MPEG-1 carries a 9-bit field (max 511); the
+    /// MPEG-2 / MPEG-2.5 low-sampling-frequency extension narrows it to 8 bits
+    /// (max 255), so the bit reservoir must clamp its backward pointer to the
+    /// version's field width.
+    #[must_use]
+    pub fn layer3_max_main_data_begin(&self) -> usize {
+        if self.version == MpegVersion::Mpeg1 {
+            511
+        } else {
+            255
+        }
+    }
+
     #[must_use]
     pub fn layer3_side_info_len(&self) -> Option<usize> {
         if self.layer != Layer::Layer3 {

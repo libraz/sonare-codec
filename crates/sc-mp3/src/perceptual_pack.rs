@@ -62,12 +62,25 @@ pub fn pack_mpeg1_layer3_pcm_long_block_with_perceptual_scalefac_scale_and_table
         pcm.sample_rate,
     )?;
     granule.scalefac_scale = scalefac_scale;
-    let packed = pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
-        granule,
-        &scale_factors,
-        &quantized,
-        provider,
-    )?;
+    // MPEG-2 LSF packs non-zero scale factors with the four-group partition and
+    // resolves big-value boundaries for the LSF sample rate; MPEG-1 keeps its
+    // existing slen-pair packing byte-for-byte.
+    let packed = if matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        pack_mpeg2_layer3_lsf_long_quantized_spectrum_for_rate_and_table_provider(
+            granule,
+            &scale_factors,
+            &quantized,
+            pcm.sample_rate,
+            provider,
+        )?
+    } else {
+        pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider(
+            granule,
+            &scale_factors,
+            &quantized,
+            provider,
+        )?
+    };
     granule.global_gain = calibrated_global_gain_for_granule(&quantized, step);
     Ok(packed)
 }
@@ -199,7 +212,7 @@ pub(crate) fn apply_mpeg1_layer3_quantized_band_gain(
         return Err(Error::InvalidInput("MP3 quantized band gain is invalid"));
     }
     for band in band_gain.band_start..band_gain.band_end {
-        let (start, end) = mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        let (start, end) = layer3_long_scalefactor_band_range(band, sample_rate)?;
         for line in start..end.min(quantized.len()) {
             let adjusted = ((quantized[line] as f32) * band_gain.gain).round();
             if adjusted.abs() > 8191.0 {
@@ -291,7 +304,7 @@ pub(crate) fn requantize_mpeg1_layer3_long_line_with_scalefactors(
     let magnitude = (quantized.unsigned_abs() as f32).powf(4.0 / 3.0);
     let sign = if quantized < 0 { -1.0 } else { 1.0 };
     let gain = 2.0_f32.powf(0.25 * (f32::from(global_gain) - 210.0));
-    let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate)?;
+    let index = layer3_long_scalefactor_band_index(sample_rate)?;
     let multiplier = if scalefac_scale { 1.0 } else { 0.5 };
     let attenuation = match index[1..=MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
         .iter()
@@ -320,7 +333,7 @@ pub(crate) fn mpeg1_layer3_long_perceptual_distortion_with_scalefactors(
 
     let mut distortion = 0.0_f64;
     for (band, &allowed) in allowed_noise.iter().enumerate() {
-        let (start, end) = mpeg1_layer3_long_scalefactor_band_range(band, sample_rate)?;
+        let (start, end) = layer3_long_scalefactor_band_range(band, sample_rate)?;
         let mut noise = 0.0_f64;
         for line in start..end.min(spectrum.len()) {
             let reconstructed = requantize_mpeg1_layer3_long_line_with_scalefactors(

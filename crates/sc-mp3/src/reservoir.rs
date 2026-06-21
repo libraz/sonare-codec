@@ -1,9 +1,6 @@
 use super::*;
 use crate::psychoacoustic::{mid_side_transform, should_use_mid_side};
 
-/// MPEG-1 main-data backward pointer width: `main_data_begin` is 9 bits.
-pub(crate) const MAX_MAIN_DATA_BEGIN: usize = 511;
-
 /// Maximum `part2_3_length` for one granule: the side-info field is 12 bits.
 pub(crate) const MAX_PART2_3_LENGTH: u16 = 4095;
 
@@ -293,7 +290,7 @@ pub(crate) fn collect_mpeg1_layer3_reservoir_frames_with_table_provider(
             .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
         let frame_header = padding.next_header();
         let capacity = layer3_main_data_capacity_bytes(frame_header)?;
-        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
+        let main_data_begin = reservoir.min(frame_header.layer3_max_main_data_begin());
         let budget_bytes = capacity
             .checked_add(main_data_begin)
             .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
@@ -407,7 +404,7 @@ pub(crate) fn collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_
             .ok_or(Error::InvalidInput("MP3 frame start overflows"))?;
         let frame_header = padding.next_header();
         let capacity = layer3_main_data_capacity_bytes(frame_header)?;
-        let main_data_begin = reservoir.min(MAX_MAIN_DATA_BEGIN);
+        let main_data_begin = reservoir.min(frame_header.layer3_max_main_data_begin());
         let full_budget_bytes = capacity
             .checked_add(main_data_begin)
             .ok_or(Error::InvalidInput("MP3 reservoir budget overflows"))?;
@@ -814,6 +811,91 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir
     )?
     .into_iter()
     .map(|(frame, _, _)| frame)
+    .collect();
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes MPEG-2 LSF PCM as constant-bitrate Layer III using the entropy-targeted
+/// perceptual reservoir step selector.
+///
+/// This is the low-sampling-frequency (16/22.05/24 kHz) counterpart of
+/// [`encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider`].
+/// The reservoir collector is header-driven: it derives an MPEG-2 header from the
+/// LSF sample rate and so codes a single 576-sample granule per frame with the
+/// version's 8-bit `main_data_begin` backward pointer. The sample rate must be an
+/// MPEG-2 LSF rate; MPEG-2.5 rates (8/11.025/12 kHz) are outside ISO/IEC 11172-3
+/// and 13818-3 and are rejected.
+pub fn encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-2 LSF Layer III encode supports 16/22.05/24 kHz",
+        ));
+    }
+    let frames = collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        pcm,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .map(|(frame, _, _)| frame)
+    .collect();
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes correlated MPEG-2 LSF stereo PCM as MS joint-stereo Layer III through
+/// the entropy-targeted perceptual reservoir.
+///
+/// This combines the MPEG-2 LSF perceptual reservoir
+/// ([`encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider`])
+/// with the orthonormal mid/side transform used by the MPEG-1 MS path
+/// ([`encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider`]).
+/// The left/right pair is mapped to mid/side, coded as two independent LSF
+/// channels through the perceptual reservoir, and each frame header is relabelled
+/// [`ChannelMode::JointStereo`] so the decoder applies the inverse matrix. The
+/// side-info layout and per-frame capacity depend only on the channel count, so
+/// relabelling after packing is size-exact and the reservoir bookkeeping stays
+/// valid. The sample rate must be an MPEG-2 LSF rate (16/22.05/24 kHz).
+pub fn encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    if !matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        return Err(Error::UnsupportedFeature(
+            "MPEG-2 LSF Layer III encode supports 16/22.05/24 kHz",
+        ));
+    }
+    let mid_side = mid_side_encode_buffer(pcm)?;
+    let frames = collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        &mid_side,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .map(|(mut frame, _, _)| {
+        frame.header.channel_mode = ChannelMode::JointStereo;
+        frame
+    })
     .collect();
 
     assemble_mpeg1_layer3_reservoir_frames(frames)

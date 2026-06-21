@@ -1,5 +1,6 @@
     use crate::reservoir::{
         collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider,
+        encode_mpeg2_layer3_pcm_frames_with_auto_step_mid_side_and_table_provider,
         mid_side_encode_buffer, should_encode_stereo_as_mid_side, Layer3ReservoirPayloadMode,
     };
 
@@ -98,6 +99,41 @@
         // Mono is never mid/side.
         let mono = AudioBuffer::new(sample_rate, 1, vec![0.1_f32; frames]).unwrap();
         assert!(!should_encode_stereo_as_mid_side(&mono).unwrap());
+    }
+
+    #[test]
+    fn mpeg2_lsf_mid_side_encode_marks_joint_stereo_and_is_size_compatible() {
+        // The MPEG-2 LSF MS path builds a JointStereo header directly and codes the
+        // M/S buffer through the single-granule auto-step assembler. Every frame's
+        // channel-mode bits must read joint stereo (0b01), and the byte length must
+        // match the independent-stereo encode of the same M/S buffer, proving the
+        // joint-stereo header is layout-compatible at LSF rates.
+        let sample_rate = 24_000;
+        let frames = 4 * 576;
+        let pcm = correlated_stereo(sample_rate, frames);
+        let mid_side = mid_side_encode_buffer(&pcm).unwrap();
+        let provider = mpeg1_layer3_standard_table_provider();
+        let candidates = crate::MPEG1_LAYER3_PCM_STEP_CANDIDATES;
+        let bitrate = crate::MPEG2_LAYER3_DEFAULT_BITRATE_KBPS;
+
+        let ms = encode_mpeg2_layer3_pcm_frames_with_auto_step_mid_side_and_table_provider(
+            &pcm, bitrate, candidates, provider,
+        )
+        .unwrap();
+        let independent =
+            crate::encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider(
+                &mid_side, bitrate, candidates, provider,
+            )
+            .unwrap();
+
+        assert_eq!(
+            ms.len(),
+            independent.len(),
+            "joint-stereo header must be byte-size compatible with independent stereo"
+        );
+        assert!(!ms.is_empty(), "expected encoded frames");
+        assert_eq!(ms[0], 0xff, "missing frame sync");
+        assert_eq!((ms[3] >> 6) & 0x03, 0b01, "first frame must be joint stereo");
     }
 
     #[test]

@@ -336,6 +336,119 @@ fn mp3_mpeg2_lsf_decorrelated_stereo_stays_independent() {
 }
 
 #[test]
+fn mp3_mpeg2_lsf_perceptual_reservoir_decodes_at_each_lsf_rate() {
+    // Probe the entropy-targeted perceptual reservoir on the MPEG-2 LSF path
+    // (the collector derives a single-granule MPEG-2 header with an 8-bit
+    // main_data_begin from the LSF rate). A 1 kHz tone must encode through this
+    // path and decode back through Symphonia with sane tone integrity at every
+    // LSF rate, in mono and stereo, proving the reservoir machinery is version-
+    // generic and the narrowed backward pointer is honoured.
+    let seg = 8_192;
+    let ref_start = 6_000;
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+    for &rate in &[16_000_u32, 22_050, 24_000] {
+        let frames = 22_050;
+        let tone: Vec<f32> = (0..frames)
+            .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * (i as f32 / rate as f32)).sin())
+            .collect();
+
+        let mono = AudioBuffer::new(rate, 1, tone.clone()).unwrap();
+        let mp3 = sc_mp3::encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+            &mono,
+            sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            sc_mp3::MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
+            false,
+            0,
+            provider,
+        )
+        .expect("MPEG-2 LSF perceptual reservoir mono encode");
+        assert_eq!(
+            sonare_codec::detect(&mp3),
+            Some(Format::Mp3),
+            "{rate} Hz: perceptual reservoir stream must be detected as MP3"
+        );
+        let dec = sonare_codec::decode(&mp3).expect("Symphonia decode");
+        assert_eq!(dec.sample_rate, rate, "{rate} Hz: rate must round-trip");
+        assert_eq!(dec.channels, 1, "{rate} Hz: expected mono");
+        let mc = aligned_channel_corr(&tone, &dec.samples, seg, ref_start);
+        eprintln!("MPEG-2 LSF perceptual reservoir {rate} Hz mono corr={mc:.4}");
+        assert!(
+            mc > 0.8,
+            "MPEG-2 LSF perceptual reservoir {rate} Hz mono corr too low: {mc:.4}"
+        );
+
+        let interleaved: Vec<f32> = tone.iter().flat_map(|&s| [s, s]).collect();
+        let stereo = AudioBuffer::new(rate, 2, interleaved).unwrap();
+        let mp3 = sc_mp3::encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+            &stereo,
+            sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            sc_mp3::MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
+            false,
+            0,
+            provider,
+        )
+        .expect("MPEG-2 LSF perceptual reservoir stereo encode");
+        let dec = sonare_codec::decode(&mp3).expect("Symphonia decode");
+        assert_eq!(dec.sample_rate, rate);
+        assert_eq!(dec.channels, 2);
+        assert!(
+            rms(&dec.samples) > 0.05,
+            "MPEG-2 LSF perceptual reservoir {rate} Hz stereo decoded near silence"
+        );
+    }
+}
+
+#[test]
+fn mp3_mpeg2_lsf_perceptual_reservoir_mid_side_reconstructs_both_channels() {
+    // The MPEG-2 LSF MS-perceptual path must mark joint stereo and let Symphonia
+    // recover the original left/right level difference via the inverse mid/side
+    // matrix. As with the other MS tests, the per-channel tone power ratio is the
+    // discriminator (it isolates the matrix from the quantizer's absolute quality).
+    let sample_rate = 24_000;
+    let frames = 22_050;
+    let tone = 1_000.0_f32;
+    let left: Vec<f32> = (0..frames)
+        .map(|i| 0.3 * (std::f32::consts::TAU * tone * (i as f32 / sample_rate as f32)).sin())
+        .collect();
+    let right: Vec<f32> = left.iter().map(|&l| 0.7 * l).collect();
+    let interleaved: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sc_mp3::encode_mpeg2_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider(
+        &pcm,
+        sc_mp3::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+        sc_mp3::MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
+        false,
+        0,
+        sc_mp3::mpeg1_layer3_standard_table_provider(),
+    )
+    .expect("MPEG-2 LSF MS-perceptual encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b01,
+        "MS-perceptual stream must be coded as joint (MS) stereo"
+    );
+
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2);
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+    let pl = goertzel(&dec_left, sample_rate, tone);
+    let pr = goertzel(&dec_right, sample_rate, tone);
+    let power_ratio = pr / pl.max(1.0e-9);
+    eprintln!("MPEG-2 LSF MS-perceptual power ratio (right/left)={power_ratio:.3} (target 0.49)");
+    assert!(pl > 0.0 && pr > 0.0, "decoded channels carry no tone energy");
+    assert!(
+        (0.30..0.70).contains(&power_ratio),
+        "MS-perceptual reconstruction lost the channel level difference: ratio={power_ratio:.3}"
+    );
+}
+
+#[test]
 fn mp3_mpeg25_rates_are_rejected_cleanly() {
     // MPEG-2.5 (8/11.025/12 kHz) is outside ISO/IEC 11172-3 and 13818-3, so the
     // encoder must reject it with an error rather than panicking or emitting an

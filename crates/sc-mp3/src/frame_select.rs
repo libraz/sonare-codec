@@ -759,7 +759,7 @@ pub fn select_mpeg1_layer3_first_frame_low_band_spectral_shape_candidate_profile
                     pcm.sample_rate,
                 )?;
                 let low_band_end = usize::from(
-                    *mpeg1_layer3_long_scalefactor_band_index(pcm.sample_rate)?
+                    *layer3_long_scalefactor_band_index(pcm.sample_rate)?
                         .get(7)
                         .ok_or(Error::InvalidInput("MP3 low-band boundary missing"))?,
                 );
@@ -865,8 +865,7 @@ pub fn select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_wit
                     pcm.sample_rate,
                 )?;
                 for band in 0..band_count {
-                    let (start, end) =
-                        mpeg1_layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
+                    let (start, end) = layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
                     for &coeff in quantized.iter().take(end.min(quantized.len())).skip(start) {
                         let magnitude = u64::from(coeff.unsigned_abs());
                         band_abs_sums[band] = band_abs_sums[band].saturating_add(magnitude);
@@ -880,8 +879,7 @@ pub fn select_mpeg1_layer3_first_frame_band_spectral_shape_candidate_profile_wit
             }
         }
         for band in 0..band_count {
-            let (band_start, band_end) =
-                mpeg1_layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
+            let (band_start, band_end) = layer3_long_scalefactor_band_range(band, pcm.sample_rate)?;
             profiles.push(Layer3BandSpectralShapeCandidateProfile {
                 step: selection.step,
                 payload_bit_len: selection.payload_bit_len,

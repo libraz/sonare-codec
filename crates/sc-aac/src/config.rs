@@ -144,6 +144,47 @@ pub fn aac_lc_default_production_bitrate_bps(channels: u8) -> Result<u32, Error>
         .ok_or(Error::InvalidInput("AAC production bitrate overflows"))
 }
 
+/// Calibration offset (in scalefactor units) bridging our forward MDCT scale and
+/// the spec-normalized coefficient scale the decoder's inverse MDCT assumes.
+///
+/// [`mdct_long_block`] computes an unnormalized transform, so its coefficients
+/// are larger than the ISO-normalized ones by a constant factor of `2^16`. Each
+/// scalefactor unit scales the dequantized amplitude by `2^0.25`, so absorbing
+/// `2^16` takes `4 * 16 = 64` units. Adding this keeps the decoded output at the
+/// input level instead of `2^16` too quiet.
+pub(crate) const AAC_MDCT_NORMALIZATION_SCALE_FACTOR_OFFSET: f64 = 64.0;
+
+/// Returns the uniform AAC scalefactor (and global gain) that inverts a scalar
+/// quantizer step for this encoder's analysis pipeline.
+///
+/// The scalar quantizer emits `q = round(|x|^0.75 / step)` and the AAC
+/// dequantizer reconstructs `|q|^(4/3) * 2^(0.25 * (scalefactor - 100))`
+/// (ISO/IEC 14496-3, with `SF_OFFSET = 100`). Equating the two gives
+/// `scalefactor = 100 + (16 / 3) * log2(step)`, identical for every band because
+/// a single step is shared across the whole spectrum. The constant
+/// [`AAC_MDCT_NORMALIZATION_SCALE_FACTOR_OFFSET`] then rescales for our
+/// unnormalized forward MDCT. Encoding this scalefactor makes the decoded
+/// spectrum track the input at the correct level instead of being tilted by an
+/// ad-hoc per-band magnitude class.
+pub fn aac_uniform_scale_factor_for_step(step: f32) -> Result<u8, Error> {
+    if !step.is_finite() || step <= 0.0 {
+        return Err(Error::InvalidInput(
+            "AAC quantizer step must be positive and finite",
+        ));
+    }
+    let scale_factor = (100.0
+        + (16.0 / 3.0) * f64::from(step).log2()
+        + AAC_MDCT_NORMALIZATION_SCALE_FACTOR_OFFSET)
+        .round();
+    if !(0.0..=255.0).contains(&scale_factor) {
+        return Err(Error::UnsupportedFeature(
+            "AAC uniform scale factor for step is out of range",
+        ));
+    }
+    // The bounds check above guarantees a lossless cast into the 8-bit range.
+    Ok(scale_factor as u8)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AacPcmFrameStepSelection {
     pub step: f32,

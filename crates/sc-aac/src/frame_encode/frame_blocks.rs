@@ -151,12 +151,19 @@ pub fn encode_pcm_mono_long_block_adts_with_offsets_and_selected_scale_factors_b
             "AAC mono PCM encode requires one-channel ADTS and PCM",
         ));
     }
+    if offsets.len() < 2 {
+        return Err(Error::InvalidInput("AAC scale-factor offsets are empty"));
+    }
+    let global_gain = aac_uniform_scale_factor_for_step(step)?;
+    let channel = AacLongBlockConfig::new(global_gain, channel.max_sfb);
     let quantized = quantize_pcm_long_block(pcm, 0, start_frame, step)?;
-    encode_quantized_mono_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+    let scale_factors = vec![i16::from(global_gain); offsets.len() - 1];
+    encode_quantized_mono_adts_with_offsets_and_scale_factors_by_bit_cost(
         adts,
         channel,
         &quantized,
         offsets,
+        &scale_factors,
         scale_factor_table,
         spectral_tables,
     )
@@ -551,12 +558,19 @@ pub fn encode_pcm_stereo_long_block_adts_with_offsets_and_selected_scale_factors
             "AAC stereo PCM encode requires two-channel ADTS and PCM",
         ));
     }
+    if offsets.len() < 2 {
+        return Err(Error::InvalidInput("AAC scale-factor offsets are empty"));
+    }
+    let global_gain = aac_uniform_scale_factor_for_step(step)?;
+    let left = AacLongBlockConfig::new(global_gain, left.max_sfb);
+    let right = AacLongBlockConfig::new(global_gain, right.max_sfb);
     let left_quantized = quantize_pcm_long_block(pcm, 0, start_frame, step)?;
     let right_quantized = quantize_pcm_long_block(pcm, 1, start_frame, step)?;
-    encode_quantized_stereo_adts_with_offsets_and_selected_scale_factors_by_bit_cost(
+    let scale_factors = vec![i16::from(global_gain); offsets.len() - 1];
+    encode_quantized_stereo_adts_with_offsets_and_scale_factors_by_bit_cost(
         adts,
-        AacQuantizedSpectrum::new(left, &left_quantized),
-        AacQuantizedSpectrum::new(right, &right_quantized),
+        AacQuantizedChannel::new(left, &left_quantized, &scale_factors),
+        AacQuantizedChannel::new(right, &right_quantized, &scale_factors),
         offsets,
         scale_factor_table,
         spectral_tables,

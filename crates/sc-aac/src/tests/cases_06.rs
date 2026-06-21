@@ -86,7 +86,7 @@
                 AAC_LC_PCM_STEP_CANDIDATES,
                 production_budget,
                 &aac_scale_factor_delta_table(),
-                aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
+                aac_lc_standard_spectral_tables(),
             )
             .unwrap();
         let production_details =
@@ -100,7 +100,7 @@
                 &reversed_candidates,
                 production_budget,
                 &aac_scale_factor_delta_table(),
-                aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
+                aac_lc_standard_spectral_tables(),
             )
             .unwrap();
         let production =
@@ -113,7 +113,7 @@
                 AAC_LC_PCM_STEP_CANDIDATES,
                 production_bitrate,
                 &aac_scale_factor_delta_table(),
-                aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
+                aac_lc_standard_spectral_tables(),
             )
             .unwrap();
         let production_reversed =
@@ -126,7 +126,7 @@
                 &reversed_candidates,
                 production_bitrate,
                 &aac_scale_factor_delta_table(),
-                aac_unsigned_pairs7_unit_magnitude_spectral_tables(),
+                aac_lc_standard_spectral_tables(),
             )
             .unwrap();
         let zero_payload =

@@ -971,7 +971,7 @@ pub(crate) fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors_and_magnitud
     if !step.is_finite() || step <= 0.0 {
         return Err(Error::InvalidInput("quantization step must be positive"));
     }
-    let index = mpeg1_layer3_long_scalefactor_band_index(sample_rate)?;
+    let index = layer3_long_scalefactor_band_index(sample_rate)?;
 
     let mut out = Vec::with_capacity(spectrum.len());
     for (line, &coeff) in spectrum.iter().enumerate() {

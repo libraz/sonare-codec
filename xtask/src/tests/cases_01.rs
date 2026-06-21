@@ -250,10 +250,24 @@
             .unwrap();
 
         eprintln!(
-            "AAC standard-id candidate-set blocker: mono recommended={mono_recommended:?}, mono production-step={mono_production_step:?}, stereo recommended={stereo_recommended:?}, stereo production-step={stereo_production_step:?}"
+            "AAC standard-id candidate-set fill: mono recommended={mono_recommended:?}, mono production-step={mono_production_step:?}, stereo recommended={stereo_recommended:?}, stereo production-step={stereo_production_step:?}"
         );
-        assert!(mono_recommended.max_frame_len_delta > 0);
-        assert!(stereo_recommended.max_frame_len_delta > 0);
+        // Production now fills the bitrate budget (step search keeps large
+        // magnitudes via the escape codebook and writes a step-consistent
+        // scalefactor), so the standard-id surface no longer produces strictly
+        // larger frames: `max_frame_len_delta` (standard_id - production) is no
+        // longer positive, and production leaves no more budget slack than the
+        // standard-id surface does.
+        assert!(mono_recommended.max_frame_len_delta <= 0);
+        assert!(stereo_recommended.max_frame_len_delta <= 0);
+        assert!(
+            mono_recommended.production_min_budget_slack
+                <= mono_recommended.standard_id_min_budget_slack
+        );
+        assert!(
+            stereo_recommended.production_min_budget_slack
+                <= stereo_recommended.standard_id_min_budget_slack
+        );
         assert!(mono_production_step.max_frame_len_delta <= mono_recommended.max_frame_len_delta);
         assert!(
             stereo_production_step.max_frame_len_delta <= stereo_recommended.max_frame_len_delta

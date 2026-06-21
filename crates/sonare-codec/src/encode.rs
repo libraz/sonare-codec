@@ -45,7 +45,7 @@ pub fn encode_aac_adts_with_bitrate(
     let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
     let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
     let scale_factor_table = aac_scale_factor_delta_table();
-    let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+    let spectral_tables = aac_lc_standard_spectral_tables();
 
     match pcm.channels {
         1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
@@ -91,7 +91,7 @@ pub fn encode_aac_adts_with_selected_scale_factors_and_bitrate(
             .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
     );
     let scale_factor_table = aac_scale_factor_delta_table();
-    let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+    let spectral_tables = aac_lc_standard_spectral_tables();
 
     match pcm.channels {
         1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
@@ -137,7 +137,7 @@ pub fn aac_selected_scale_factor_frame_details_with_bitrate(
             .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
     );
     let scale_factor_table = aac_scale_factor_delta_table();
-    let spectral_tables = aac_unsigned_pairs7_unit_magnitude_spectral_tables();
+    let spectral_tables = aac_lc_standard_spectral_tables();
 
     match pcm.channels {
         1 => select_aac_lc_mono_pcm_stream_frame_details_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(

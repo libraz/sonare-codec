@@ -293,6 +293,33 @@ pub(crate) fn pack_layer3_long_quantized_spectrum_for_rate_and_table_provider(
     )
 }
 
+/// Builds one MPEG-2 LSF long-block payload: the scale factors are packed with
+/// the LSF partition scheme (ISO/IEC 13818-3 §2.4.3.2) and the big-value region
+/// boundaries are resolved for the granule's sample rate.
+///
+/// This is the MPEG-2 counterpart of
+/// [`pack_mpeg1_layer3_long_quantized_spectrum_with_table_provider`]: the
+/// MPEG-1 path encodes non-zero scale factors with `scalefac_compress`/`slen`
+/// pairs, whereas LSF uses the four-group partition, so the two schemes are not
+/// interchangeable once any scale factor is non-zero.
+pub(crate) fn pack_mpeg2_layer3_lsf_long_quantized_spectrum_for_rate_and_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    quantized: &[i32],
+    sample_rate: u32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let scale_factor_bits =
+        pack_mpeg2_layer3_lsf_long_scale_factors_for_granule(granule, scale_factors)?;
+    pack_quantized_spectrum_with_scale_factors_for_rate_and_table_provider(
+        granule,
+        scale_factor_bits,
+        quantized,
+        sample_rate,
+        provider,
+    )
+}
+
 /// Builds one MPEG-1 Layer III long-block payload with internally selected scale factors.
 pub fn pack_mpeg1_layer3_long_quantized_spectrum_with_selected_scale_factors_for_granule(
     granule: &mut Layer3GranuleChannelInfo,
