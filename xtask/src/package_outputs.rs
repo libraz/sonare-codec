@@ -90,6 +90,7 @@ with zipfile.ZipFile(wheel) as zf:
         "sonare_codec/py.typed",
         "sonare_codec-0.1.0.dist-info/METADATA",
         "sonare_codec-0.1.0.dist-info/licenses/LICENSE",
+        "sonare_codec-0.1.0.dist-info/licenses/LICENSE-THIRDPARTY",
         "sonare_codec-0.1.0.dist-info/licenses/NOTICE",
     }
     missing = sorted(required - names)

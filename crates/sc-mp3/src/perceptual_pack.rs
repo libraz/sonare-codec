@@ -559,9 +559,19 @@ pub(crate) fn select_centered_mpeg1_layer3_psychoacoustic_long_scale_factors(
         mdct_spectrum.len(),
     );
 
-    psychoacoustic::perceptual_long_block_scalefactors(
+    // The masking model and allowed-noise target depend only on the granule's
+    // spectrum and analysis FFT, not the quantizer step, so memoize them across
+    // the step search; only the scale-factor allocation re-runs per candidate.
+    let allowed = cached_perceptual_long_block_allowed_noise(pcm, channel, start_frame, || {
+        psychoacoustic::perceptual_long_block_allowed_noise(
+            mdct_spectrum,
+            &pcm_window,
+            pcm.sample_rate,
+        )
+    })?;
+    psychoacoustic::allocate_long_block_scalefactors(
         mdct_spectrum,
-        &pcm_window,
+        &allowed,
         step,
         scalefac_scale,
         pcm.sample_rate,

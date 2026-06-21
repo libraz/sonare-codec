@@ -9,7 +9,7 @@ requires-python = ">=3.9"
 description = "Unified audio decode and encode API backed by Rust"
 readme = "README.md"
 license = "Apache-2.0"
-license-files = ["LICENSE", "NOTICE"]
+license-files = ["LICENSE", "LICENSE-THIRDPARTY", "NOTICE"]
 authors = [{ name = "Libraz" }]
 keywords = ["audio", "codec", "wav", "flac", "mp3", "aac"]
 classifiers = [

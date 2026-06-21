@@ -4,8 +4,10 @@ Copyright 2026 Libraz
 
 This product is licensed under the Apache License, Version 2.0.
 
-This product depends on Symphonia, licensed under MPL-2.0, for audio decoding.
+This product depends on Symphonia, licensed under MPL-2.0, for audio decoding,
+and on the opus-decoder crate for Ogg Opus decoding.
 
-Native Vorbis encoding uses vorbis_rs and libvorbis. Native Opus encoding uses
-the opus Rust bindings and libopus. libvorbis and libopus are Xiph.Org codec
-libraries licensed under BSD-3-Clause terms.
+This package bundles the first-party, pure-Rust Vorbis and Opus encoders, whose
+ported portions are derivative works of the Xiph.Org BSD-3-Clause C sources
+libvorbis/aoTuV, libogg, and libopus. The upstream copyright notices and
+BSD-3-Clause license text are reproduced in LICENSE-THIRDPARTY.

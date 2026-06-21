@@ -28,6 +28,7 @@
     "index.d.ts",
     "README.md",
     "LICENSE",
+    "LICENSE-THIRDPARTY",
     "NOTICE"
   ],
   "keywords": [

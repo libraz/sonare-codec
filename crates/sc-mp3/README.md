@@ -3,9 +3,13 @@
 MP3 helper crate for the Sonare codec workspace.
 
 The crate contains clean-room MPEG audio header handling and experimental
-MPEG-1 Layer III frame construction helpers. Public encode support includes a
-silent compact path and a non-silent long-block scaffold while the full encoder
-is being completed. Non-silent encode uses the standard table provider with
+Layer III frame construction helpers. Public encode support includes a silent
+compact path and a non-silent long-block scaffold while the full encoder is
+being completed. MPEG-1 sample rates 32/44.1/48 kHz encode at 128 kbps, and
+MPEG-2 LSF (ISO/IEC 13818-3) sample rates 16/22.05/24 kHz encode through a
+single-granule calibrated-gain path at a 64 kbps default bitrate
+(`encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider`); the
+clean-room-excluded MPEG-2.5 rates 8/11.025/12 kHz are not supported. Non-silent encode uses the standard table provider with
 frame-level quantizer step search, so it can emit accepted non-zero payload
 scaffolds instead of falling back to the all-zero scaffold. The standard table
 provider includes the MPEG-1 Layer III big-values table 1 for unit-magnitude

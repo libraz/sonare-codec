@@ -6,9 +6,9 @@ pub(crate) struct FlacBitWriter {
 }
 
 impl FlacBitWriter {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
         Self {
-            bytes: Vec::new(),
+            bytes: Vec::with_capacity(capacity),
             bit_pos: 0,
         }
     }

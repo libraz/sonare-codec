@@ -88,7 +88,7 @@ pub fn pack_spectral_sections(
     quantized: &[i32],
     tables: AacSpectralTables<'_>,
 ) -> Result<PackedBits, Error> {
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(sections.len());
     for section in sections {
         let pairs = spectral_pairs_for_section(quantized, section)?;
         if pairs.is_empty() {
@@ -108,7 +108,7 @@ pub fn pack_spectral_sections_with_sign_bits(
     quantized: &[i32],
     tables: AacSpectralMagnitudeTables<'_>,
 ) -> Result<PackedBits, Error> {
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(sections.len());
     for section in sections {
         let pairs = spectral_pairs_for_section(quantized, section)?;
         if pairs.is_empty() {
@@ -128,7 +128,7 @@ pub fn pack_spectral_quad_sections_with_sign_bits(
     quantized: &[i32],
     tables: AacSpectralMagnitudeQuadTables<'_>,
 ) -> Result<PackedBits, Error> {
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(sections.len());
     for section in sections {
         if section.end <= section.start || section.end > quantized.len() {
             return Err(Error::InvalidInput("invalid AAC section range"));
@@ -178,7 +178,7 @@ pub(crate) fn pack_spectral_sections_by_codebook_id_with_signed_pairs(
     signed_quad_tables: AacSpectralQuadTables<'_>,
     quad_tables: AacSpectralMagnitudeQuadTables<'_>,
 ) -> Result<PackedBits, Error> {
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(sections.len());
     for section in sections {
         if section.end <= section.start || section.end > quantized.len() {
             return Err(Error::InvalidInput("invalid AAC section range"));
@@ -274,7 +274,7 @@ pub(crate) fn pack_magnitude_spectral_sections_with_sign_bits(
     sections: &[AacMagnitudeSection<'_>],
     quantized: &[i32],
 ) -> Result<PackedBits, Error> {
-    let mut parts = Vec::new();
+    let mut parts = Vec::with_capacity(sections.len());
     for section in sections {
         if section.end <= section.start || section.end > quantized.len() {
             return Err(Error::InvalidInput("invalid AAC section range"));

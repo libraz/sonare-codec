@@ -88,7 +88,11 @@ pub(crate) fn encode_frame_with_channels(
     if encoded_channels.len() != channels {
         return Err(Error::InvalidPcm("FLAC encoded channel count mismatch"));
     }
-    let mut frame = Vec::new();
+    let header_capacity = 16_usize;
+    let payload_capacity = block_size
+        .saturating_mul(channels)
+        .saturating_mul(usize::from(ENCODE_BITS_PER_SAMPLE).div_ceil(8));
+    let mut frame = Vec::with_capacity(header_capacity.saturating_add(payload_capacity));
     let sync_second = if fixed_blocking { 0xf8 } else { 0xf9 };
     frame.extend_from_slice(&[
         0xff,
@@ -107,7 +111,7 @@ pub(crate) fn encode_frame_with_channels(
     );
     frame.push(crc8(&frame));
 
-    let mut writer = FlacBitWriter::new();
+    let mut writer = FlacBitWriter::with_capacity(payload_capacity);
     for channel in encoded_channels {
         write_best_subframe(&mut writer, channel.samples, channel.bits_per_sample)?;
     }
@@ -210,17 +214,19 @@ pub(crate) fn mid_side_channels<'a>(mid: &'a [i32], side: &'a [i32]) -> [Encoded
 }
 
 pub(crate) fn stereo_side_samples(left: &[i32], right: &[i32]) -> Vec<i32> {
-    left.iter()
-        .zip(right)
-        .map(|(&left, &right)| left - right)
-        .collect()
+    let mut side = Vec::with_capacity(left.len().min(right.len()));
+    for (&left, &right) in left.iter().zip(right) {
+        side.push(left - right);
+    }
+    side
 }
 
 pub(crate) fn stereo_mid_samples(left: &[i32], right: &[i32]) -> Vec<i32> {
-    left.iter()
-        .zip(right)
-        .map(|(&left, &right)| (left + right) >> 1)
-        .collect()
+    let mut mid = Vec::with_capacity(left.len().min(right.len()));
+    for (&left, &right) in left.iter().zip(right) {
+        mid.push((left + right) >> 1);
+    }
+    mid
 }
 
 pub(crate) fn write_best_subframe(
@@ -325,12 +331,16 @@ pub(crate) fn best_fixed_rice(samples: &[i32], bits_per_sample: u8) -> Option<Fi
             continue;
         }
         let residuals = fixed_residuals(samples, order)?;
+        let folded_residuals = residuals
+            .iter()
+            .map(|&residual| folded_rice_value(residual))
+            .collect::<Vec<_>>();
         let mut best_rice_parameter = None;
         for rice_parameter in 0..=14 {
-            let Ok(bits) = fixed_rice_bits(
+            let Ok(bits) = fixed_rice_bits_from_folded(
                 samples.len(),
                 order,
-                &residuals,
+                &folded_residuals,
                 rice_parameter,
                 bits_per_sample,
             ) else {
@@ -400,26 +410,53 @@ pub(crate) fn fixed_rice_bits(
     if order == 0 || order > 4 || residuals.len() + order != samples_len {
         return Err(Error::InvalidPcm("FLAC residual count mismatch"));
     }
-    let mut bits = 8_usize
+    let mut bits = fixed_rice_header_bits(order, bits_per_sample)?;
+    for &residual in residuals {
+        bits = add_folded_rice_bits(bits, folded_rice_value(residual), rice_parameter)?;
+    }
+    Ok(bits)
+}
+
+fn fixed_rice_bits_from_folded(
+    samples_len: usize,
+    order: u8,
+    folded_residuals: &[u32],
+    rice_parameter: u8,
+    bits_per_sample: u8,
+) -> Result<usize, Error> {
+    let order = usize::from(order);
+    if order == 0 || order > 4 || folded_residuals.len() + order != samples_len {
+        return Err(Error::InvalidPcm("FLAC residual count mismatch"));
+    }
+    let mut bits = fixed_rice_header_bits(order, bits_per_sample)?;
+    for &folded in folded_residuals {
+        bits = add_folded_rice_bits(bits, folded, rice_parameter)?;
+    }
+    Ok(bits)
+}
+
+fn add_folded_rice_bits(bits: usize, folded: u32, rice_parameter: u8) -> Result<usize, Error> {
+    if rice_parameter >= u32::BITS as u8 {
+        return Err(Error::InvalidPcm("FLAC Rice parameter is out of range"));
+    }
+    let quotient = folded >> rice_parameter;
+    bits.checked_add(
+        usize::try_from(quotient)
+            .map_err(|_| Error::InvalidPcm("FLAC Rice residual is too large"))?,
+    )
+    .and_then(|value| value.checked_add(1 + usize::from(rice_parameter)))
+    .ok_or(Error::InvalidPcm("FLAC fixed subframe size overflow"))
+}
+
+fn fixed_rice_header_bits(order: usize, bits_per_sample: u8) -> Result<usize, Error> {
+    8_usize
         .checked_add(
             order
                 .checked_mul(usize::from(bits_per_sample))
                 .ok_or(Error::InvalidPcm("FLAC fixed subframe size overflow"))?,
         )
         .and_then(|value| value.checked_add(2 + 4 + 4))
-        .ok_or(Error::InvalidPcm("FLAC fixed subframe size overflow"))?;
-    for &residual in residuals {
-        let folded = folded_rice_value(residual);
-        let quotient = folded >> rice_parameter;
-        bits = bits
-            .checked_add(
-                usize::try_from(quotient)
-                    .map_err(|_| Error::InvalidPcm("FLAC Rice residual is too large"))?,
-            )
-            .and_then(|value| value.checked_add(1 + usize::from(rice_parameter)))
-            .ok_or(Error::InvalidPcm("FLAC fixed subframe size overflow"))?;
-    }
-    Ok(bits)
+        .ok_or(Error::InvalidPcm("FLAC fixed subframe size overflow"))
 }
 
 pub(crate) fn folded_rice_value(value: i32) -> u32 {

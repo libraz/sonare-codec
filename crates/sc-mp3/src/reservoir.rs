@@ -1,4 +1,5 @@
 use super::*;
+use crate::psychoacoustic::{mid_side_transform, should_use_mid_side};
 
 /// MPEG-1 main-data backward pointer width: `main_data_begin` is 9 bits.
 pub(crate) const MAX_MAIN_DATA_BEGIN: usize = 511;
@@ -816,6 +817,125 @@ pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir
     .collect();
 
     assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Splits an interleaved stereo buffer into its left and right channels as `f64`.
+///
+/// Returns an error unless the buffer is stereo with an even sample count. The
+/// `f64` widening matches the psychoacoustic stereo helpers, which decide and
+/// apply the mid/side transform in `f64`.
+pub(crate) fn deinterleave_stereo_f64(pcm: &AudioBuffer) -> Result<(Vec<f64>, Vec<f64>), Error> {
+    if pcm.channels != 2 {
+        return Err(Error::InvalidInput("MP3 mid/side needs a stereo buffer"));
+    }
+    if pcm.samples.len() % 2 != 0 {
+        return Err(Error::InvalidPcm("MP3 stereo sample count must be even"));
+    }
+    let frames = pcm.samples.len() / 2;
+    let mut left = Vec::with_capacity(frames);
+    let mut right = Vec::with_capacity(frames);
+    for frame in pcm.samples.chunks_exact(2) {
+        left.push(f64::from(frame[0]));
+        right.push(f64::from(frame[1]));
+    }
+    Ok((left, right))
+}
+
+/// Decides whether a whole stereo stream should be coded as MS joint stereo.
+///
+/// The decision is made once for the stream from the overall side-channel energy
+/// fraction (see [`should_use_mid_side`]): MS is chosen only when the channels
+/// are correlated enough that the side channel is cheap to code, so decorrelated
+/// stereo stays independent and never regresses. A non-stereo buffer is never MS.
+pub fn should_encode_stereo_as_mid_side(pcm: &AudioBuffer) -> Result<bool, Error> {
+    if pcm.channels != 2 {
+        return Ok(false);
+    }
+    let (left, right) = deinterleave_stereo_f64(pcm)?;
+    should_use_mid_side(&left, &right)
+}
+
+/// Returns an interleaved stereo buffer with the orthonormal mid/side transform
+/// applied (`mid = (left + right) / √2`, `side = (left − right) / √2`).
+///
+/// The mid channel is interleaved first, the side channel second, matching the
+/// MP3 MS-stereo channel order so a decoder applying the inverse matrix recovers
+/// the original left/right pair.
+pub(crate) fn mid_side_encode_buffer(pcm: &AudioBuffer) -> Result<AudioBuffer, Error> {
+    let (left, right) = deinterleave_stereo_f64(pcm)?;
+    let (mid, side) = mid_side_transform(&left, &right)?;
+    let mut samples = Vec::with_capacity(pcm.samples.len());
+    for (&m, &s) in mid.iter().zip(side.iter()) {
+        samples.push(m as f32);
+        samples.push(s as f32);
+    }
+    Ok(AudioBuffer {
+        sample_rate: pcm.sample_rate,
+        channels: 2,
+        samples,
+    })
+}
+
+/// Encodes correlated stereo PCM as MS joint-stereo MPEG-1 Layer III.
+///
+/// The left/right pair is mapped through the orthonormal mid/side transform and
+/// the resulting mid and side channels are coded as two independent Layer III
+/// channels through the entropy-targeted perceptual reservoir path. Each frame
+/// header is then marked [`ChannelMode::JointStereo`] so the decoder applies the
+/// inverse matrix. The byte layout is identical to independent stereo — only the
+/// channel-mode and `mode_extension` header bits change — so relabelling after
+/// packing is size-exact and the reservoir bookkeeping stays valid.
+pub fn encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider(
+    pcm: &AudioBuffer,
+    candidates: &[f32],
+    bitrate_kbps: u16,
+    crc_protected: bool,
+    min_bits_per_granule_channel: usize,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let mid_side = mid_side_encode_buffer(pcm)?;
+    let frames = collect_mpeg1_layer3_entropy_targeted_reservoir_frames_with_table_provider(
+        &mid_side,
+        candidates,
+        bitrate_kbps,
+        crc_protected,
+        min_bits_per_granule_channel,
+        provider,
+        Layer3ReservoirPayloadMode::PerceptualActive,
+    )?
+    .into_iter()
+    .map(|(mut frame, _, _)| {
+        frame.header.channel_mode = ChannelMode::JointStereo;
+        frame
+    })
+    .collect();
+
+    assemble_mpeg1_layer3_reservoir_frames(frames)
+}
+
+/// Encodes correlated stereo PCM as MS joint-stereo MPEG-2 LSF Layer III.
+///
+/// This is the MPEG-2 low-sampling-frequency (16/22.05/24 kHz) counterpart of
+/// [`encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider`].
+/// The left/right pair is mapped through the orthonormal mid/side transform and
+/// the resulting mid and side channels are coded through the single-granule
+/// calibrated auto-step path. Because the MPEG-2 path takes its frame header
+/// directly, the header is built as [`ChannelMode::JointStereo`] from the start
+/// (rather than relabelled after packing): the side-info layout and per-frame
+/// capacity depend only on the channel count, so a joint-stereo header is
+/// byte-compatible with the independent-stereo encode of the same M/S buffer.
+pub fn encode_mpeg2_layer3_pcm_frames_with_auto_step_mid_side_and_table_provider(
+    pcm: &AudioBuffer,
+    bitrate_kbps: u16,
+    candidates: &[f32],
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<Vec<u8>, Error> {
+    let mid_side = mid_side_encode_buffer(pcm)?;
+    let mut header = mpeg2_layer3_header_for_pcm(&mid_side, bitrate_kbps)?;
+    header.channel_mode = ChannelMode::JointStereo;
+    encode_mpeg1_layer3_pcm_frames_with_header_and_auto_step_and_table_provider(
+        header, &mid_side, candidates, provider,
+    )
 }
 
 /// Encodes PCM as constant-bitrate Layer III using entropy-targeted reservoir

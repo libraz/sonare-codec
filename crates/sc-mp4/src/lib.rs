@@ -31,7 +31,11 @@ pub fn mux_aac(adts: &[u8]) -> Result<Vec<u8>, Error> {
     let asc = audio_specific_config(first.profile, first.sample_rate_index, first.channels);
     let sample_rate = sample_rate_from_index(first.sample_rate_index)?;
 
-    let mut mdat_payload = Vec::new();
+    let mdat_payload_len = frames
+        .iter()
+        .try_fold(0_usize, |sum, frame| sum.checked_add(frame.payload.len()))
+        .ok_or(Error::InvalidInput("AAC stream is too large for MP4 mdat"))?;
+    let mut mdat_payload = Vec::with_capacity(mdat_payload_len);
     let mut sample_sizes = Vec::with_capacity(frames.len());
     for frame in &frames {
         if frame.profile != first.profile
@@ -76,7 +80,7 @@ struct AdtsFrame<'a> {
 }
 
 fn parse_adts_frames(mut input: &[u8]) -> Result<Vec<AdtsFrame<'_>>, Error> {
-    let mut frames = Vec::new();
+    let mut frames = Vec::with_capacity(input.len() / 7);
     while !input.is_empty() {
         if input.len() < 7 {
             return Err(Error::InvalidInput("truncated AAC ADTS header"));
@@ -140,7 +144,7 @@ fn audio_specific_config(profile: u8, sample_rate_index: u8, channels: u8) -> [u
 }
 
 fn ftyp_box() -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(16);
     payload.extend_from_slice(b"M4A ");
     write_u32(&mut payload, 0);
     payload.extend_from_slice(b"M4A ");
@@ -216,7 +220,7 @@ fn stbl_box(
 }
 
 fn mvhd_box(timescale: u32, duration: u32) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(96);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, timescale);
@@ -238,7 +242,7 @@ fn mvhd_box(timescale: u32, duration: u32) -> Vec<u8> {
 }
 
 fn tkhd_box(duration: u32) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(80);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, 1);
@@ -260,7 +264,7 @@ fn tkhd_box(duration: u32) -> Vec<u8> {
 }
 
 fn mdhd_box(sample_rate: u32, duration: u32) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(20);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, 0);
     write_u32(&mut payload, sample_rate);
@@ -271,7 +275,7 @@ fn mdhd_box(sample_rate: u32, duration: u32) -> Vec<u8> {
 }
 
 fn hdlr_box() -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(25);
     write_u32(&mut payload, 0);
     payload.extend_from_slice(b"soun");
     write_u32(&mut payload, 0);
@@ -282,20 +286,19 @@ fn hdlr_box() -> Vec<u8> {
 }
 
 fn dinf_box() -> Result<Vec<u8>, Error> {
-    let mut url_payload = Vec::new();
+    let url_payload = Vec::new();
     let url = full_box(*b"url ", 0, 1, &url_payload)?;
 
-    let mut dref_payload = Vec::new();
+    let mut dref_payload = Vec::with_capacity(4 + url.len());
     write_u32(&mut dref_payload, 1);
     dref_payload.extend_from_slice(&url);
     let dref = full_box(*b"dref", 0, 0, &dref_payload)?;
-    url_payload.clear();
     box_with_children(*b"dinf", &[dref])
 }
 
 fn stsd_box(sample_rate: u32, channels: u8, asc: &[u8; 2]) -> Result<Vec<u8>, Error> {
     let esds = esds_box(asc)?;
-    let mut entry = Vec::new();
+    let mut entry = Vec::with_capacity(28 + esds.len());
     entry.extend_from_slice(&[0; 6]);
     write_u16(&mut entry, 1);
     write_u16(&mut entry, 0);
@@ -309,7 +312,7 @@ fn stsd_box(sample_rate: u32, channels: u8, asc: &[u8; 2]) -> Result<Vec<u8>, Er
     entry.extend_from_slice(&esds);
     let mp4a = box_with_payload(*b"mp4a", &entry)?;
 
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(4 + mp4a.len());
     write_u32(&mut payload, 1);
     payload.extend_from_slice(&mp4a);
     full_box(*b"stsd", 0, 0, &payload)
@@ -338,7 +341,7 @@ fn esds_box(asc: &[u8; 2]) -> Result<Vec<u8>, Error> {
 }
 
 fn stts_box(sample_count: usize) -> Result<Vec<u8>, Error> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(12);
     write_u32(&mut payload, 1);
     write_u32(
         &mut payload,
@@ -349,7 +352,7 @@ fn stts_box(sample_count: usize) -> Result<Vec<u8>, Error> {
 }
 
 fn stsc_box(sample_count: usize) -> Result<Vec<u8>, Error> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(16);
     write_u32(&mut payload, 1);
     write_u32(&mut payload, 1);
     write_u32(
@@ -361,7 +364,7 @@ fn stsc_box(sample_count: usize) -> Result<Vec<u8>, Error> {
 }
 
 fn stsz_box(sample_sizes: &[u32]) -> Result<Vec<u8>, Error> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(8 + sample_sizes.len().saturating_mul(4));
     write_u32(&mut payload, 0);
     write_u32(
         &mut payload,
@@ -375,7 +378,7 @@ fn stsz_box(sample_sizes: &[u32]) -> Result<Vec<u8>, Error> {
 }
 
 fn stco_box(chunk_offset: u32) -> Vec<u8> {
-    let mut payload = Vec::new();
+    let mut payload = Vec::with_capacity(8);
     write_u32(&mut payload, 1);
     write_u32(&mut payload, chunk_offset);
     full_box(*b"stco", 0, 0, &payload).expect("stco box is representable")
@@ -451,7 +454,14 @@ fn samples_to_adts(
     asc: AudioSpecificConfig,
 ) -> Result<Vec<u8>, Error> {
     let mut offset = 0_usize;
-    let mut out = Vec::new();
+    let out_len = sample_sizes.iter().try_fold(0_usize, |sum, &sample_size| {
+        let sample_size = usize::try_from(sample_size)
+            .map_err(|_| Error::InvalidInput("AAC sample size is too large"))?;
+        sum.checked_add(sample_size)
+            .and_then(|value| value.checked_add(7))
+            .ok_or(Error::InvalidInput("AAC ADTS output is too large"))
+    })?;
+    let mut out = Vec::with_capacity(out_len);
     for &sample_size in sample_sizes {
         let sample_size = usize::try_from(sample_size)
             .map_err(|_| Error::InvalidInput("AAC sample size is too large"))?;

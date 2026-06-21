@@ -136,12 +136,24 @@ impl FrameHeader {
             ChannelMode::DualChannel => 0b10,
             ChannelMode::SingleChannel => 0b11,
         };
+        // Layer III joint stereo: this encoder only ever emits MS stereo (the
+        // orthonormal mid/side matrix), never intensity stereo, so the
+        // mode_extension bits carry the fixed pattern 0b10 (`ms_stereo` on,
+        // `intensity_stereo` off). Independent stereo and mono leave the field
+        // zero. Reading these bits back is unnecessary because decoding is
+        // delegated to Symphonia; `parse` reconstructs the channel mode from the
+        // mode bits alone, which is sufficient for our own header round-trips.
+        let mode_extension_bits = if self.channel_mode == ChannelMode::JointStereo {
+            0b10
+        } else {
+            0b00
+        };
 
         Ok([
             0xff,
             0xe0 | (version_bits << 3) | (layer_bits << 1) | u8::from(self.protection_absent),
             (bitrate_index << 4) | (sample_rate_index << 2) | (u8::from(self.padding) << 1),
-            channel_mode_bits << 6,
+            (channel_mode_bits << 6) | (mode_extension_bits << 4),
         ])
     }
 }

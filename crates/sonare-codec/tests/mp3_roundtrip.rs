@@ -99,6 +99,91 @@ fn mp3_stereo_roundtrip_reconstructs_both_channels() {
     );
 }
 
+/// Reads the channel-mode field (byte 3, bits 7-6) of the first MP3 frame.
+fn first_frame_channel_mode_bits(stream: &[u8]) -> u8 {
+    assert_eq!(stream[0], 0xff, "stream must start with a frame sync");
+    (stream[3] >> 6) & 0x03
+}
+
+#[test]
+fn mp3_correlated_stereo_uses_mid_side_and_reconstructs_both_channels() {
+    // Strongly correlated channels (right = 0.7 * left) trigger the MS joint-stereo
+    // path. Symphonia must apply the inverse mid/side matrix to recover the
+    // original left/right pair: a wrong matrix would collapse both channels to the
+    // mid signal (equal power) or swap them. The per-channel tone power ratio is
+    // the discriminator — it isolates the matrix from the encoder's absolute
+    // quantization quality (which the FFmpeg oracle owns), so it stays valid even
+    // though the coarse production quantizer reconstructs loud tones imperfectly.
+    let sample_rate = 44_100;
+    let frames = 22_050;
+    let tone = 1_200.0_f32;
+    let left: Vec<f32> = (0..frames)
+        .map(|i| 0.3 * (std::f32::consts::TAU * tone * (i as f32 / sample_rate as f32)).sin())
+        .collect();
+    let right: Vec<f32> = left.iter().map(|&l| 0.7 * l).collect();
+    let interleaved: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MP3 encode");
+    // 0b01 == joint stereo: the correlated input must take the MS path.
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b01,
+        "correlated stereo must be coded as joint (MS) stereo"
+    );
+
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2, "expected stereo reconstruction");
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+
+    // Tone power per channel. The inverse matrix must recover the input amplitude
+    // ratio of 0.7, i.e. a power ratio of 0.49; if the decoder put the mid signal
+    // on both channels the ratio would be 1.0, and a swap would give ~2.0.
+    let pl = goertzel(&dec_left, sample_rate, f64::from(tone) as f32);
+    let pr = goertzel(&dec_right, sample_rate, f64::from(tone) as f32);
+    let power_ratio = pr / pl.max(1.0e-9);
+    eprintln!("MS tone power ratio (right/left)={power_ratio:.3} (target 0.49)");
+    assert!(
+        pl > 0.0 && pr > 0.0,
+        "decoded channels carry no tone energy"
+    );
+    assert!(
+        (0.30..0.70).contains(&power_ratio),
+        "MS reconstruction lost the channel level difference: ratio={power_ratio:.3}"
+    );
+}
+
+#[test]
+fn mp3_decorrelated_stereo_stays_independent() {
+    // Distinct content on each channel keeps the side energy high, so the encoder
+    // must NOT switch to MS joint stereo (no regression for true stereo).
+    let sample_rate = 44_100;
+    let frames = 22_050;
+    let interleaved: Vec<f32> = (0..frames)
+        .flat_map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let l = 0.5 * (std::f32::consts::TAU * 440.0 * t).sin();
+            let r = 0.5 * (std::f32::consts::TAU * 3_000.0 * t).sin();
+            [l, r]
+        })
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MP3 encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b00,
+        "decorrelated stereo must stay independent (left/right) stereo"
+    );
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2);
+}
+
 #[test]
 fn mp3_multirate_roundtrip_reconstructs_mono_and_stereo() {
     // A 1 kHz tone must decode through Symphonia for every supported MPEG-1
@@ -175,6 +260,79 @@ fn mp3_mpeg2_lsf_roundtrip_reconstructs_mono_and_stereo() {
             "MPEG-2 LSF {rate} Hz stereo decoded near silence"
         );
     }
+}
+
+#[test]
+fn mp3_mpeg2_lsf_correlated_stereo_uses_mid_side_and_reconstructs_both_channels() {
+    // MPEG-2 LSF counterpart of the MPEG-1 MS test: correlated channels at an LSF
+    // rate must take the joint-stereo path, and Symphonia must apply the inverse
+    // mid/side matrix to recover the original left/right level difference. The
+    // per-channel tone power ratio isolates the matrix from the coarse
+    // single-granule quantizer's absolute quality.
+    let sample_rate = 24_000;
+    let frames = 22_050;
+    let tone = 1_000.0_f32;
+    let left: Vec<f32> = (0..frames)
+        .map(|i| 0.3 * (std::f32::consts::TAU * tone * (i as f32 / sample_rate as f32)).sin())
+        .collect();
+    let right: Vec<f32> = left.iter().map(|&l| 0.7 * l).collect();
+    let interleaved: Vec<f32> = left
+        .iter()
+        .zip(&right)
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MPEG-2 LSF MS encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b01,
+        "correlated LSF stereo must be coded as joint (MS) stereo"
+    );
+
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2, "expected stereo reconstruction");
+    let dec_left: Vec<f32> = decoded.samples.iter().step_by(2).copied().collect();
+    let dec_right: Vec<f32> = decoded.samples.iter().skip(1).step_by(2).copied().collect();
+
+    let pl = goertzel(&dec_left, sample_rate, tone);
+    let pr = goertzel(&dec_right, sample_rate, tone);
+    let power_ratio = pr / pl.max(1.0e-9);
+    eprintln!("MPEG-2 LSF MS tone power ratio (right/left)={power_ratio:.3} (target 0.49)");
+    assert!(
+        pl > 0.0 && pr > 0.0,
+        "decoded channels carry no tone energy"
+    );
+    assert!(
+        (0.30..0.70).contains(&power_ratio),
+        "MPEG-2 LSF MS reconstruction lost the channel level difference: ratio={power_ratio:.3}"
+    );
+}
+
+#[test]
+fn mp3_mpeg2_lsf_decorrelated_stereo_stays_independent() {
+    // Distinct content per channel at an LSF rate must keep independent stereo:
+    // no MS regression for true stereo on the MPEG-2 path.
+    let sample_rate = 24_000;
+    let frames = 22_050;
+    let interleaved: Vec<f32> = (0..frames)
+        .flat_map(|i| {
+            let t = i as f32 / sample_rate as f32;
+            let l = 0.5 * (std::f32::consts::TAU * 440.0 * t).sin();
+            let r = 0.5 * (std::f32::consts::TAU * 3_000.0 * t).sin();
+            [l, r]
+        })
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 2, interleaved).unwrap();
+
+    let mp3 = sonare_codec::encode(Format::Mp3, &pcm).expect("MPEG-2 LSF encode");
+    assert_eq!(
+        first_frame_channel_mode_bits(&mp3),
+        0b00,
+        "decorrelated LSF stereo must stay independent (left/right) stereo"
+    );
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 2);
 }
 
 #[test]

@@ -33,6 +33,7 @@ for (const [key, value] of Object.entries(expected)) {
 const files = new Set(pack.files.map((file) => file.path));
 for (const path of [
   "LICENSE",
+  "LICENSE-THIRDPARTY",
   "NOTICE",
   "README.md",
   "index.js",
@@ -72,6 +73,8 @@ try {
     "encode_audio_production",
     "encode_wav",
     "encode_flac",
+    "encode_vorbis",
+    "encode_opus",
     "encode_mp3",
     "encode_mp3_with_bitrate",
     "encode_mp3_cbr_with_bitrate",

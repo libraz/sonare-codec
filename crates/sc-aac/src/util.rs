@@ -282,14 +282,13 @@ pub(crate) fn fixed_block<const N: usize>(samples: &[f32]) -> Result<[f32; N], E
 }
 
 pub(crate) fn classify_aac_codebook(quantized: &[i32]) -> Result<AacCodebook, Error> {
-    let max_abs = quantized
-        .iter()
-        .map(|coeff| coeff.checked_abs())
-        .collect::<Option<Vec<_>>>()
-        .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))?
-        .into_iter()
-        .max()
-        .unwrap_or(0);
+    let mut max_abs = 0;
+    for &coeff in quantized {
+        let abs = coeff
+            .checked_abs()
+            .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))?;
+        max_abs = max_abs.max(abs);
+    }
     Ok(match max_abs {
         0 => AacCodebook::Zero,
         1..=7 => AacCodebook::UnsignedPairs7,

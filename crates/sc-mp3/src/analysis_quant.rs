@@ -1,4 +1,178 @@
 use super::*;
+use std::cell::RefCell;
+
+/// Identifies the PCM buffer a cached spectrum was derived from.
+///
+/// The quantizer step search re-derives the same MDCT spectrum for every
+/// candidate step of a granule; memoizing it on `(channel, start_frame)` removes
+/// that redundancy. The identity guards against serving a spectrum computed from
+/// a different buffer: the cache is cleared whenever the active buffer changes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct CachedPcmIdentity {
+    ptr: usize,
+    len: usize,
+    sample_rate: u32,
+    channels: u16,
+    fingerprint: u64,
+}
+
+fn cached_pcm_identity(pcm: &AudioBuffer) -> CachedPcmIdentity {
+    let samples = &pcm.samples;
+    let len = samples.len();
+    // Cheap content fingerprint so an unrelated buffer reusing a freed
+    // allocation's address+length cannot alias a stale entry.
+    let fingerprint = if len == 0 {
+        0
+    } else {
+        u64::from(samples[0].to_bits())
+            ^ u64::from(samples[len / 2].to_bits()).rotate_left(21)
+            ^ u64::from(samples[len - 1].to_bits()).rotate_left(42)
+            ^ (len as u64)
+    };
+    CachedPcmIdentity {
+        ptr: samples.as_ptr() as usize,
+        len,
+        sample_rate: pcm.sample_rate,
+        channels: pcm.channels,
+        fingerprint,
+    }
+}
+
+/// Distinguishes the two spectrum flavours sharing the cache keyspace.
+const SPECTRUM_KIND_LONG_BLOCK: u8 = 0;
+const SPECTRUM_KIND_PERCEPTUAL: u8 = 1;
+
+/// Bounded LRU; one frame's step search touches at most a handful of
+/// `(granule, channel)` spectra, so a small cap keeps every candidate a hit
+/// while bounding memory across a whole stream.
+const SPECTRUM_CACHE_CAP: usize = 8;
+
+struct SpectrumCache {
+    pcm: Option<CachedPcmIdentity>,
+    entries: Vec<((u8, usize, usize), Vec<f32>)>,
+}
+
+thread_local! {
+    static SPECTRUM_CACHE: RefCell<SpectrumCache> =
+        const { RefCell::new(SpectrumCache { pcm: None, entries: Vec::new() }) };
+}
+
+/// Returns the spectrum for `(kind, channel, start_frame)`, computing it via
+/// `compute` on a miss. Bit-identical to calling `compute` directly: only
+/// recomputation is elided, never the values.
+fn cached_spectrum<F>(
+    kind: u8,
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    compute: F,
+) -> Result<Vec<f32>, Error>
+where
+    F: FnOnce() -> Result<Vec<f32>, Error>,
+{
+    let id = cached_pcm_identity(pcm);
+    let key = (kind, channel, start_frame);
+
+    let hit = SPECTRUM_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.pcm != Some(id) {
+            cache.pcm = Some(id);
+            cache.entries.clear();
+            return None;
+        }
+        if let Some(pos) = cache.entries.iter().position(|(k, _)| *k == key) {
+            // Promote to most-recently-used.
+            let entry = cache.entries.remove(pos);
+            let value = entry.1.clone();
+            cache.entries.push(entry);
+            Some(value)
+        } else {
+            None
+        }
+    });
+    if let Some(value) = hit {
+        return Ok(value);
+    }
+
+    let value = compute()?;
+    SPECTRUM_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        // Only insert if the buffer is still the one we keyed against; a nested
+        // compute() could have cleared the cache for a different buffer.
+        if cache.pcm == Some(id) {
+            if cache.entries.len() >= SPECTRUM_CACHE_CAP {
+                cache.entries.remove(0);
+            }
+            cache.entries.push((key, value.clone()));
+        }
+    });
+    Ok(value)
+}
+
+/// Per-band allowed quantization noise for one long granule. Step-invariant: it
+/// derives only from the granule's MDCT spectrum and analysis FFT, so the step
+/// search can reuse it for every candidate instead of re-running the FFT and
+/// masking model each time.
+type CachedAllowedNoise = [f64; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
+
+const ALLOWED_NOISE_CACHE_CAP: usize = 8;
+
+struct AllowedNoiseCache {
+    pcm: Option<CachedPcmIdentity>,
+    entries: Vec<((usize, usize), CachedAllowedNoise)>,
+}
+
+thread_local! {
+    static ALLOWED_NOISE_CACHE: RefCell<AllowedNoiseCache> =
+        const { RefCell::new(AllowedNoiseCache { pcm: None, entries: Vec::new() }) };
+}
+
+/// Returns the allowed-noise target for `(channel, start_frame)`, computing it
+/// via `compute` on a miss. Bit-identical to calling `compute` directly.
+pub(crate) fn cached_perceptual_long_block_allowed_noise<F>(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    compute: F,
+) -> Result<CachedAllowedNoise, Error>
+where
+    F: FnOnce() -> Result<CachedAllowedNoise, Error>,
+{
+    let id = cached_pcm_identity(pcm);
+    let key = (channel, start_frame);
+
+    let hit = ALLOWED_NOISE_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.pcm != Some(id) {
+            cache.pcm = Some(id);
+            cache.entries.clear();
+            return None;
+        }
+        if let Some(pos) = cache.entries.iter().position(|(k, _)| *k == key) {
+            let entry = cache.entries.remove(pos);
+            let value = entry.1;
+            cache.entries.push(entry);
+            Some(value)
+        } else {
+            None
+        }
+    });
+    if let Some(value) = hit {
+        return Ok(value);
+    }
+
+    let value = compute()?;
+    ALLOWED_NOISE_CACHE.with(|cell| {
+        let mut cache = cell.borrow_mut();
+        if cache.pcm == Some(id) {
+            if cache.entries.len() >= ALLOWED_NOISE_CACHE_CAP {
+                cache.entries.remove(0);
+            }
+            cache.entries.push((key, value));
+        }
+    });
+    Ok(value)
+}
 
 pub(crate) fn mpeg1_layer3_granule_perceptual_entropy(
     pcm: &AudioBuffer,
@@ -7,7 +181,7 @@ pub(crate) fn mpeg1_layer3_granule_perceptual_entropy(
 ) -> Result<f64, Error> {
     let pcm_window =
         centered_mpeg1_layer3_psychoacoustic_pcm_window(pcm, channel, granule_start, 576);
-    let window = psychoacoustic::hann_window(MPEG1_LAYER3_PSY_FFT_LEN)?;
+    let window = mpeg1_layer3_psychoacoustic_window();
     let windowed: Vec<f64> = pcm_window
         .iter()
         .zip(window.iter())
@@ -18,6 +192,14 @@ pub(crate) fn mpeg1_layer3_granule_perceptual_entropy(
     let barks = psychoacoustic::bin_barks(energy.len(), pcm.sample_rate, MPEG1_LAYER3_PSY_FFT_LEN)?;
     let threshold = psychoacoustic::spread_masking_threshold_per_bin(&energy, &barks, &tonality)?;
     psychoacoustic::perceptual_entropy(&energy, &threshold)
+}
+
+fn mpeg1_layer3_psychoacoustic_window() -> &'static [f64] {
+    static WINDOW: std::sync::OnceLock<Vec<f64>> = std::sync::OnceLock::new();
+    WINDOW.get_or_init(|| {
+        psychoacoustic::hann_window(MPEG1_LAYER3_PSY_FFT_LEN)
+            .expect("MP3 psychoacoustic FFT length is non-zero")
+    })
 }
 
 /// Computes perceptual-entropy weighted target bits for each granule/channel.
@@ -42,8 +224,14 @@ pub fn select_mpeg1_layer3_perceptual_bit_allocation_with_bitrate(
     let frame_count = layer3_frame_count(base_header, pcm)?;
     let mut padding = Layer3PaddingSchedule::new(base_header)?;
     let samples_per_frame = usize::from(base_header.samples_per_frame());
-    let mut entropies = Vec::new();
-    let mut positions = Vec::new();
+    let allocation_count = frame_count
+        .checked_mul(base_header.layer3_granule_count())
+        .and_then(|count| count.checked_mul(base_header.channel_count()))
+        .ok_or(Error::InvalidInput(
+            "MP3 perceptual bit allocation count overflows",
+        ))?;
+    let mut entropies = Vec::with_capacity(allocation_count);
+    let mut positions = Vec::with_capacity(allocation_count);
     let mut total_capacity_bits = 0usize;
 
     for frame_index in 0..frame_count {
@@ -617,6 +805,20 @@ pub fn layer3_long_block_spectrum(
     channel: usize,
     granule_start: usize,
 ) -> Result<Vec<f32>, Error> {
+    cached_spectrum(
+        SPECTRUM_KIND_LONG_BLOCK,
+        pcm,
+        channel,
+        granule_start,
+        || layer3_long_block_spectrum_uncached(pcm, channel, granule_start),
+    )
+}
+
+fn layer3_long_block_spectrum_uncached(
+    pcm: &AudioBuffer,
+    channel: usize,
+    granule_start: usize,
+) -> Result<Vec<f32>, Error> {
     let current = analysis_subband_hops(pcm, channel, granule_start)?;
     let previous = match granule_start.checked_sub(576) {
         Some(prev_start) => Some(analysis_subband_hops(pcm, channel, prev_start)?),
@@ -671,6 +873,16 @@ pub(crate) fn layer3_perceptual_quantizer_spectrum(
     channel: usize,
     start_frame: usize,
 ) -> Result<Vec<f32>, Error> {
+    cached_spectrum(SPECTRUM_KIND_PERCEPTUAL, pcm, channel, start_frame, || {
+        layer3_perceptual_quantizer_spectrum_uncached(pcm, channel, start_frame)
+    })
+}
+
+fn layer3_perceptual_quantizer_spectrum_uncached(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+) -> Result<Vec<f32>, Error> {
     if pcm.channels == 2 {
         let mut spectrum = Vec::with_capacity(576);
         for subband in 0..32 {
@@ -713,6 +925,49 @@ pub fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
     scalefac_scale: bool,
     sample_rate: u32,
 ) -> Result<Vec<i32>, Error> {
+    let magnitudes = layer3_long_spectrum_quantizer_magnitudes(spectrum)?;
+    quantize_mpeg1_layer3_long_spectrum_with_scalefactors_and_magnitudes(
+        spectrum,
+        &magnitudes,
+        step,
+        scale_factors,
+        scalefac_scale,
+        sample_rate,
+    )
+}
+
+/// Power-law magnitudes `|xr|^0.75` for one long granule.
+///
+/// These are independent of the quantizer step and scale factors, so the
+/// noise-control loop can compute them once and reuse them across every pass and
+/// candidate step instead of re-running `powf` per line per pass. Errors on a
+/// non-finite line, matching the per-line check of the direct quantizer.
+pub(crate) fn layer3_long_spectrum_quantizer_magnitudes(
+    spectrum: &[f32],
+) -> Result<Vec<f32>, Error> {
+    let mut magnitudes = Vec::with_capacity(spectrum.len());
+    for &coeff in spectrum {
+        if !coeff.is_finite() {
+            return Err(Error::InvalidInput("spectral coefficient must be finite"));
+        }
+        magnitudes.push(coeff.abs().powf(0.75));
+    }
+    Ok(magnitudes)
+}
+
+/// Quantizes a long-block spectrum from precomputed `|xr|^0.75` magnitudes.
+///
+/// `magnitudes[line]` must equal `spectrum[line].abs().powf(0.75)`; the spectrum
+/// is still consulted for each line's sign. Bit-identical to
+/// [`quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
+pub(crate) fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors_and_magnitudes(
+    spectrum: &[f32],
+    magnitudes: &[f32],
+    step: f32,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    scalefac_scale: bool,
+    sample_rate: u32,
+) -> Result<Vec<i32>, Error> {
     if !step.is_finite() || step <= 0.0 {
         return Err(Error::InvalidInput("quantization step must be positive"));
     }
@@ -720,9 +975,10 @@ pub fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
 
     let mut out = Vec::with_capacity(spectrum.len());
     for (line, &coeff) in spectrum.iter().enumerate() {
-        if !coeff.is_finite() {
-            return Err(Error::InvalidInput("spectral coefficient must be finite"));
-        }
+        let magnitude_pow = match magnitudes.get(line) {
+            Some(&value) => value,
+            None => return Err(Error::InvalidInput("quantizer magnitude line missing")),
+        };
         // Locate the transmitted scale-factor band for this line; the residual
         // band beyond index[21] (and any padding past 576) shapes flat.
         let gain = match index[1..=MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT]
@@ -735,7 +991,7 @@ pub fn quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
             None => 1.0,
         };
 
-        let magnitude = (coeff.abs().powf(0.75) / step * gain).round();
+        let magnitude = (magnitude_pow / step * gain).round();
         if magnitude > 8191.0 {
             return Err(Error::InvalidInput(
                 "quantized spectral coefficient exceeds bound",

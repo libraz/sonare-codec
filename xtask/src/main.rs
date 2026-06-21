@@ -120,6 +120,8 @@ const PUBLIC_BINDING_FUNCTIONS: &[&str] = &[
     "encode_audio_production",
     "encode_wav",
     "encode_flac",
+    "encode_vorbis",
+    "encode_opus",
     "encode_mp3",
     "encode_mp3_with_bitrate",
     "encode_mp3_cbr_with_bitrate",
@@ -221,7 +223,6 @@ const PUBLIC_BINDING_FUNCTIONS: &[&str] = &[
     "mp3_missing_standard_big_value_table_selects",
     "mp3_standard_count1_table_selects",
 ];
-const PYTHON_ONLY_BINDING_FUNCTIONS: &[&str] = &["encode_vorbis", "encode_opus"];
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);

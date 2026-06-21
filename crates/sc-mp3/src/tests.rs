@@ -9,4 +9,5 @@ mod tests {
     include!("tests/cases_04.rs");
     include!("tests/cases_05.rs");
     include!("tests/cases_06.rs");
+    include!("tests/cases_07.rs");
 }

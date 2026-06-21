@@ -112,7 +112,12 @@ pub(crate) fn run_package_metadata_check() -> Result<(), String> {
         )?;
         assert_contains(
             &manifest,
-            "include = [\"Cargo.toml\", \"LICENSE\", \"NOTICE\", \"README.md\", \"src/**",
+            "include = [\"Cargo.toml\", \"LICENSE\"",
+            &format!("{} package include list", package.manifest),
+        )?;
+        assert_contains(
+            &manifest,
+            "\"NOTICE\", \"README.md\", \"src/**",
             &format!("{} package include list", package.manifest),
         )?;
         let license_path = Path::new(package.manifest).with_file_name("LICENSE");
@@ -266,6 +271,7 @@ pub(crate) fn run_package_metadata_check() -> Result<(), String> {
     assert_contains(&npm, "\"pkg\"", "npm package files")?;
     assert_contains(&npm, "\"index.js\"", "npm package files")?;
     assert_contains(&npm, "\"index.d.ts\"", "npm package files")?;
+    assert_contains(&npm, "\"LICENSE-THIRDPARTY\"", "npm package files")?;
     assert_contains(&npm, "\"NOTICE\"", "npm package files")?;
     assert_contains(
         &npm_index,
@@ -283,7 +289,7 @@ pub(crate) fn run_package_metadata_check() -> Result<(), String> {
     )?;
     assert_contains(
         &pyproject,
-        "license-files = [\"LICENSE\", \"NOTICE\"]",
+        "license-files = [\"LICENSE\", \"LICENSE-THIRDPARTY\", \"NOTICE\"]",
         "Python package license files",
     )?;
     assert_contains(
@@ -315,9 +321,6 @@ pub(crate) fn run_package_metadata_check() -> Result<(), String> {
     assert_contains(&python_types, "PcmTuple", "Python type definitions")?;
     assert_contains(&python_types, "StreamDecoder", "Python type definitions")?;
     for function in PUBLIC_BINDING_FUNCTIONS {
-        assert_contains(&python_types, function, "Python type definitions")?;
-    }
-    for function in PYTHON_ONLY_BINDING_FUNCTIONS {
         assert_contains(&python_types, function, "Python type definitions")?;
     }
     assert_contains(

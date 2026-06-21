@@ -7,7 +7,7 @@ pub fn plan_sections_by_offsets(
 ) -> Result<Vec<AacSection>, Error> {
     validate_scale_factor_band_offsets(quantized, offsets)?;
 
-    let mut sections = Vec::<AacSection>::new();
+    let mut sections = Vec::<AacSection>::with_capacity(offsets.len().saturating_sub(1));
     for band in offsets.windows(2) {
         let start = band[0];
         let end = band[1];
@@ -31,7 +31,8 @@ pub(crate) fn plan_magnitude_sections_by_offsets<'a>(
 ) -> Result<Vec<AacMagnitudeSection<'a>>, Error> {
     validate_scale_factor_band_offsets(quantized, offsets)?;
 
-    let mut sections = Vec::<AacMagnitudeSection<'a>>::new();
+    let mut sections =
+        Vec::<AacMagnitudeSection<'a>>::with_capacity(offsets.len().saturating_sub(1));
     for band in offsets.windows(2) {
         let start = band[0];
         let end = band[1];
@@ -59,7 +60,7 @@ pub fn plan_scale_factor_deltas(
     }
 
     let mut previous = initial_scale_factor;
-    let mut deltas = Vec::new();
+    let mut deltas = Vec::with_capacity(scale_factors.len());
     for section in sections {
         if section.end <= section.start
             || section.start % band_width != 0
@@ -101,7 +102,7 @@ pub fn plan_scale_factor_deltas_by_offsets(
     }
 
     let mut previous = initial_scale_factor;
-    let mut deltas = Vec::new();
+    let mut deltas = Vec::with_capacity(scale_factors.len());
     for section in sections {
         if section.end <= section.start {
             return Err(Error::InvalidInput("invalid AAC section range"));
@@ -141,7 +142,7 @@ pub fn plan_spectral_scale_factor_deltas_by_offsets(
     }
 
     let mut previous = initial_scale_factor;
-    let mut deltas = Vec::new();
+    let mut deltas = Vec::with_capacity(scale_factors.len());
     for section in sections {
         if section.end <= section.start {
             return Err(Error::InvalidInput("invalid AAC section range"));
@@ -180,7 +181,7 @@ pub(crate) fn plan_magnitude_scale_factor_deltas_by_offsets(
     }
 
     let mut previous = initial_scale_factor;
-    let mut deltas = Vec::new();
+    let mut deltas = Vec::with_capacity(scale_factors.len());
     for section in sections {
         if section.end <= section.start {
             return Err(Error::InvalidInput("invalid AAC section range"));
@@ -225,14 +226,7 @@ pub fn select_scale_factors_for_quantized_bands(
     quantized
         .chunks(band_width)
         .map(|band| {
-            let max_abs = band
-                .iter()
-                .map(|coeff| coeff.checked_abs())
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))?
-                .into_iter()
-                .max()
-                .unwrap_or(0);
+            let max_abs = max_checked_abs_i32(band)?;
             let magnitude_class = if max_abs == 0 {
                 0
             } else {
@@ -271,14 +265,7 @@ pub fn select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias(
     offsets
         .windows(2)
         .map(|band| {
-            let max_abs = quantized[band[0]..band[1]]
-                .iter()
-                .map(|coeff| coeff.checked_abs())
-                .collect::<Option<Vec<_>>>()
-                .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))?
-                .into_iter()
-                .max()
-                .unwrap_or(0);
+            let max_abs = max_checked_abs_i32(&quantized[band[0]..band[1]])?;
             let magnitude_class = if max_abs == 0 {
                 0
             } else {
@@ -292,4 +279,15 @@ pub fn select_scale_factors_for_quantized_bands_by_offsets_with_magnitude_bias(
                 .ok_or(Error::InvalidInput("AAC scale factor overflows"))
         })
         .collect()
+}
+
+fn max_checked_abs_i32(values: &[i32]) -> Result<i32, Error> {
+    let mut max_abs = 0;
+    for &value in values {
+        let abs = value
+            .checked_abs()
+            .ok_or(Error::InvalidInput("AAC spectral coefficient overflows"))?;
+        max_abs = max_abs.max(abs);
+    }
+    Ok(max_abs)
 }

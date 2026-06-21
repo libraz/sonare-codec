@@ -6,5 +6,7 @@ This product is licensed under the Apache License, Version 2.0.
 
 This product uses opus-decoder for pure Rust Opus decoding.
 
-Native Opus encoding uses the opus Rust bindings and libopus. libopus is a
-Xiph.Org codec library licensed under BSD-3-Clause terms.
+Opus encoding is first-party, pure-Rust code (no C dependency). Portions are
+ported from the Xiph.Org BSD-3-Clause C source libopus and are therefore a
+derivative work of that project. The upstream copyright notice and BSD-3-Clause
+license text are reproduced in LICENSE-THIRDPARTY.

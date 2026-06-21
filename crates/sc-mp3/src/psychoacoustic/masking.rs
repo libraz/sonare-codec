@@ -54,7 +54,6 @@ pub fn spectral_flatness_tonality(energy: &[f64]) -> f64 {
     if energy.is_empty() {
         return 0.0;
     }
-    let n = energy.len() as f64;
     let mut log_sum = 0.0_f64;
     let mut arith_sum = 0.0_f64;
     for &e in energy {
@@ -62,10 +61,7 @@ pub fn spectral_flatness_tonality(energy: &[f64]) -> f64 {
         log_sum += clamped.ln();
         arith_sum += clamped;
     }
-    let geometric_mean = (log_sum / n).exp();
-    let arithmetic_mean = arith_sum / n;
-    let sfm_db = 10.0 * (geometric_mean / arithmetic_mean).log10();
-    (sfm_db / -60.0).clamp(0.0, 1.0)
+    spectral_flatness_tonality_from_sums(log_sum, arith_sum, energy.len())
 }
 
 /// Computes the per-bin masking threshold energy from a power spectrum.
@@ -125,13 +121,42 @@ pub fn windowed_tonality(energy: &[f64], window: usize) -> Result<Vec<f64>, Erro
     }
     let half = window / 2;
     let n = energy.len();
+    let mut log_prefix = Vec::with_capacity(n + 1);
+    let mut sum_prefix = Vec::with_capacity(n + 1);
+    log_prefix.push(0.0_f64);
+    sum_prefix.push(0.0_f64);
+    let mut log_sum = 0.0_f64;
+    let mut arith_sum = 0.0_f64;
+    for &e in energy {
+        let clamped = e.max(TONALITY_ENERGY_FLOOR);
+        log_sum += clamped.ln();
+        arith_sum += clamped;
+        log_prefix.push(log_sum);
+        sum_prefix.push(arith_sum);
+    }
+
     let mut out = Vec::with_capacity(n);
     for center in 0..n {
         let lo = center.saturating_sub(half);
         let hi = (center + half + 1).min(n);
-        out.push(spectral_flatness_tonality(&energy[lo..hi]));
+        out.push(spectral_flatness_tonality_from_sums(
+            log_prefix[hi] - log_prefix[lo],
+            sum_prefix[hi] - sum_prefix[lo],
+            hi - lo,
+        ));
     }
     Ok(out)
+}
+
+fn spectral_flatness_tonality_from_sums(log_sum: f64, arith_sum: f64, len: usize) -> f64 {
+    if len == 0 {
+        return 0.0;
+    }
+    let n = len as f64;
+    let geometric_mean = (log_sum / n).exp();
+    let arithmetic_mean = arith_sum / n;
+    let sfm_db = 10.0 * (geometric_mean / arithmetic_mean).log10();
+    (sfm_db / -60.0).clamp(0.0, 1.0)
 }
 
 /// Per-bin variant of [`spread_masking_threshold`]: every masker contributes with
@@ -153,22 +178,21 @@ pub fn spread_masking_threshold_per_bin(
             "psychoacoustic energy, bark, and tonality arrays must match in length",
         ));
     }
-    let smr_gain: Vec<f64> = tonality
+    let weighted_masker_energy: Vec<f64> = energy
         .iter()
-        .map(|&t| {
+        .zip(tonality.iter())
+        .map(|(&masker_energy, &t)| {
             let t = t.clamp(0.0, 1.0);
             let smr_db = t * TONE_MASKING_NOISE_DB + (1.0 - t) * NOISE_MASKING_TONE_DB;
-            10.0_f64.powf(-smr_db / 10.0)
+            masker_energy * 10.0_f64.powf(-smr_db / 10.0)
         })
         .collect();
 
     let mut threshold = Vec::with_capacity(energy.len());
     for &maskee in bark {
         let mut spread = 0.0_f64;
-        for ((&masker, &masker_energy), &gain) in
-            bark.iter().zip(energy.iter()).zip(smr_gain.iter())
-        {
-            spread += masker_energy * gain * 10.0_f64.powf(spreading_db(masker, maskee) / 10.0);
+        for (&masker, &weighted_energy) in bark.iter().zip(weighted_masker_energy.iter()) {
+            spread += weighted_energy * 10.0_f64.powf(spreading_db(masker, maskee) / 10.0);
         }
         threshold.push(spread);
     }

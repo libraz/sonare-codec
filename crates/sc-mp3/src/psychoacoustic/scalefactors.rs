@@ -122,6 +122,36 @@ pub(crate) fn band_scalefactor_cap(band: usize) -> u8 {
 /// capped. If amplification would push a band past the quantizer's magnitude
 /// bound, the last allocation that quantized cleanly is returned. The result
 /// feeds [`crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors`].
+/// Largest quantized magnitude the Layer III big-value/count1 partition can
+/// carry, so the `pow(4/3)` reconstruction table covers every valid index.
+const POW_4_3_TABLE_LEN: usize = 8192;
+
+/// Reconstruction power `x^(4/3)` for integer quantizer outputs, precomputed.
+///
+/// The noise-control loop evaluates `is^(4/3)` for every spectral line on every
+/// pass; the integer domain `[0, 8191]` makes a lookup table exact and removes
+/// the per-line `powf` from the inner loop.
+fn pow_4_3_table() -> &'static [f64; POW_4_3_TABLE_LEN] {
+    static TABLE: std::sync::OnceLock<Box<[f64; POW_4_3_TABLE_LEN]>> = std::sync::OnceLock::new();
+    TABLE.get_or_init(|| {
+        let mut table = Box::new([0.0_f64; POW_4_3_TABLE_LEN]);
+        for (value, slot) in table.iter_mut().enumerate() {
+            *slot = (value as f64).powf(4.0 / 3.0);
+        }
+        table
+    })
+}
+
+/// `magnitude^(4/3)`, table-backed for in-range integer magnitudes and falling
+/// back to a direct `powf` (bit-identical) for any out-of-range index.
+fn pow_4_3(magnitude: u32) -> f64 {
+    let index = magnitude as usize;
+    match pow_4_3_table().get(index) {
+        Some(&value) => value,
+        None => (index as f64).powf(4.0 / 3.0),
+    }
+}
+
 pub fn allocate_long_block_scalefactors(
     mdct_spectrum: &[f32],
     allowed_noise: &[f64; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
@@ -138,6 +168,13 @@ pub fn allocate_long_block_scalefactors(
 
     let mut scale_factors = [0_u8; crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT];
     let mut last_good = scale_factors;
+    // `|xr|^0.75` is invariant across passes; compute it once for the loop. A
+    // non-finite line bails to the (all-zero) last-good fit, matching the
+    // per-pass quantizer's error handling.
+    let magnitudes = match crate::layer3_long_spectrum_quantizer_magnitudes(mdct_spectrum) {
+        Ok(magnitudes) => magnitudes,
+        Err(_) => return Ok(last_good),
+    };
     // Each pass raises at least one band by one; bound iterations by the total
     // scale-factor headroom so the loop always terminates.
     let max_iterations: usize = (0..crate::MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT)
@@ -145,17 +182,19 @@ pub fn allocate_long_block_scalefactors(
         .sum();
 
     for _ in 0..=max_iterations {
-        let quantized = match crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors(
-            mdct_spectrum,
-            step,
-            &scale_factors,
-            scalefac_scale,
-            sample_rate,
-        ) {
-            Ok(quantized) => quantized,
-            // Amplification clipped the quantizer; fall back to the last clean fit.
-            Err(_) => return Ok(last_good),
-        };
+        let quantized =
+            match crate::quantize_mpeg1_layer3_long_spectrum_with_scalefactors_and_magnitudes(
+                mdct_spectrum,
+                &magnitudes,
+                step,
+                &scale_factors,
+                scalefac_scale,
+                sample_rate,
+            ) {
+                Ok(quantized) => quantized,
+                // Amplification clipped the quantizer; fall back to the last clean fit.
+                Err(_) => return Ok(last_good),
+            };
         last_good = scale_factors;
 
         let mut raised = false;
@@ -170,8 +209,7 @@ pub fn allocate_long_block_scalefactors(
             for line in start..end.min(mdct_spectrum.len()) {
                 let is = quantized[line];
                 let sign = if is < 0 { -1.0 } else { 1.0 };
-                let reconstructed =
-                    (is.unsigned_abs() as f64).powf(4.0 / 3.0) * gain * attenuation * sign;
+                let reconstructed = pow_4_3(is.unsigned_abs()) * gain * attenuation * sign;
                 let error = f64::from(mdct_spectrum[line]) - reconstructed;
                 noise += error * error;
             }

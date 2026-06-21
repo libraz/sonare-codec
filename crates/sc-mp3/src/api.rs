@@ -61,6 +61,17 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     // path. MPEG-2.5 rates (8/11.025/12 kHz) are outside ISO 11172-3 / 13818-3
     // and are rejected by the header builder.
     if matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        // Correlated MPEG-2 LSF stereo is coded as MS joint stereo, mirroring the
+        // MPEG-1 path: the near-silent side channel codes cheaply and decorrelated
+        // stereo stays independent so it never regresses.
+        if should_encode_stereo_as_mid_side(pcm)? {
+            return encode_mpeg2_layer3_pcm_frames_with_auto_step_mid_side_and_table_provider(
+                pcm,
+                MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                mpeg1_layer3_standard_table_provider(),
+            );
+        }
         return encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider(
             pcm,
             MPEG2_LAYER3_DEFAULT_BITRATE_KBPS,
@@ -85,14 +96,28 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
             mpeg1_layer3_standard_table_provider(),
         )
     } else if pcm.samples.iter().any(|sample| *sample != 0.0) {
-        encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
-            pcm,
-            mpeg1_layer3_production_pcm_step_candidates(pcm.channels)?,
-            128,
-            false,
-            0,
-            mpeg1_layer3_standard_table_provider(),
-        )
+        // Correlated stereo is coded as MS joint stereo so the near-silent side
+        // channel codes cheaply; decorrelated stereo stays independent and never
+        // regresses. The decision is made once for the whole stream.
+        if should_encode_stereo_as_mid_side(pcm)? {
+            encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider(
+                pcm,
+                mpeg1_layer3_production_pcm_step_candidates(pcm.channels)?,
+                128,
+                false,
+                0,
+                mpeg1_layer3_standard_table_provider(),
+            )
+        } else {
+            encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+                pcm,
+                mpeg1_layer3_production_pcm_step_candidates(pcm.channels)?,
+                128,
+                false,
+                0,
+                mpeg1_layer3_standard_table_provider(),
+            )
+        }
     } else {
         encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
             pcm,
