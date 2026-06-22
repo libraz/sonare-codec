@@ -39,6 +39,8 @@ mod perceptual_pack;
 pub use perceptual_pack::*;
 mod frame_assembly;
 pub use frame_assembly::*;
+mod short_encode;
+pub use short_encode::*;
 mod bitstream;
 pub use bitstream::*;
 mod tests;

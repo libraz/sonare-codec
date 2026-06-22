@@ -669,6 +669,55 @@ pub fn mdct_short_block(samples: &[f32; 36]) -> Result<Vec<f32>, Error> {
     Ok(lines)
 }
 
+/// Layer III block_type 1 (start) analysis window over the 36-sample hybrid
+/// buffer (ISO/IEC 11172-3 §2.4.3.4.2).
+///
+/// The left half is the long sine window, so a long block can precede this one
+/// with the standard 50% overlap-add; the right half tapers through a short
+/// half-window into the zero tail that meets the following short block.
+pub fn layer3_start_window() -> [f32; 36] {
+    use std::f32::consts::PI;
+    let mut window = [0.0_f32; 36];
+    for (i, slot) in window.iter_mut().enumerate() {
+        *slot = match i {
+            0..=17 => (PI / 36.0 * (i as f32 + 0.5)).sin(),
+            18..=23 => 1.0,
+            24..=29 => (PI / 12.0 * ((i - 18) as f32 + 0.5)).sin(),
+            _ => 0.0,
+        };
+    }
+    window
+}
+
+/// Layer III block_type 3 (stop) analysis window over the 36-sample hybrid
+/// buffer (ISO/IEC 11172-3 §2.4.3.4.2).
+///
+/// The time reverse of the start window: a zero head and short half-window rise
+/// meet the preceding short block, and the right half is the long sine window so
+/// a long block can follow with the standard 50% overlap-add.
+pub fn layer3_stop_window() -> [f32; 36] {
+    let start = layer3_start_window();
+    let mut window = [0.0_f32; 36];
+    for (i, slot) in window.iter_mut().enumerate() {
+        *slot = start[35 - i];
+    }
+    window
+}
+
+/// Runs the Layer III block_type 1 (start) hybrid MDCT for one subband.
+///
+/// The 36-sample buffer is windowed by [`layer3_start_window`] then transformed
+/// by the long 36→18 MDCT, producing 18 lines that overlap-add with an adjacent
+/// long block on the left edge (Princen-Bradley TDAC).
+pub fn mdct_start_block(samples: &[f32; 36]) -> Result<Vec<f32>, Error> {
+    mdct(&apply_window(samples, &layer3_start_window())?)
+}
+
+/// Runs the Layer III block_type 3 (stop) hybrid MDCT for one subband.
+pub fn mdct_stop_block(samples: &[f32; 36]) -> Result<Vec<f32>, Error> {
+    mdct(&apply_window(samples, &layer3_stop_window())?)
+}
+
 /// Number of equal sub-windows the transient detector splits a granule into.
 /// Twelve divides the 576-sample granule evenly (48 samples each).
 const LAYER3_TRANSIENT_CHUNKS: usize = 12;
@@ -1007,6 +1056,152 @@ fn layer3_long_block_spectrum_uncached(
     }
     apply_alias_reduction(&mut spectrum);
     Ok(spectrum)
+}
+
+/// Computes the 576 short-block MDCT spectral lines for one granule, in
+/// bitstream reorder order.
+///
+/// Each subband forms the same 36-sample hybrid buffer as the long block
+/// (previous granule's 18 subband samples followed by the current granule's 18)
+/// but transforms it with the three short windows ([`mdct_short_block`]) instead
+/// of one long MDCT. Short blocks carry no alias reduction. The resulting
+/// subband-major, window-major lines are permuted into scale-factor-band /
+/// window order with [`layer3_short_reorder_map`] so the quantizer and Huffman
+/// packer see the bitstream layout the decoder expects.
+pub fn layer3_short_block_spectrum(
+    pcm: &AudioBuffer,
+    channel: usize,
+    granule_start: usize,
+) -> Result<Vec<f32>, Error> {
+    let current = analysis_subband_hops(pcm, channel, granule_start)?;
+    let previous = match granule_start.checked_sub(576) {
+        Some(prev_start) => Some(analysis_subband_hops(pcm, channel, prev_start)?),
+        None => None,
+    };
+
+    let mut raw = Vec::with_capacity(LAYER3_GRANULE_LINES);
+    let mut block = [0.0_f32; 36];
+    for subband in 0_usize..filterbank::SUBBANDS {
+        let current_samples = long_block_granule_samples(&current, subband);
+        let previous_samples = previous
+            .as_ref()
+            .map(|hops| long_block_granule_samples(hops, subband))
+            .unwrap_or([0.0_f32; LONG_BLOCK_GRANULE_SAMPLES]);
+
+        block[..LONG_BLOCK_GRANULE_SAMPLES].copy_from_slice(&previous_samples);
+        block[LONG_BLOCK_GRANULE_SAMPLES..].copy_from_slice(&current_samples);
+        raw.extend(mdct_short_block(&block)?);
+    }
+
+    let map = layer3_short_reorder_map(pcm.sample_rate)?;
+    let mut reordered = vec![0.0_f32; LAYER3_GRANULE_LINES];
+    for (position, &source) in map.iter().enumerate() {
+        reordered[position] = match raw.get(source) {
+            Some(&value) => value,
+            None => return Err(Error::InvalidInput("MP3 short reorder source out of range")),
+        };
+    }
+    Ok(reordered)
+}
+
+/// Quantizes one Layer III short granule from PCM with calibrated gain and flat
+/// scale factors (the short-block counterpart of the calibrated long path).
+///
+/// Returns the reordered quantized spectrum; the caller folds the quantizer
+/// `step` into `global_gain` via [`calibrated_short_global_gain_for_granule`].
+pub fn quantize_pcm_short_block(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+) -> Result<Vec<i32>, Error> {
+    let spectrum = layer3_short_block_spectrum(pcm, channel, start_frame)?;
+    let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
+    let zero_scale_factors = [[0_u8; LAYER3_SHORT_WINDOWS]; LAYER3_SHORT_SCALE_FACTOR_BANDS];
+    let zero_subblock_gain = [0_u8; LAYER3_SHORT_WINDOWS];
+    quantize_mpeg1_layer3_short_spectrum_with_scalefactors(
+        &inverted,
+        step,
+        &zero_scale_factors,
+        &zero_subblock_gain,
+        false,
+        pcm.sample_rate,
+    )
+}
+
+/// Computes the 576 spectral lines for one Layer III transition granule
+/// (block_type 1 start, or block_type 3 stop), in long frequency order.
+///
+/// Transition blocks are long-structured: one 36→18 MDCT per subband with alias
+/// reduction, like a normal long block, but windowed by the start or stop
+/// transition window so the overlap-add stays continuous across a long↔short
+/// boundary.
+pub fn layer3_transition_block_spectrum(
+    pcm: &AudioBuffer,
+    channel: usize,
+    granule_start: usize,
+    block_type: Layer3BlockType,
+) -> Result<Vec<f32>, Error> {
+    let mdct_fn: fn(&[f32; 36]) -> Result<Vec<f32>, Error> = match block_type {
+        Layer3BlockType::Start => mdct_start_block,
+        Layer3BlockType::Stop => mdct_stop_block,
+        _ => {
+            return Err(Error::InvalidInput(
+                "MP3 transition block spectrum requires a start or stop block",
+            ))
+        }
+    };
+
+    let current = analysis_subband_hops(pcm, channel, granule_start)?;
+    let previous = match granule_start.checked_sub(576) {
+        Some(prev_start) => Some(analysis_subband_hops(pcm, channel, prev_start)?),
+        None => None,
+    };
+
+    let mut spectrum = Vec::with_capacity(LAYER3_GRANULE_LINES);
+    let mut block = [0.0_f32; 36];
+    for subband in 0_usize..filterbank::SUBBANDS {
+        let current_samples = long_block_granule_samples(&current, subband);
+        let previous_samples = previous
+            .as_ref()
+            .map(|hops| long_block_granule_samples(hops, subband))
+            .unwrap_or([0.0_f32; LONG_BLOCK_GRANULE_SAMPLES]);
+
+        block[..LONG_BLOCK_GRANULE_SAMPLES].copy_from_slice(&previous_samples);
+        block[LONG_BLOCK_GRANULE_SAMPLES..].copy_from_slice(&current_samples);
+        spectrum.extend(mdct_fn(&block)?);
+    }
+    apply_alias_reduction(&mut spectrum);
+    Ok(spectrum)
+}
+
+/// Quantizes one Layer III transition granule from PCM with calibrated gain and
+/// flat scale factors (the long-structured counterpart for start/stop blocks).
+pub fn quantize_pcm_transition_block(
+    pcm: &AudioBuffer,
+    channel: usize,
+    start_frame: usize,
+    step: f32,
+    block_type: Layer3BlockType,
+) -> Result<Vec<i32>, Error> {
+    let spectrum = layer3_transition_block_spectrum(pcm, channel, start_frame, block_type)?;
+    let inverted: Vec<f32> = spectrum.into_iter().map(|line| -line).collect();
+    quantize_spectrum(&inverted, step, 8191)
+}
+
+/// Picks the `global_gain` for a packed short granule.
+///
+/// Mirrors [`calibrated_global_gain_for_granule`] but corrects for the short
+/// hybrid IMDCT: each 12-point inverse reconstructs `N/2 = 3` times the encoded
+/// magnitude (versus 9 for the 36-point long IMDCT), so the gain is lowered by
+/// `4·log2(3)` to make the full encode/decode chain unity.
+pub(crate) fn calibrated_short_global_gain_for_granule(quantized: &[i32], step: f32) -> u8 {
+    if quantized.iter().all(|&line| line == 0) || !step.is_finite() || step <= 0.0 {
+        return 210;
+    }
+    let imdct_gain_offset = 4.0 * 3.0_f32.log2();
+    let raw = (210.0 + (16.0 / 3.0) * step.log2() - imdct_gain_offset).round();
+    raw.clamp(0.0, 255.0) as u8
 }
 
 /// Extracts one PCM channel and quantizes one Layer III long granule.

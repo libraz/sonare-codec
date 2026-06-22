@@ -7,6 +7,91 @@ use super::*;
 /// same line so the two transmitted `table_select` entries stay in sync.
 pub const LAYER3_SHORT_REGION1_START_LINE: usize = 36;
 
+/// Implicit `region0_count` for a window-switched non-short block (block_type 1
+/// start / 3 stop). The decoder fixes `region0_count = 7` and
+/// `region1_count = 20 − 7 = 13` for these blocks because the fields are not
+/// transmitted (ISO/IEC 11172-3 §2.4.1.7), placing region1 over the long
+/// scale-factor bands and leaving region2 empty.
+pub const LAYER3_TRANSITION_REGION0_COUNT: u8 = 7;
+/// Implicit `region1_count` for a window-switched non-short block.
+pub const LAYER3_TRANSITION_REGION1_COUNT: u8 = 13;
+
+/// Builds one MPEG-1 Layer III transition-block (block_type 1 start / 3 stop)
+/// main-data payload from a long-ordered quantized spectrum.
+///
+/// Transition blocks share the long-block scale-factor partition and frequency
+/// order; only the big-value region boundaries are fixed
+/// ([`LAYER3_TRANSITION_REGION0_COUNT`]/[`LAYER3_TRANSITION_REGION1_COUNT`])
+/// because `window_switching` suppresses the transmitted region counts, and just
+/// two `table_select` entries are carried (region2 stays empty). The granule's
+/// `window_switching` side info is filled with the supplied `block_type` and a
+/// zero `subblock_gain`; `global_gain` and `scalefac_scale` remain the caller's
+/// responsibility.
+pub fn pack_mpeg1_layer3_transition_quantized_spectrum_with_table_provider(
+    granule: &mut Layer3GranuleChannelInfo,
+    scale_factors: &[u8; MPEG1_LAYER3_LONG_SCALE_FACTOR_COUNT],
+    block_type: Layer3BlockType,
+    quantized: &[i32],
+    sample_rate: u32,
+    provider: Layer3EntropyTableProvider<'_>,
+) -> Result<PackedBits, Error> {
+    let block_type_bits = match block_type {
+        Layer3BlockType::Start | Layer3BlockType::Stop => block_type.block_type_bits(),
+        _ => {
+            return Err(Error::InvalidInput(
+                "MP3 transition packer requires a start or stop block",
+            ))
+        }
+    };
+
+    let scale_factor_bits =
+        pack_mpeg1_layer3_long_scale_factors_for_granule(granule, scale_factors)?;
+
+    let regions = plan_spectral_regions(quantized)?;
+    apply_spectral_regions_to_granule(granule, regions)?;
+
+    let big_value_pairs = big_value_pairs(quantized, regions)?;
+    let (region0_pairs, region1_pairs) = long_block_region_pair_split(
+        LAYER3_TRANSITION_REGION0_COUNT,
+        LAYER3_TRANSITION_REGION1_COUNT,
+        big_value_pairs.len(),
+        sample_rate,
+    );
+    let big_value_selection = select_big_value_region_tables_by_bit_cost(
+        &big_value_pairs,
+        region0_pairs,
+        region1_pairs,
+        provider,
+    )?;
+
+    let count1_quads = count1_quads(quantized, regions)?;
+    let count1_selection = select_count1_table_by_bit_cost(&count1_quads, provider)?;
+    apply_count1_table_to_granule(granule, count1_selection);
+
+    let big_values = pack_big_value_pairs_with_region_tables_and_provider(
+        &big_value_pairs,
+        big_value_selection,
+        provider,
+    )?;
+    let count1 = pack_count1_quads_with_table_selection(
+        &count1_quads,
+        provider.count1_table(count1_selection)?,
+        count1_selection,
+    )?;
+
+    granule.window_switching = Some(Layer3WindowSwitching {
+        block_type: block_type_bits,
+        mixed_block_flag: false,
+        table_select: [
+            big_value_selection.regions[0].table_select,
+            big_value_selection.regions[1].table_select,
+        ],
+        subblock_gain: [0_u8; LAYER3_SHORT_WINDOWS],
+    });
+
+    pack_main_data_parts_for_granule(granule, scale_factor_bits, big_values, count1)
+}
+
 /// Selects MPEG-1 Layer III short-block scale-factor bit widths.
 ///
 /// Short blocks reuse the long-block `scalefac_compress` table but apply `slen1`

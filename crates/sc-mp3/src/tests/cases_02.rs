@@ -73,6 +73,85 @@
         assert_eq!(mdct_short_block(&[0.0; 36]).unwrap(), vec![0.0; 18]);
     }
 
+    /// Overlap-adds two 50%-overlapped 36-sample blocks (A over `signal[0..36]`,
+    /// B over `signal[18..54]`) through MDCT/IMDCT with their analysis windows,
+    /// returning the 54-sample reconstruction. The shared region [18, 36) is
+    /// doubly covered.
+    fn overlap_reconstruct(
+        signal: &[f32],
+        window_a: &[f32; 36],
+        window_b: &[f32; 36],
+        mdct_a: fn(&[f32; 36]) -> Result<Vec<f32>, crate::Error>,
+        mdct_b: fn(&[f32; 36]) -> Result<Vec<f32>, crate::Error>,
+    ) -> [f32; 54] {
+        let mut a_in = [0.0_f32; 36];
+        a_in.copy_from_slice(&signal[0..36]);
+        let mut b_in = [0.0_f32; 36];
+        b_in.copy_from_slice(&signal[18..54]);
+
+        let a_time = ctrl_imdct_36(&mdct_a(&a_in).unwrap());
+        let b_time = ctrl_imdct_36(&mdct_b(&b_in).unwrap());
+
+        let mut recon = [0.0_f32; 54];
+        for n in 0..36 {
+            recon[n] += a_time[n] * window_a[n];
+            recon[18 + n] += b_time[n] * window_b[n];
+        }
+        recon
+    }
+
+    #[test]
+    fn transition_windows_reconstruct_long_block_edges() {
+        let long_w = ctrl_sine_window_36();
+        let start_w = layer3_start_window();
+        let stop_w = layer3_stop_window();
+
+        // The start window's left half and the stop window's right half are the
+        // long sine window, so the long-edge overlap behaves like long-to-long.
+        for i in 0..18 {
+            assert!(
+                (start_w[i] - long_w[i]).abs() < 1.0e-6,
+                "start left half differs from long window at {i}"
+            );
+            assert!(
+                (stop_w[18 + i] - long_w[18 + i]).abs() < 1.0e-6,
+                "stop right half differs from long window at {i}"
+            );
+        }
+        assert_eq!(&start_w[18..24], &[1.0_f32; 6]);
+        assert_eq!(&stop_w[12..18], &[1.0_f32; 6]);
+        assert_eq!(&start_w[30..36], &[0.0_f32; 6]);
+        assert_eq!(&stop_w[0..6], &[0.0_f32; 6]);
+
+        let signal: Vec<f32> = (0..54)
+            .map(|i| 0.5 * (0.3 * i as f32 + 0.1).sin() - 0.2 * (0.13 * i as f32).cos())
+            .collect();
+
+        // long -> start reconstructs the shared region [18, 36).
+        let recon_ls =
+            overlap_reconstruct(&signal, &long_w, &start_w, mdct_long_block, mdct_start_block);
+        for i in 18..36 {
+            assert!(
+                (recon_ls[i] - signal[i]).abs() < 1.0e-4,
+                "long->start reconstruction off at {i}: {} vs {}",
+                recon_ls[i],
+                signal[i]
+            );
+        }
+
+        // stop -> long reconstructs the shared region [18, 36).
+        let recon_sl =
+            overlap_reconstruct(&signal, &stop_w, &long_w, mdct_stop_block, mdct_long_block);
+        for i in 18..36 {
+            assert!(
+                (recon_sl[i] - signal[i]).abs() < 1.0e-4,
+                "stop->long reconstruction off at {i}: {} vs {}",
+                recon_sl[i],
+                signal[i]
+            );
+        }
+    }
+
     #[test]
     fn transient_detector_fires_on_attacks_not_steady_signals() {
         let sample_rate = 44_100.0_f32;

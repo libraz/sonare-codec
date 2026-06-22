@@ -35,6 +35,7 @@
         layer3_short_reorder_map, layer3_short_scalefactor_band_index,
         layer3_short_scalefactor_band_range,
         build_layer3_block_schedule, layer3_granule_is_transient, layer3_main_data_capacity_bytes,
+        layer3_start_window, layer3_stop_window, mdct_start_block, mdct_stop_block,
         mdct_long_block, mdct_short_block, mpeg1_layer3_global_gain_for_step, Layer3BlockType,
         mpeg1_layer3_long_scalefactor_band_index, mpeg1_layer3_long_scalefactor_band_range,
         mpeg1_layer3_quality_guard_candidate_is_better,

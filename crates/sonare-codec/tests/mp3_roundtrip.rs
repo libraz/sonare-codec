@@ -1384,3 +1384,228 @@ fn mp3_roundtrip_preserves_shape_and_level() {
         "decoded level out of calibrated range: ratio={level_ratio:.3}"
     );
 }
+
+#[test]
+fn mp3_all_short_blocks_roundtrip_through_symphonia() {
+    // Drives the experimental block-switching path with every granule coded as a
+    // short block (block_type 2). Symphonia decoding the stream validates the
+    // short MDCT front end, scale-factor-band reorder, short quantizer, and short
+    // Huffman packing end to end. Production encode() stays on the long path.
+    let sample_rate = 44_100;
+    let pcm = sweep_pcm(22_050, sample_rate, 300.0, 6_000.0, 0.5);
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+
+    let mp3 =
+        sc_mp3::encode_mpeg1_layer3_pcm_frames_all_short_and_table_provider(&pcm, 1.0, provider)
+            .expect("all-short encode");
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+
+    assert_eq!(decoded.channels, 1, "expected mono reconstruction");
+    assert!(
+        decoded.samples.len() >= 4_096,
+        "decoded too short: {}",
+        decoded.samples.len()
+    );
+
+    let seg = 8_192;
+    let ref_start = 8_000;
+    let reference = &pcm.samples[ref_start..ref_start + seg];
+    let mut best = (0_usize, f64::NEG_INFINITY);
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.samples.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded.samples[start..start + seg]);
+        if c > best.1 {
+            best = (d, c);
+        }
+    }
+    let (delay, corr) = best;
+    let aligned = &decoded.samples[ref_start + delay..ref_start + delay + seg];
+    let level_ratio = rms(aligned) / rms(reference).max(1.0e-12);
+
+    eprintln!(
+        "mp3 all-short: delay={delay} corr={corr:.4} input_rms={:.4} decoded_rms={:.4} ratio={level_ratio:.3}",
+        rms(reference),
+        rms(aligned),
+    );
+
+    // The calibrated short path measures corr ~0.74; guard well below that so a
+    // reorder, region-split, or gain regression in the short chain trips it.
+    assert!(
+        corr > 0.6,
+        "all-short waveform correlation too low: {corr:.4}"
+    );
+    assert!(
+        (0.5..2.0).contains(&level_ratio),
+        "all-short decoded level out of calibrated range: ratio={level_ratio:.3}"
+    );
+}
+
+#[test]
+fn mp3_block_switching_roundtrip_through_symphonia() {
+    // A quiet non-periodic sweep with periodic loud bursts: the bursts trip the
+    // transient detector so the schedule inserts short runs bracketed by
+    // start/stop transition blocks. Symphonia decoding the mixed long/start/
+    // short/stop stream validates the transition windows and start/stop region
+    // handling end to end. Production encode() stays on the long path.
+    let sample_rate = 44_100;
+    let frames = 22_050;
+    let mut samples = sweep_pcm(frames, sample_rate, 300.0, 6_000.0, 0.18).samples;
+    for burst in (4_096..frames).step_by(4_096) {
+        for k in 0..96 {
+            if burst + k < samples.len() {
+                let taper = 1.0 - k as f32 / 96.0;
+                let sign = if k % 2 == 0 { 1.0 } else { -1.0 };
+                samples[burst + k] += 0.85 * taper * sign;
+            }
+        }
+    }
+    let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+
+    // The signal must actually exercise short blocks for this test to mean
+    // anything; rebuild the schedule from the public primitives and confirm.
+    let granules = pcm.samples.len() / 576;
+    let transient: Vec<bool> = (0..granules)
+        .map(|g| sc_mp3::layer3_granule_is_transient(&pcm.samples[g * 576..g * 576 + 576]))
+        .collect();
+    let schedule = sc_mp3::build_layer3_block_schedule(&transient);
+    assert!(
+        schedule
+            .iter()
+            .any(|b| matches!(b, sc_mp3::Layer3BlockType::Short)),
+        "test signal did not trigger any short blocks"
+    );
+
+    let mp3 = sc_mp3::encode_mpeg1_layer3_pcm_frames_with_block_switching_and_table_provider(
+        &pcm, 1.0, provider,
+    )
+    .expect("block-switching encode");
+    let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
+
+    assert_eq!(decoded.channels, 1, "expected mono reconstruction");
+    assert!(
+        decoded.samples.len() >= 4_096,
+        "decoded too short: {}",
+        decoded.samples.len()
+    );
+
+    let seg = 8_192;
+    let ref_start = 8_000;
+    let reference = &pcm.samples[ref_start..ref_start + seg];
+    let mut best = (0_usize, f64::NEG_INFINITY);
+    for d in 0..2_000 {
+        let start = ref_start + d;
+        if start + seg > decoded.samples.len() {
+            break;
+        }
+        let c = correlation(reference, &decoded.samples[start..start + seg]);
+        if c > best.1 {
+            best = (d, c);
+        }
+    }
+    let (delay, corr) = best;
+    let aligned = &decoded.samples[ref_start + delay..ref_start + delay + seg];
+    let level_ratio = rms(aligned) / rms(reference).max(1.0e-12);
+
+    eprintln!(
+        "mp3 block-switch: delay={delay} corr={corr:.4} input_rms={:.4} decoded_rms={:.4} ratio={level_ratio:.3}",
+        rms(reference),
+        rms(aligned),
+    );
+
+    // A mixed long/short stream with calibrated gain tracks the sweep; the
+    // transition windows and start/stop regions must keep it decodable and
+    // aligned. FFmpeg oracle tests provide the stricter production-quality gate.
+    assert!(
+        corr > 0.6,
+        "block-switching waveform correlation too low: {corr:.4}"
+    );
+    assert!(
+        (0.5..2.0).contains(&level_ratio),
+        "block-switching decoded level out of calibrated range: ratio={level_ratio:.3}"
+    );
+}
+
+/// RMS of the decoded signal in the silent window just before a transient's
+/// onset (the pre-echo region). The onset is the first sample whose magnitude
+/// exceeds a fraction of the peak; the measured window sits 64..640 samples
+/// before it, fully inside the pre-attack silence.
+fn pre_echo_rms(decoded: &[f32]) -> f64 {
+    let peak = decoded.iter().fold(0.0_f32, |a, &b| a.max(b.abs()));
+    let threshold = 0.25 * peak;
+    let onset = decoded
+        .iter()
+        .position(|&x| x.abs() > threshold)
+        .unwrap_or(0);
+    if onset < 640 {
+        return 0.0;
+    }
+    rms(&decoded[onset - 640..onset - 64])
+}
+
+#[test]
+fn mp3_block_switching_reduces_pre_echo_versus_all_long() {
+    // Silence followed by a sharp broadband tone burst. A long block spreads the
+    // attack's quantization noise across its whole window, leaking audible
+    // pre-echo into the preceding silence; a short block confines it. Encoding
+    // the same signal both ways and decoding through Symphonia must show the
+    // block-switched stream with measurably less pre-echo — the reason short
+    // blocks exist.
+    let sample_rate = 44_100;
+    let mut samples = vec![0.0_f32; 16_128];
+    let attack_start = 7_000;
+    for i in attack_start..(attack_start + 4_000).min(samples.len()) {
+        let t = (i - attack_start) as f32 / sample_rate as f32;
+        let tone = (std::f32::consts::TAU * 1_200.0 * t).sin()
+            + 0.6 * (std::f32::consts::TAU * 3_300.0 * t).sin()
+            + 0.4 * (std::f32::consts::TAU * 6_500.0 * t).sin();
+        samples[i] = 0.35 * tone;
+    }
+    let pcm = AudioBuffer::new(sample_rate, 1, samples).unwrap();
+    let provider = sc_mp3::mpeg1_layer3_standard_table_provider();
+
+    // The attack must actually schedule a short block, else there is nothing to
+    // compare.
+    let granules = pcm.samples.len() / 576;
+    let transient: Vec<bool> = (0..granules)
+        .map(|g| sc_mp3::layer3_granule_is_transient(&pcm.samples[g * 576..g * 576 + 576]))
+        .collect();
+    let schedule = sc_mp3::build_layer3_block_schedule(&transient);
+    assert!(
+        schedule
+            .iter()
+            .any(|b| matches!(b, sc_mp3::Layer3BlockType::Short)),
+        "attack did not schedule a short block"
+    );
+
+    let long_mp3 = sc_mp3::encode_mpeg1_layer3_pcm_frames_all_long_calibrated_and_table_provider(
+        &pcm, 1.0, provider,
+    )
+    .expect("all-long encode");
+    let switched_mp3 =
+        sc_mp3::encode_mpeg1_layer3_pcm_frames_with_block_switching_and_table_provider(
+            &pcm, 1.0, provider,
+        )
+        .expect("block-switching encode");
+
+    let long_decoded = sonare_codec::decode(&long_mp3).expect("Symphonia decode long");
+    let switched_decoded = sonare_codec::decode(&switched_mp3).expect("Symphonia decode switched");
+
+    let long_pre = pre_echo_rms(&long_decoded.samples);
+    let switched_pre = pre_echo_rms(&switched_decoded.samples);
+
+    eprintln!(
+        "mp3 pre-echo: all-long={long_pre:.6} switched={switched_pre:.6} ratio={:.3}",
+        switched_pre / long_pre.max(1.0e-12)
+    );
+
+    // Block switching must cut the pre-attack energy well below the all-long
+    // baseline. Measured reduction is several-fold; guard conservatively.
+    assert!(
+        switched_pre < 0.7 * long_pre,
+        "block switching did not reduce pre-echo: all-long={long_pre:.6} switched={switched_pre:.6}"
+    );
+}
