@@ -37,6 +37,7 @@ pub fn encode_mp3(sample_rate: u32, channels: u16, samples: &[f32]) -> Result<Ve
     encode_format(sample_rate, channels, samples, sonare_codec::Format::Mp3)
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_with_bitrate(
     sample_rate: u32,
@@ -58,6 +59,7 @@ pub fn encode_mp3_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_cbr_with_bitrate(
     sample_rate: u32,
@@ -77,6 +79,7 @@ pub fn encode_mp3_cbr_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_perceptual_active_cbr_with_bitrate(
     sample_rate: u32,
@@ -96,6 +99,7 @@ pub fn encode_mp3_perceptual_active_cbr_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_perceptual_reservoir_with_bitrate(
     sample_rate: u32,
@@ -115,6 +119,7 @@ pub fn encode_mp3_perceptual_reservoir_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
     sample_rate: u32,
@@ -138,6 +143,7 @@ pub fn encode_mp3_entropy_targeted_perceptual_reservoir_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
     sample_rate: u32,
@@ -157,6 +163,7 @@ pub fn encode_mp3_quality_guarded_perceptual_reservoir_with_bitrate(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_perceptual_scale_factor_band_bias(
     sample_rate: u32,
@@ -181,6 +188,7 @@ pub fn encode_mp3_perceptual_scale_factor_band_bias(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 pub fn encode_mp3_perceptual_quantized_band_gain(
     sample_rate: u32,
@@ -205,6 +213,7 @@ pub fn encode_mp3_perceptual_quantized_band_gain(
     .map_err(|err| err.to_string())
 }
 
+#[cfg(feature = "mp3")]
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
 pub fn encode_mp3_perceptual_quantized_band_gain_global_gain_bias(

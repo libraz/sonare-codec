@@ -24,7 +24,11 @@ pub use aac_tables::*;
 mod aac_diagnostics;
 #[cfg(feature = "aac")]
 pub use aac_diagnostics::*;
+// MP3 diagnostics map onto the umbrella's `mp3`-gated API, so they only exist
+// when that feature is enabled.
+#[cfg(feature = "mp3")]
 mod mp3_diagnostics;
+#[cfg(feature = "mp3")]
 pub use mp3_diagnostics::*;
 mod util;
 pub use util::*;

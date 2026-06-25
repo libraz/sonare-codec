@@ -13,15 +13,21 @@ publish = false
 crate-type = ["cdylib"]
 
 [dependencies]
-sonare-codec = { workspace = true }
+# A direct path dependency (not `workspace = true`) so `default-features = false`
+# is honored: that is what lets a wasm bundle trim codecs it does not need.
+sonare-codec = { path = "../../crates/sonare-codec", version = "0.1.0", default-features = false }
 wasm-bindgen.workspace = true
 
-# Per-codec gates so a bundle can drop the heavy lossy encoders it does not need.
-# The default keeps every codec (decode/wav/flac/mp3 come from sonare-codec's own
-# defaults); build with `--no-default-features --features <subset>` for a smaller
-# wasm artifact.
+# Per-codec gates so a bundle can drop any codec it does not need. The umbrella
+# dependency is pulled with default-features disabled, so EVERY codec (including
+# decode/wav/flac/mp3) is selected here and can be trimmed: build with
+# `--no-default-features --features <subset>` for a smaller wasm artifact.
 [features]
-default = ["aac", "opus", "vorbis"]
+default = ["decode", "wav", "flac", "mp3", "aac", "opus", "vorbis"]
+decode = ["sonare-codec/decode"]
+wav = ["sonare-codec/wav"]
+flac = ["sonare-codec/flac"]
+mp3 = ["sonare-codec/mp3"]
 aac = ["sonare-codec/aac"]
 opus = ["sonare-codec/opus"]
 vorbis = ["sonare-codec/vorbis"]
