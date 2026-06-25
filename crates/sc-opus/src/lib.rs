@@ -125,6 +125,16 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         samples.extend_from_slice(&scratch[start..written]);
     }
 
+    // End-trim the zero-padding the encoder appended to capture the priming
+    // delay: the valid per-channel length is `end_granule - pre_skip`. This only
+    // ever removes trailing samples (truncate is a no-op when the stream is
+    // shorter), so a stream without usable granule info is left intact.
+    let valid_per_channel = ogg.end_granule.saturating_sub(u64::from(ogg.pre_skip));
+    let valid_samples = usize::try_from(valid_per_channel)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(usize::from(ogg.channels));
+    samples.truncate(valid_samples);
+
     AudioBuffer::new(OPUS_SAMPLE_RATE, u16::from(ogg.channels), samples)
 }
 
@@ -152,7 +162,18 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
     // Lift to Opus's internal 48 kHz. `resample_to_48k` is a no-op at 48 kHz, so
     // the existing path stays byte-identical.
-    let resampled = resample::resample_to_48k(&pcm.samples, pcm.channels, pcm.sample_rate);
+    let mut resampled = resample::resample_to_48k(&pcm.samples, pcm.channels, pcm.sample_rate);
+
+    // The exact valid (per-channel) length at 48 kHz, recorded before padding so
+    // the final granule can signal end-trimming (RFC 7845 §4.4).
+    let valid_samples_per_channel = (resampled.len() / channel_count) as u64;
+    // Append the CELT priming delay (pre-skip) worth of silence so that after the
+    // decoder discards the leading pre-skip samples, every valid input sample is
+    // still produced; without this tail the last `pre_skip` samples are lost.
+    resampled.resize(
+        resampled.len() + usize::from(OPUS_CELT_PRE_SKIP) * channel_count,
+        0.0,
+    );
 
     let bitrate = OPUS_BITRATE_PER_CHANNEL * channel_count as i32;
     let mut encoder = CeltOpusEncoder::new(channel_count, OPUS_CELT_LM, bitrate, true);
@@ -174,7 +195,12 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         packets.push(encoder.encode_packet(&frame));
     }
 
-    Ok(mux_ogg_opus(pcm.channels, pcm.sample_rate, packets))
+    Ok(mux_ogg_opus(
+        pcm.channels,
+        pcm.sample_rate,
+        valid_samples_per_channel,
+        packets,
+    ))
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -187,11 +213,19 @@ struct OpusHead {
 struct OggOpus {
     channels: u8,
     pre_skip: u16,
+    end_granule: u64,
     audio_packets: Vec<Vec<u8>>,
 }
 
 fn parse_ogg_opus(input: &[u8]) -> Result<OggOpus, Error> {
     let pages = parse_ogg_pages(input)?;
+    // The end granule (total per-channel samples, including pre-skip) is the
+    // largest page granule; it drives end-trimming of the final padded frame.
+    let end_granule = pages
+        .iter()
+        .map(|page| page.granule_position)
+        .max()
+        .unwrap_or(0);
     let packets = collect_packets(&pages)?;
     let (head_packet, remaining) = packets
         .split_first()
@@ -206,6 +240,7 @@ fn parse_ogg_opus(input: &[u8]) -> Result<OggOpus, Error> {
     Ok(OggOpus {
         channels: head.channels,
         pre_skip: head.pre_skip,
+        end_granule,
         audio_packets: audio_packets.to_vec(),
     })
 }
@@ -240,6 +275,7 @@ fn parse_opus_head(packet: &[u8]) -> Result<OpusHead, Error> {
 #[derive(Debug)]
 struct OggPage {
     continued: bool,
+    granule_position: u64,
     packets: Vec<Vec<u8>>,
     last_packet_complete: bool,
 }
@@ -260,6 +296,9 @@ fn parse_ogg_pages(mut input: &[u8]) -> Result<Vec<OggPage>, Error> {
         }
 
         let header_type = input[5];
+        let granule_position = u64::from_le_bytes([
+            input[6], input[7], input[8], input[9], input[10], input[11], input[12], input[13],
+        ]);
         let segment_count = usize::from(input[26]);
         let segment_table_end = 27 + segment_count;
         if input.len() < segment_table_end {
@@ -297,6 +336,7 @@ fn parse_ogg_pages(mut input: &[u8]) -> Result<Vec<OggPage>, Error> {
 
         pages.push(OggPage {
             continued: header_type & 0x01 != 0,
+            granule_position,
             packets,
             last_packet_complete,
         });
@@ -355,7 +395,12 @@ fn collect_packets(pages: &[OggPage]) -> Result<Vec<Vec<u8>>, Error> {
     Ok(packets)
 }
 
-fn mux_ogg_opus(channels: u16, input_sample_rate: u32, audio_packets: Vec<Vec<u8>>) -> Vec<u8> {
+fn mux_ogg_opus(
+    channels: u16,
+    input_sample_rate: u32,
+    valid_samples_per_channel: u64,
+    audio_packets: Vec<Vec<u8>>,
+) -> Vec<u8> {
     let mut stream = Vec::new();
     let mut sequence = 0_u32;
     let channels = u8::try_from(channels).expect("validated Opus channel count");
@@ -380,20 +425,25 @@ fn mux_ogg_opus(channels: u16, input_sample_rate: u32, audio_packets: Vec<Vec<u8
     tags.extend_from_slice(&0_u32.to_le_bytes());
     push_ogg_page(&mut stream, &[tags], 0x00, 0, &mut sequence);
 
+    // The final page granule is the valid sample count plus the leading pre-skip,
+    // so a decoder trims the zero-padding added to capture the priming delay.
+    let final_granule = valid_samples_per_channel + u64::from(OPUS_CELT_PRE_SKIP);
     let mut granule_position = 0_u64;
     let packet_count = audio_packets.len();
     for (index, packet) in audio_packets.into_iter().enumerate() {
         granule_position += OPUS_FRAME_SIZE as u64;
-        let header_type = if index + 1 == packet_count {
-            0x04
+        let is_last = index + 1 == packet_count;
+        let page_granule = if is_last {
+            final_granule
         } else {
-            0x00
+            granule_position
         };
+        let header_type = if is_last { 0x04 } else { 0x00 };
         push_ogg_page(
             &mut stream,
             &[packet],
             header_type,
-            granule_position,
+            page_granule,
             &mut sequence,
         );
     }
@@ -600,6 +650,39 @@ mod tests {
             lag <= 8,
             "pre-skip should compensate the codec delay; residual lag {lag}"
         );
+    }
+
+    #[test]
+    fn decode_length_matches_input_at_48k() {
+        // At 48 kHz the codec neither resamples nor changes the frame count, so a
+        // round-trip must return exactly as many samples as the input (end-trim of
+        // the priming-delay padding via the final page granule).
+        for &n in &[1usize, 100, 960, 1025, 19_200, 20_000] {
+            let samples: Vec<f32> = (0..n)
+                .map(|i| 0.3 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+                .collect();
+            let pcm = AudioBuffer::new(OPUS_SAMPLE_RATE, 1, samples).expect("pcm");
+
+            let decoded = decode(&encode(&pcm).expect("encode")).expect("decode");
+
+            assert_eq!(decoded.samples.len(), n, "mono n={n}");
+        }
+
+        // Stereo: interleaved length must match too.
+        let n = 1500usize;
+        let samples: Vec<f32> = (0..n * 2)
+            .map(|i| 0.3 * (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin())
+            .collect();
+        let pcm = AudioBuffer::new(OPUS_SAMPLE_RATE, 2, samples).expect("pcm");
+        let decoded = decode(&encode(&pcm).expect("encode")).expect("decode");
+        assert_eq!(decoded.samples.len(), n * 2);
+    }
+
+    #[test]
+    fn empty_input_decodes_to_empty_output() {
+        let pcm = AudioBuffer::new(OPUS_SAMPLE_RATE, 1, Vec::new()).expect("pcm");
+        let decoded = decode(&encode(&pcm).expect("encode")).expect("decode");
+        assert!(decoded.samples.is_empty());
     }
 
     /// Find the delay (in samples) that maximises the normalised cross-correlation
