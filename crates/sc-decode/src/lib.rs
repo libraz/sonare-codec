@@ -93,6 +93,8 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         .map(|channels| channels.count())
         .unwrap_or(0);
     let mut samples = Vec::new();
+    let mut saw_packet = false;
+    let mut decoded_any = false;
 
     loop {
         let packet = match format.next_packet() {
@@ -104,12 +106,14 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         if packet.track_id != track_id {
             continue;
         }
+        saw_packet = true;
 
         let decoded = match decoder.decode(&packet) {
             Ok(decoded) => decoded,
             Err(SymphoniaError::DecodeError(_)) | Err(SymphoniaError::IoError(_)) => continue,
             Err(err) => return Err(map_runtime_error(err)),
         };
+        decoded_any = true;
 
         let spec = decoded.spec();
         if sample_rate == 0 {
@@ -129,6 +133,13 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
         decoded.copy_to_slice_interleaved(&mut samples[offset..]);
     }
 
+    // If the track held packets but every one failed to decode, report that
+    // precisely rather than letting an empty buffer surface as a generic
+    // `InvalidPcm` from `AudioBuffer::new`.
+    if saw_packet && !decoded_any {
+        return Err(Error::InvalidInput("no decodable audio frames"));
+    }
+
     let channels = u16::try_from(channels).map_err(|_| Error::InvalidInput("too many channels"))?;
     AudioBuffer::new(sample_rate, channels, samples)
 }
@@ -136,11 +147,13 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 fn map_probe_error(err: SymphoniaError) -> Error {
     match err {
         SymphoniaError::IoError(io_err) if io_err.kind() == std::io::ErrorKind::UnexpectedEof => {
-            Error::InvalidInput("media input is truncated")
+            Error::Incomplete
         }
         SymphoniaError::IoError(_) | SymphoniaError::DecodeError(_) => {
             Error::InvalidInput("media probe failed")
         }
+        SymphoniaError::LimitError(_) => Error::InvalidInput("media exceeds decoder limits"),
+        SymphoniaError::SeekError(_) => Error::InvalidInput("media seek failed"),
         SymphoniaError::ResetRequired | SymphoniaError::Unsupported(_) => Error::UnsupportedFormat,
         _ => Error::InvalidInput("media probe failed"),
     }
@@ -149,6 +162,9 @@ fn map_probe_error(err: SymphoniaError) -> Error {
 fn map_decode_setup_error(err: SymphoniaError) -> Error {
     match err {
         SymphoniaError::Unsupported(_) => Error::UnsupportedFormat,
+        SymphoniaError::IoError(io_err) if io_err.kind() == std::io::ErrorKind::UnexpectedEof => {
+            Error::Incomplete
+        }
         SymphoniaError::IoError(_)
         | SymphoniaError::DecodeError(_)
         | SymphoniaError::ResetRequired => Error::InvalidInput("audio decoder setup failed"),
@@ -159,11 +175,13 @@ fn map_decode_setup_error(err: SymphoniaError) -> Error {
 fn map_runtime_error(err: SymphoniaError) -> Error {
     match err {
         SymphoniaError::IoError(io_err) if io_err.kind() == std::io::ErrorKind::UnexpectedEof => {
-            Error::InvalidInput("media input is truncated")
+            Error::Incomplete
         }
         SymphoniaError::IoError(_) | SymphoniaError::DecodeError(_) => {
             Error::InvalidInput("audio decode failed")
         }
+        SymphoniaError::LimitError(_) => Error::InvalidInput("media exceeds decoder limits"),
+        SymphoniaError::SeekError(_) => Error::InvalidInput("media seek failed"),
         SymphoniaError::Unsupported(_) => Error::UnsupportedFormat,
         SymphoniaError::ResetRequired => Error::UnsupportedFeature("audio track reset"),
         _ => Error::InvalidInput("audio decode failed"),
@@ -171,7 +189,7 @@ fn map_runtime_error(err: SymphoniaError) -> Error {
 }
 
 fn is_incomplete_stream_error(err: &Error) -> bool {
-    matches!(err, Error::InvalidInput(reason) if reason.contains("truncated"))
+    matches!(err, Error::Incomplete)
 }
 
 #[cfg(test)]
