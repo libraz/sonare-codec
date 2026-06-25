@@ -14,11 +14,12 @@ pub(crate) fn aac_offsets_max_sfb(offsets: &[usize]) -> PyResult<u8> {
 
 pub(crate) fn constant_aac_scale_factors_by_frame(
     pcm: &sonare_codec_rs::AudioBuffer,
-    global_gain: usize,
+    global_gain: u8,
     band_count: usize,
 ) -> Vec<Vec<i16>> {
     let frame_count = pcm.samples.len().div_ceil(usize::from(pcm.channels) * 1024);
-    let scale_factor = i16::try_from(global_gain).unwrap_or(i16::MAX);
+    // The AAC global gain is a u8, so it always fits in i16 — no silent clamp.
+    let scale_factor = i16::from(global_gain);
     (0..frame_count)
         .map(|_| vec![scale_factor; band_count])
         .collect()

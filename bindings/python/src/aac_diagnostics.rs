@@ -14,11 +14,8 @@ pub(crate) fn encode_aac_standard_mono_offsets_with_step(
         })?;
     let channel_config =
         sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
-    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
-        &pcm,
-        usize::from(channel_config.global_gain),
-        offsets.len() - 1,
-    );
+    let scale_factors_by_frame =
+        constant_aac_scale_factors_by_frame(&pcm, channel_config.global_gain, offsets.len() - 1);
     let scale_factor_refs = scale_factors_by_frame
         .iter()
         .map(Vec::as_slice)
@@ -67,11 +64,8 @@ pub(crate) fn aac_standard_mono_offsets_bitrate_frame_details(
         })?;
     let channel_config =
         sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
-    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
-        &pcm,
-        usize::from(channel_config.global_gain),
-        offsets.len() - 1,
-    );
+    let scale_factors_by_frame =
+        constant_aac_scale_factors_by_frame(&pcm, channel_config.global_gain, offsets.len() - 1);
     let scale_factor_refs = scale_factors_by_frame
         .iter()
         .map(Vec::as_slice)
@@ -118,11 +112,8 @@ pub(crate) fn encode_aac_standard_stereo_offsets_with_step(
         })?;
     let channel_config =
         sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
-    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
-        &pcm,
-        usize::from(channel_config.global_gain),
-        offsets.len() - 1,
-    );
+    let scale_factors_by_frame =
+        constant_aac_scale_factors_by_frame(&pcm, channel_config.global_gain, offsets.len() - 1);
     let scale_factor_refs = scale_factors_by_frame
         .iter()
         .map(Vec::as_slice)
@@ -172,11 +163,8 @@ pub(crate) fn aac_standard_stereo_offsets_bitrate_frame_details(
         })?;
     let channel_config =
         sonare_codec_rs::AacLongBlockConfig::new(global_gain, aac_offsets_max_sfb(offsets)?);
-    let scale_factors_by_frame = constant_aac_scale_factors_by_frame(
-        &pcm,
-        usize::from(channel_config.global_gain),
-        offsets.len() - 1,
-    );
+    let scale_factors_by_frame =
+        constant_aac_scale_factors_by_frame(&pcm, channel_config.global_gain, offsets.len() - 1);
     let scale_factor_refs = scale_factors_by_frame
         .iter()
         .map(Vec::as_slice)
