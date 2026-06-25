@@ -5,7 +5,19 @@ pub fn detect_format(input: &[u8]) -> Option<String> {
     if is_m4a_container(input) {
         return Some("m4a".to_owned());
     }
-    sonare_codec::detect(input).map(|format| format!("{format:?}").to_ascii_lowercase())
+    // Map to stable JS-facing strings explicitly instead of deriving them from
+    // the `Debug` impl, so the string contract cannot drift if `Debug` changes.
+    sonare_codec::detect(input).map(|format| {
+        match format {
+            sonare_codec::Format::Wav => "wav",
+            sonare_codec::Format::Flac => "flac",
+            sonare_codec::Format::Mp3 => "mp3",
+            sonare_codec::Format::Vorbis => "vorbis",
+            sonare_codec::Format::Opus => "opus",
+            sonare_codec::Format::Aac => "aac",
+        }
+        .to_owned()
+    })
 }
 
 #[wasm_bindgen]
