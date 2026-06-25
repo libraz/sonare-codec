@@ -113,6 +113,71 @@
     }
 
     #[test]
+    #[cfg(feature = "opus")]
+    fn stream_decoder_buffers_opus_across_packet_boundaries() {
+        // Regression: incomplete input is now reported via `Error::Incomplete`,
+        // so feeding an Ogg Opus stream in small chunks must buffer (returning
+        // `Ok(None)`) until the stream is complete instead of spuriously hard
+        // failing when a chunk ends mid page/packet.
+        let frames: Vec<f32> = (0..4_096)
+            .map(|i| 0.3 * (i as f32 * 0.05).sin())
+            .collect();
+        let pcm = AudioBuffer::new(48_000, 1, frames).unwrap();
+        let opus = encode(Format::Opus, &pcm).expect("opus encode");
+        assert!(opus.len() > 40, "opus stream should span multiple pages");
+
+        let mut decoder = StreamDecoder::new();
+        let mut decoded = None;
+        // A chunk size that does not divide page lengths forces chunk ends to
+        // land inside pages and packets.
+        for chunk in opus.chunks(13) {
+            if let Some(buffer) = decoder
+                .decode_stream(chunk)
+                .expect("partial Opus chunk must buffer, not hard fail")
+            {
+                decoded = Some(buffer);
+            }
+        }
+
+        let decoded = decoded.expect("complete Opus stream should decode");
+        assert_eq!(decoded.channels, 1);
+        assert_eq!(decoded.samples.len(), pcm.samples.len());
+    }
+
+    #[test]
+    fn incomplete_input_is_reported_as_incomplete_not_invalid() {
+        // The streaming layer relies on `Error::Incomplete` to distinguish
+        // "needs more data" from genuinely malformed input. A WAV whose declared
+        // data chunk is longer than the bytes provided must surface as
+        // incomplete so a stream decoder keeps buffering.
+        let pcm = AudioBuffer::new(44_100, 1, vec![0.0, 0.25, -0.25, 0.5]).unwrap();
+        let wav = encode(Format::Wav, &pcm).unwrap();
+        let truncated = &wav[..wav.len() - 4];
+
+        assert!(matches!(decode(truncated), Err(Error::Incomplete)));
+    }
+
+    #[test]
+    #[cfg(feature = "mp3")]
+    fn production_mode_gates_unsupported_mp3_sample_rate() {
+        // EncodeMode::ProductionOnly validates the input against the encoder's
+        // supported channel/sample-rate matrix. An MPEG-2.5 rate (8 kHz) is
+        // outside it, so non-silent input is rejected up front with an
+        // actionable error rather than routed through a non-production path.
+        let unsupported: Vec<f32> = (0..4_608).map(|i| 0.2 * (i as f32 * 0.1).sin()).collect();
+        let pcm = AudioBuffer::new(8_000, 1, unsupported).unwrap();
+        assert!(matches!(
+            encode_with_mode(Format::Mp3, &pcm, EncodeMode::ProductionOnly),
+            Err(Error::UnsupportedFeature(_))
+        ));
+
+        // A supported rate passes the gate and produces a stream.
+        let supported: Vec<f32> = (0..4_608).map(|i| 0.2 * (i as f32 * 0.1).sin()).collect();
+        let ok = AudioBuffer::new(44_100, 1, supported).unwrap();
+        assert!(encode_with_mode(Format::Mp3, &ok, EncodeMode::ProductionOnly).is_ok());
+    }
+
+    #[test]
     #[cfg(feature = "flac")]
     fn dispatches_flac_roundtrip() {
         let samples = (0..128)

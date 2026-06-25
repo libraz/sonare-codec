@@ -213,6 +213,7 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 pub(crate) fn is_incomplete_stream_error(err: &Error) -> bool {
     match err {
+        Error::Incomplete => true,
         Error::InvalidInput(reason) => {
             reason.contains("truncated") || *reason == "FLAC stream has no audio frames"
         }

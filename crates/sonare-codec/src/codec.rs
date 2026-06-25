@@ -4,12 +4,18 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     decode_impl(input)
 }
 
-/// Controls whether `encode_with_mode` may return experimental codec output.
+/// Controls whether `encode_with_mode` rejects unsupported encoder inputs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EncodeMode {
-    /// Preserve the regular `encode` behavior, including documented experimental scaffolds.
+    /// Preserve the regular `encode` behavior for every supported input.
     Compatibility,
-    /// Reject outputs that are not yet production-grade for non-silent lossy encoders.
+    /// Reject non-silent lossy input whose channel layout / sample rate is not
+    /// in the encoder's supported set, instead of falling through to a path that
+    /// is not yet production-ready.
+    ///
+    /// This validates the *input* against each lossy encoder's supported
+    /// channel/sample-rate matrix (MP3, AAC-LC); it is not a perceptual-quality
+    /// gate on the produced bitstream.
     ProductionOnly,
 }
 
@@ -18,6 +24,11 @@ pub enum EncodeMode {
 const MAX_STREAM_BUFFER: usize = 64 << 20;
 
 /// Stateful decoder that buffers chunks until a complete audio stream decodes.
+///
+/// Each call re-attempts a full decode of the accumulated buffer, so feeding a
+/// stream in many tiny chunks costs more than feeding it in a few large ones.
+/// The buffer is hard-capped at [`MAX_STREAM_BUFFER`], which bounds both the
+/// memory and the worst-case re-decode work for a single stream.
 #[derive(Default)]
 pub struct StreamDecoder {
     pending: Vec<u8>,
@@ -73,8 +84,10 @@ pub fn encode(format: Format, pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 /// Encodes interleaved PCM while applying a caller-selected stability policy.
 ///
-/// `ProductionOnly` accepts the currently production-grade paths and rejects
-/// non-silent lossy output that still relies on unsupported scaffold logic.
+/// `ProductionOnly` rejects non-silent lossy input whose channel layout or
+/// sample rate falls outside the encoder's supported matrix (returning an
+/// actionable [`Error::UnsupportedFeature`]) rather than encoding it through a
+/// path that is not production-ready.
 pub fn encode_with_mode(
     format: Format,
     pcm: &AudioBuffer,
@@ -104,24 +117,20 @@ pub(crate) fn production_encode_rejection_reason(
         return None;
     }
 
+    // Each arm is gated on its codec feature: when a codec is not built in, its
+    // `encode_*_impl` stub already returns an actionable feature error, so the
+    // input-support gate must not pre-empt it with a misleading rate message.
     match format {
-        Format::Mp3 if !is_mp3_non_silent_production_candidate(pcm) => Some(
+        #[cfg(feature = "mp3")]
+        Format::Mp3 if !sc_mp3::supports_production_encode(pcm) => Some(
             "production MP3 encode currently supports mono/stereo MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) sample rates only",
         ),
+        #[cfg(feature = "aac")]
         Format::Aac if !is_aac_non_silent_production_candidate(pcm) => Some(
             "production AAC-LC encode currently supports mono/stereo 7.35/8/11.025/12/16/22.05/24/32/44.1/48/64/88.2/96kHz only",
         ),
         _ => None,
     }
-}
-
-pub(crate) fn is_mp3_non_silent_production_candidate(pcm: &AudioBuffer) -> bool {
-    matches!(pcm.channels, 1 | 2)
-        && matches!(
-            pcm.sample_rate,
-            // MPEG-1 (ISO/IEC 11172-3) and MPEG-2 LSF (ISO/IEC 13818-3).
-            16_000 | 22_050 | 24_000 | 32_000 | 44_100 | 48_000
-        )
 }
 
 #[cfg(feature = "aac")]
@@ -130,17 +139,12 @@ pub(crate) fn is_aac_non_silent_production_candidate(pcm: &AudioBuffer) -> bool 
         && sc_aac::aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate).is_some()
 }
 
-#[cfg(not(feature = "aac"))]
-pub(crate) fn is_aac_non_silent_production_candidate(_pcm: &AudioBuffer) -> bool {
-    false
-}
-
 pub(crate) fn is_silent_pcm(pcm: &AudioBuffer) -> bool {
     pcm.samples.iter().all(|sample| *sample == 0.0)
 }
 
 pub(crate) fn is_incomplete_stream_error(err: &Error) -> bool {
-    matches!(err, Error::InvalidInput(reason) if reason.contains("truncated"))
+    matches!(err, Error::Incomplete)
 }
 
 #[cfg(all(feature = "decode", not(feature = "aac")))]
@@ -161,16 +165,12 @@ pub(crate) fn decode_impl(input: &[u8]) -> Result<AudioBuffer, Error> {
         }
     }
 
+    // AAC/M4A was already attempted above when detected, so there is no need to
+    // re-run `sc_aac::decode` here: that only repeated the same (failing) work.
     match sc_decode::decode(input) {
         Err(err) => decode_mp3_fallback(input)
             .or_else(|| decode_opus_fallback(input))
-            .unwrap_or_else(|| {
-                if detect(input) == Some(Format::Aac) {
-                    sc_aac::decode(input)
-                } else {
-                    Err(err)
-                }
-            }),
+            .unwrap_or(Err(err)),
         result => result,
     }
 }
