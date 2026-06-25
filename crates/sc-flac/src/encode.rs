@@ -1,16 +1,18 @@
 use super::*;
 
 pub(crate) fn encode_frame(
-    pcm_i16: &[i16],
+    pcm_samples: &[i32],
     channels: usize,
     sample_offset: usize,
     block_size: usize,
     coded_number: usize,
     fixed_blocking: bool,
+    depth: FlacBitDepth,
 ) -> Result<Vec<u8>, Error> {
+    let bits = depth.bits();
     if channels == 2 {
-        let left = collect_channel_samples(pcm_i16, 2, sample_offset, block_size, 0)?;
-        let right = collect_channel_samples(pcm_i16, 2, sample_offset, block_size, 1)?;
+        let left = collect_channel_samples(pcm_samples, 2, sample_offset, block_size, 0)?;
+        let right = collect_channel_samples(pcm_samples, 2, sample_offset, block_size, 1)?;
         let side = stereo_side_samples(&left, &right);
         let mid = stereo_mid_samples(&left, &right);
         let mut best = encode_frame_with_channels(
@@ -18,19 +20,21 @@ pub(crate) fn encode_frame(
             block_size,
             coded_number,
             fixed_blocking,
+            depth,
             1,
-            &stereo_independent_channels(&left, &right),
+            &stereo_independent_channels(&left, &right, bits),
         )?;
         for (channel_assignment_code, encoded_channels) in [
-            (8, left_side_channels(&left, &side)),
-            (9, right_side_channels(&side, &right)),
-            (10, mid_side_channels(&mid, &side)),
+            (8, left_side_channels(&left, &side, bits)),
+            (9, right_side_channels(&side, &right, bits)),
+            (10, mid_side_channels(&mid, &side, bits)),
         ] {
             let candidate = encode_frame_with_channels(
                 channels,
                 block_size,
                 coded_number,
                 fixed_blocking,
+                depth,
                 channel_assignment_code,
                 &encoded_channels,
             )?;
@@ -44,7 +48,7 @@ pub(crate) fn encode_frame(
     let mut channel_samples = Vec::with_capacity(channels);
     for channel in 0..channels {
         channel_samples.push(collect_channel_samples(
-            pcm_i16,
+            pcm_samples,
             channels,
             sample_offset,
             block_size,
@@ -54,7 +58,7 @@ pub(crate) fn encode_frame(
     let encoded_channels = channel_samples
         .iter()
         .map(|samples| EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples,
         })
         .collect::<Vec<_>>();
@@ -63,6 +67,7 @@ pub(crate) fn encode_frame(
         block_size,
         coded_number,
         fixed_blocking,
+        depth,
         u8::try_from(channels - 1)
             .map_err(|_| Error::InvalidPcm("FLAC channel assignment is out of range"))?,
         &encoded_channels,
@@ -79,6 +84,7 @@ pub(crate) fn encode_frame_with_channels(
     block_size: usize,
     coded_number: usize,
     fixed_blocking: bool,
+    depth: FlacBitDepth,
     channel_assignment_code: u8,
     encoded_channels: &[EncodedChannel<'_>],
 ) -> Result<Vec<u8>, Error> {
@@ -91,14 +97,14 @@ pub(crate) fn encode_frame_with_channels(
     let header_capacity = 16_usize;
     let payload_capacity = block_size
         .saturating_mul(channels)
-        .saturating_mul(usize::from(ENCODE_BITS_PER_SAMPLE).div_ceil(8));
+        .saturating_mul(usize::from(depth.bits()).div_ceil(8));
     let mut frame = Vec::with_capacity(header_capacity.saturating_add(payload_capacity));
     let sync_second = if fixed_blocking { 0xf8 } else { 0xf9 };
     frame.extend_from_slice(&[
         0xff,
         sync_second,
         0x70,
-        (channel_assignment_code << 4) | 0x08,
+        (channel_assignment_code << 4) | depth.frame_sample_size_nibble(),
     ]);
     frame
         .extend_from_slice(&utf8_coded_number(u64::try_from(coded_number).map_err(
@@ -121,7 +127,7 @@ pub(crate) fn encode_frame_with_channels(
 }
 
 pub(crate) fn collect_channel_samples(
-    pcm_i16: &[i16],
+    pcm_samples: &[i32],
     channels: usize,
     sample_offset: usize,
     block_size: usize,
@@ -142,43 +148,48 @@ pub(crate) fn collect_channel_samples(
                     .ok_or(Error::InvalidPcm("FLAC sample index overflow"))?,
             )
             .ok_or(Error::InvalidPcm("FLAC sample index overflow"))?;
-        if last >= pcm_i16.len() {
+        if last >= pcm_samples.len() {
             return Err(Error::InvalidPcm("FLAC sample is missing"));
         }
     }
 
-    Ok(pcm_i16[start..]
+    Ok(pcm_samples[start..]
         .iter()
         .step_by(channels)
         .take(block_size)
-        .map(|&sample| i32::from(sample))
+        .copied()
         .collect())
 }
 
 pub(crate) fn stereo_independent_channels<'a>(
     left: &'a [i32],
     right: &'a [i32],
+    bits: u8,
 ) -> [EncodedChannel<'a>; 2] {
     [
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples: left,
         },
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples: right,
         },
     ]
 }
 
-pub(crate) fn left_side_channels<'a>(left: &'a [i32], side: &'a [i32]) -> [EncodedChannel<'a>; 2] {
+pub(crate) fn left_side_channels<'a>(
+    left: &'a [i32],
+    side: &'a [i32],
+    bits: u8,
+) -> [EncodedChannel<'a>; 2] {
     [
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples: left,
         },
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE + 1,
+            bits_per_sample: bits + 1,
             samples: side,
         },
     ]
@@ -187,27 +198,32 @@ pub(crate) fn left_side_channels<'a>(left: &'a [i32], side: &'a [i32]) -> [Encod
 pub(crate) fn right_side_channels<'a>(
     side: &'a [i32],
     right: &'a [i32],
+    bits: u8,
 ) -> [EncodedChannel<'a>; 2] {
     [
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE + 1,
+            bits_per_sample: bits + 1,
             samples: side,
         },
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples: right,
         },
     ]
 }
 
-pub(crate) fn mid_side_channels<'a>(mid: &'a [i32], side: &'a [i32]) -> [EncodedChannel<'a>; 2] {
+pub(crate) fn mid_side_channels<'a>(
+    mid: &'a [i32],
+    side: &'a [i32],
+    bits: u8,
+) -> [EncodedChannel<'a>; 2] {
     [
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE,
+            bits_per_sample: bits,
             samples: mid,
         },
         EncodedChannel {
-            bits_per_sample: ENCODE_BITS_PER_SAMPLE + 1,
+            bits_per_sample: bits + 1,
             samples: side,
         },
     ]
@@ -527,11 +543,16 @@ pub(crate) fn utf8_coded_number(value: u64) -> Result<Vec<u8>, Error> {
     ))
 }
 
-pub(crate) fn quantize_i16(sample: f32) -> i16 {
+/// Quantizes a normalized `[-1.0, 1.0]` sample to a signed `bits`-wide integer,
+/// the exact inverse of the decoder's `normalize_signed_sample`: the most
+/// negative code is `-2^(bits-1)` and the positive range scales by
+/// `2^(bits-1) - 1`. Supports the encoder's 16- and 24-bit depths.
+pub(crate) fn quantize_signed(sample: f32, bits: u8) -> i32 {
     let sample = sample.clamp(-1.0, 1.0);
+    let max_positive = ((1_i64 << (bits - 1)) - 1) as f32;
     if sample <= -1.0 {
-        i16::MIN
+        -(1_i32 << (bits - 1))
     } else {
-        (sample * f32::from(i16::MAX)).round() as i16
+        (sample * max_positive).round() as i32
     }
 }

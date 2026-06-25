@@ -94,10 +94,17 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     )
 }
 
+/// Encodes interleaved PCM into FLAC at 16-bit depth.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
+    encode_as(pcm, FlacBitDepth::Bits16)
+}
+
+/// Encodes interleaved PCM into FLAC at the requested integer sample width.
+pub fn encode_as(pcm: &AudioBuffer, depth: FlacBitDepth) -> Result<Vec<u8>, Error> {
     if pcm.is_empty() {
         return Err(Error::InvalidPcm("FLAC encode requires at least one frame"));
     }
+    let bits_per_sample = depth.bits();
     if pcm.sample_rate == 0 || pcm.sample_rate > 0x000f_ffff {
         return Err(Error::InvalidPcm("FLAC sample rate is out of range"));
     }
@@ -113,12 +120,15 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         return Err(Error::InvalidPcm("FLAC total sample count is out of range"));
     }
 
-    let mut pcm_i16 = Vec::with_capacity(pcm.samples.len());
+    let sample_bytes = usize::from(bits_per_sample).div_ceil(8);
+    let mut pcm_samples = Vec::with_capacity(pcm.samples.len());
     let mut md5 = Md5::new();
     for &sample in &pcm.samples {
-        let quantized = quantize_i16(sample);
-        pcm_i16.push(quantized);
-        md5.update(quantized.to_le_bytes());
+        let quantized = quantize_signed(sample, bits_per_sample);
+        pcm_samples.push(quantized);
+        // FLAC's STREAMINFO MD5 is computed over the little-endian PCM samples
+        // truncated to the byte width of the declared bit depth.
+        md5.update(&quantized.to_le_bytes()[..sample_bytes]);
     }
     let md5: [u8; 16] = md5.finalize().into();
 
@@ -154,12 +164,13 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     for (frame_index, &block_size) in block_sizes.iter().enumerate() {
         let coded_number = frame_index;
         let frame = encode_frame(
-            &pcm_i16,
+            &pcm_samples,
             channels,
             sample_offset,
             block_size,
             coded_number,
             fixed_blocking,
+            depth,
         )?;
         frames.push(frame);
         sample_offset = sample_offset
@@ -195,7 +206,7 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     );
     let packed = (u64::from(pcm.sample_rate) << 44)
         | (u64::from(pcm.channels - 1) << 41)
-        | (u64::from(ENCODE_BITS_PER_SAMPLE - 1) << 36)
+        | (u64::from(bits_per_sample - 1) << 36)
         | u64::try_from(total_frames)
             .map_err(|_| Error::InvalidPcm("FLAC total sample count is out of range"))?;
     out.extend_from_slice(&packed.to_be_bytes());

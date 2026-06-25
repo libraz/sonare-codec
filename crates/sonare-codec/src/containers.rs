@@ -186,9 +186,17 @@ pub(crate) fn constant_aac_scale_factors_by_frame(
         .collect()
 }
 
+#[cfg(feature = "flac")]
+pub use sc_flac::FlacBitDepth;
+#[cfg(feature = "wav")]
+pub use sc_wav::WavSampleFormat;
+
 #[cfg(feature = "wav")]
 pub(crate) fn encode_wav_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    sc_wav::encode(pcm)
+    // Default the high-level WAV path to 32-bit float so that float PCM round
+    // trips bit-exactly (the most common "give me lossless" expectation). Use
+    // `encode_wav_as` for 16-/24-bit integer output.
+    sc_wav::encode_as(pcm, WavSampleFormat::Float32)
 }
 
 #[cfg(not(feature = "wav"))]
@@ -198,9 +206,22 @@ pub(crate) fn encode_wav_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     ))
 }
 
+/// Encodes interleaved PCM as WAV with an explicit sample format.
+///
+/// The high-level [`encode`](crate::encode)`(Format::Wav, ..)` path defaults to
+/// 32-bit float (bit-exact for float PCM). Use this to select 16-/24-bit integer
+/// PCM instead.
+#[cfg(feature = "wav")]
+pub fn encode_wav_as(pcm: &AudioBuffer, sample_format: WavSampleFormat) -> Result<Vec<u8>, Error> {
+    sc_wav::encode_as(pcm, sample_format)
+}
+
 #[cfg(feature = "flac")]
 pub(crate) fn encode_flac_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    sc_flac::encode(pcm)
+    // FLAC is an integer codec; default the high-level path to 24-bit so float
+    // PCM keeps far more precision than the old 16-bit default. Use
+    // `encode_flac_as` to choose 16-bit explicitly.
+    sc_flac::encode_as(pcm, FlacBitDepth::Bits24)
 }
 
 #[cfg(not(feature = "flac"))]
@@ -208,6 +229,15 @@ pub(crate) fn encode_flac_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     Err(Error::UnsupportedFeature(
         "FLAC encode requires the \"flac\" cargo feature",
     ))
+}
+
+/// Encodes interleaved PCM as FLAC at an explicit integer sample width.
+///
+/// The high-level [`encode`](crate::encode)`(Format::Flac, ..)` path defaults to
+/// 24-bit. Use this to select 16-bit (smaller files for CD-depth material).
+#[cfg(feature = "flac")]
+pub fn encode_flac_as(pcm: &AudioBuffer, depth: FlacBitDepth) -> Result<Vec<u8>, Error> {
+    sc_flac::encode_as(pcm, depth)
 }
 
 #[cfg(feature = "mp3")]

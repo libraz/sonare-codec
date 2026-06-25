@@ -128,6 +128,44 @@ mod tests {
     }
 
     #[test]
+    fn encodes_24bit_flac_roundtrip_with_finer_precision_than_16bit() {
+        use super::{encode_as, FlacBitDepth};
+
+        // A staircase with sub-16-bit-LSB steps: 16-bit quantization collapses
+        // adjacent samples together, 24-bit preserves them.
+        let samples: Vec<f32> = (0..256).map(|i| i as f32 / 200_000.0).collect();
+        let pcm = AudioBuffer::new(48_000, 1, samples.clone()).unwrap();
+
+        let flac24 = encode_as(&pcm, FlacBitDepth::Bits24).unwrap();
+        let info = parse_streaminfo(&flac24).unwrap();
+        assert_eq!(info.bits_per_sample, 24);
+
+        let decoded24 = decode(&flac24).unwrap();
+        assert_eq!(decoded24.frames(), 256);
+        // 24-bit step is 1/(2^23 - 1); reconstruction must be within one LSB.
+        assert_pcm_close(&decoded24.samples, &samples, 1.0 / 8_388_607.0);
+
+        // The 24-bit reconstruction is strictly closer to the input than 16-bit.
+        let decoded16 = decode(&encode_as(&pcm, FlacBitDepth::Bits16).unwrap()).unwrap();
+        let err24: f64 = decoded24
+            .samples
+            .iter()
+            .zip(&samples)
+            .map(|(d, s)| f64::from((d - s).abs()))
+            .sum();
+        let err16: f64 = decoded16
+            .samples
+            .iter()
+            .zip(&samples)
+            .map(|(d, s)| f64::from((d - s).abs()))
+            .sum();
+        assert!(
+            err24 < err16,
+            "24-bit err {err24} not below 16-bit err {err16}"
+        );
+    }
+
+    #[test]
     fn encoder_uses_fixed_rice_subframe_for_smooth_pcm() {
         let samples = (0..128)
             .map(|sample| sample as f32 / 32_767.0)

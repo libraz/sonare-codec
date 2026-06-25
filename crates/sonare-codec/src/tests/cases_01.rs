@@ -38,7 +38,10 @@
     #[test]
     fn stream_decoder_buffers_until_complete_input() {
         let pcm = AudioBuffer::new(44_100, 1, vec![0.0, 0.25, -0.25]).unwrap();
-        let wav = encode(Format::Wav, &pcm).unwrap();
+        // Use a 16-bit fixture so a 2-byte truncation lands mid-frame and is
+        // unambiguously incomplete; this test exercises StreamDecoder buffering,
+        // not the default WAV sample format.
+        let wav = super::encode_wav_as(&pcm, super::WavSampleFormat::Pcm16).unwrap();
         let split = wav.len() - 2;
         let mut decoder = StreamDecoder::new();
 
@@ -194,6 +197,47 @@
         assert_eq!(decoded.sample_rate, pcm.sample_rate);
         assert_eq!(decoded.channels, pcm.channels);
         assert_eq!(decoded.samples.len(), pcm.samples.len());
+    }
+
+    #[test]
+    #[cfg(all(feature = "wav", feature = "decode"))]
+    fn default_wav_encode_is_bit_exact_float_lossless() {
+        use super::WavSampleFormat;
+        // The high-level WAV path defaults to 32-bit float, so even out-of-range
+        // mastering headroom (|s| > 1.0) round-trips bit-exactly.
+        let pcm = AudioBuffer::new(48_000, 1, vec![2.5, -3.0, 0.5, -1.0, 1.0, 0.0]).unwrap();
+        let wav = encode(Format::Wav, &pcm).unwrap();
+        let decoded = decode(&wav).unwrap();
+        assert_eq!(decoded.samples, pcm.samples);
+
+        // 16-bit is still selectable and clamps/quantizes as expected.
+        let wav16 = super::encode_wav_as(&pcm, WavSampleFormat::Pcm16).unwrap();
+        assert!(wav16.len() < wav.len());
+    }
+
+    #[test]
+    #[cfg(all(feature = "flac", feature = "decode"))]
+    fn default_flac_encode_is_24bit() {
+        use super::FlacBitDepth;
+        let samples: Vec<f32> = (0..256).map(|i| i as f32 / 300_000.0).collect();
+        let pcm = AudioBuffer::new(48_000, 1, samples.clone()).unwrap();
+
+        // Default FLAC is 24-bit and reconstructs the sub-16-bit detail closely.
+        let flac = encode(Format::Flac, &pcm).unwrap();
+        let decoded = decode(&flac).unwrap();
+        assert_eq!(decoded.frames(), 256);
+        let err: f64 = decoded
+            .samples
+            .iter()
+            .zip(&samples)
+            .map(|(d, s)| f64::from((d - s).abs()))
+            .sum();
+        // Far tighter than a 16-bit quantizer (LSB 1/32767) could achieve here.
+        assert!(err < 256.0 / 32_767.0, "24-bit FLAC error too high: {err}");
+
+        // 16-bit remains explicitly selectable.
+        let flac16 = super::encode_flac_as(&pcm, FlacBitDepth::Bits16).unwrap();
+        assert!(decode(&flac16).is_ok());
     }
 
     #[test]
