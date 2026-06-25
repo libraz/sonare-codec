@@ -123,40 +123,36 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     let md5: [u8; 16] = md5.finalize().into();
 
     let block_sizes = encode_block_sizes(total_frames);
-    let encoded_min_block_size = *block_sizes
+    // We always use the fixed blocking strategy: every frame carries the nominal
+    // block size except a possibly-shorter final frame. The frame header codes the
+    // frame counter (not the sample number), and the decoder permits the final frame
+    // to fall below the STREAMINFO minimum.
+    let fixed_blocking = true;
+    // Per the FLAC format (RFC 9639 §8.2) the STREAMINFO minimum block size excludes
+    // the final block, which may be shorter. We therefore take the minimum over every
+    // frame but the last (and fall back to the only frame for single-frame streams),
+    // and write the true value rather than a clamped `.max(16)` that would misrepresent
+    // the stream. The maximum is the true largest block.
+    let leading_block_count = block_sizes.len().saturating_sub(1).max(1);
+    let nominal_min_block_size = *block_sizes
         .iter()
+        .take(leading_block_count)
         .min()
         .ok_or(Error::InvalidPcm("FLAC encode has no blocks"))?;
-    let encoded_max_block_size = *block_sizes
-        .iter()
-        .max()
-        .ok_or(Error::InvalidPcm("FLAC encode has no blocks"))?;
-    let fixed_blocking = encoded_min_block_size == encoded_max_block_size;
-    let min_block_size = u16::try_from(
-        *block_sizes
-            .iter()
-            .min()
-            .ok_or(Error::InvalidPcm("FLAC encode has no blocks"))?,
-    )
-    .map(|block_size| block_size.max(16))
-    .map_err(|_| Error::InvalidPcm("FLAC block size is out of range"))?;
+    let min_block_size = u16::try_from(nominal_min_block_size)
+        .map_err(|_| Error::InvalidPcm("FLAC block size is out of range"))?;
     let max_block_size = u16::try_from(
         *block_sizes
             .iter()
             .max()
             .ok_or(Error::InvalidPcm("FLAC encode has no blocks"))?,
     )
-    .map(|block_size| block_size.max(16))
     .map_err(|_| Error::InvalidPcm("FLAC block size is out of range"))?;
 
     let mut frames = Vec::with_capacity(block_sizes.len());
     let mut sample_offset = 0_usize;
     for (frame_index, &block_size) in block_sizes.iter().enumerate() {
-        let coded_number = if fixed_blocking {
-            frame_index
-        } else {
-            sample_offset
-        };
+        let coded_number = frame_index;
         let frame = encode_frame(
             &pcm_i16,
             channels,

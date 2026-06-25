@@ -207,6 +207,46 @@ mod tests {
     }
 
     #[test]
+    fn streaminfo_min_block_size_excludes_partial_final_block() {
+        // A multi-frame stream whose final block is a 1-sample remainder. Per RFC 9639
+        // §8.2 the STREAMINFO minimum block size excludes the final block, so it must be
+        // the nominal 4096 (matching the reference encoder) rather than a clamped `.max(16)`
+        // value or the true 1-sample tail.
+        let samples = (0..4097)
+            .map(|sample| (sample as f32 * 0.01).sin() * 0.5)
+            .collect::<Vec<_>>();
+        let pcm = AudioBuffer::new(44_100, 1, samples).unwrap();
+
+        let flac = super::encode(&pcm).unwrap();
+        let info = parse_streaminfo(&flac).unwrap();
+        let header = parse_frame_header(&flac[42..], &info).unwrap();
+
+        assert_eq!(info.min_block_size, 4096);
+        assert_eq!(info.max_block_size, 4096);
+        assert_eq!(header.blocking_strategy, BlockingStrategy::FixedBlockSize);
+
+        let decoded = decode(&flac).unwrap();
+        assert_eq!(decoded.frames(), 4097);
+    }
+
+    #[test]
+    fn streaminfo_block_size_matches_single_short_frame() {
+        // A stream shorter than the nominal block size is a single frame; STREAMINFO
+        // must report that frame's true size for both minimum and maximum, never a
+        // clamped `.max(16)` value.
+        let pcm = AudioBuffer::new(44_100, 1, vec![0.1, -0.2, 0.3, -0.4, 0.5]).unwrap();
+
+        let flac = super::encode(&pcm).unwrap();
+        let info = parse_streaminfo(&flac).unwrap();
+
+        assert_eq!(info.min_block_size, 5);
+        assert_eq!(info.max_block_size, 5);
+
+        let decoded = decode(&flac).unwrap();
+        assert_eq!(decoded.frames(), 5);
+    }
+
+    #[test]
     fn encoder_trait_encodes_flac() {
         let pcm = AudioBuffer::new(44_100, 1, vec![0.0, 0.25, -0.25]).unwrap();
         let mut encoder = FlacEncoder::new();
