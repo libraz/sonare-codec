@@ -16,6 +16,20 @@ pub fn encode_mp3(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     encode_mp3_impl(pcm)
 }
 
+/// Encodes mono/stereo PCM as MP3 (Layer III) targeting a constant bitrate.
+///
+/// Unlike the default [`encode`](crate::encode)`(Format::Mp3, ..)` path (fixed
+/// 128 kbit/s MPEG-1 / 64 kbit/s MPEG-2 LSF), this runs the per-frame perceptual
+/// quantizer-step search so the step adapts to `bitrate_kbps`. The value must be
+/// a Layer III bitrate valid for the stream's MPEG version and sample rate.
+///
+/// Output is long-block-only and not sample-accurate (no Xing/LAME gapless
+/// header), matching the default MP3 encode path's caveats.
+#[cfg(feature = "mp3")]
+pub fn encode_mp3_with_bitrate(pcm: &AudioBuffer, bitrate_kbps: u16) -> Result<Vec<u8>, Error> {
+    sc_mp3::encode_with_bitrate(pcm, bitrate_kbps)
+}
+
 #[cfg(feature = "vorbis")]
 pub fn encode_vorbis(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     encode_vorbis_impl(pcm)

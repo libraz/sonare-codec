@@ -454,6 +454,46 @@ fn mp3_mpeg2_lsf_perceptual_reservoir_mid_side_reconstructs_both_channels() {
 /// Collects the per-frame bitrate (kbit/s) of an MPEG-1 Layer III stream by
 /// walking frame headers, deriving each frame length from its own bitrate and
 /// padding. Returns the list of frame bitrates in stream order.
+#[test]
+fn mp3_explicit_bitrate_targets_requested_constant_rate() {
+    // `encode_mp3_with_bitrate` must honor the requested CBR rate (every frame
+    // carries it) and still reconstruct the signal; a higher rate yields a
+    // larger file. This wires caller-driven rate control into the public API.
+    let sample_rate = 44_100;
+    let frames = 44_100;
+    // A clean 1 kHz tone (the coarse mono path reconstructs gross tone integrity
+    // well; FFmpeg oracle tests own true production quality). This test validates
+    // that bitrate control is wired through, not absolute fidelity.
+    let tone: Vec<f32> = (0..frames)
+        .map(|i| 0.5 * (std::f32::consts::TAU * 1_000.0 * (i as f32 / sample_rate as f32)).sin())
+        .collect();
+    let pcm = AudioBuffer::new(sample_rate, 1, tone).unwrap();
+
+    let mp3_96 = sonare_codec::encode_mp3_with_bitrate(&pcm, 96).expect("96 kbps MP3");
+    let mp3_192 = sonare_codec::encode_mp3_with_bitrate(&pcm, 192).expect("192 kbps MP3");
+
+    // Every frame is coded at the requested CBR rate.
+    let rates_96 = mpeg1_layer3_frame_bitrates(&mp3_96);
+    let rates_192 = mpeg1_layer3_frame_bitrates(&mp3_192);
+    assert!(!rates_96.is_empty() && rates_96.iter().all(|&r| r == 96));
+    assert!(!rates_192.is_empty() && rates_192.iter().all(|&r| r == 192));
+    assert!(mp3_192.len() > mp3_96.len());
+
+    // Both still decode and track the input.
+    for mp3 in [&mp3_96, &mp3_192] {
+        let decoded = sonare_codec::decode(mp3).expect("Symphonia decode");
+        assert_eq!(decoded.channels, 1);
+        let corr = aligned_channel_corr(&pcm.samples, &decoded.samples, 8_192, 4_000);
+        assert!(
+            corr > 0.9,
+            "explicit-bitrate MP3 correlation too low: {corr:.4}"
+        );
+    }
+
+    // An invalid Layer III bitrate for the version is rejected.
+    assert!(sonare_codec::encode_mp3_with_bitrate(&pcm, 7).is_err());
+}
+
 fn mpeg1_layer3_frame_bitrates(stream: &[u8]) -> Vec<u16> {
     const L3_KBPS: [u16; 16] = [
         0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,

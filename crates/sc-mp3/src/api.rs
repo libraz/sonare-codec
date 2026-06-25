@@ -74,8 +74,21 @@ pub fn supports_production_encode(pcm: &AudioBuffer) -> bool {
 ///   list, stereo a 21-entry finer list); the stereo `encode` path is the only
 ///   production caller that exercises the search.
 ///
-/// The quantizer and quality proxy are still intentionally coarse, so full rate
-/// control, stereo true-polyphase readiness, and VBR are still incomplete.
+/// The quantizer and quality proxy are still intentionally coarse, so stereo
+/// true-polyphase readiness and VBR are still incomplete. Two further limits are
+/// worth calling out for callers:
+///
+/// - **Bitrate.** This default path encodes at a fixed bitrate (128 kbit/s for
+///   MPEG-1, 64 kbit/s for MPEG-2 LSF). To target a specific constant bitrate,
+///   use [`encode_with_bitrate`].
+/// - **Long-block only / not sample-accurate.** Every frame is coded with long
+///   blocks; the implemented short-block (block-switching) path is not engaged,
+///   so sharp transients can exhibit audible pre-echo. No Xing/Info or LAME
+///   gapless header is written, so the decoder cannot trim the codec's
+///   encoder-delay/padding: decoded output is a whole number of 1152-sample
+///   (MPEG-1) / 576-sample (MPEG-2) frames and is offset by the codec delay
+///   rather than being sample-exact. For sample-exact round-trips use a lossless
+///   format (WAV/FLAC).
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(
@@ -159,6 +172,104 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
             pcm,
             1.0,
             Layer3EntropyTableProvider::default(),
+        )
+    }
+}
+
+/// Encodes mono/stereo PCM as Layer III frames targeting a constant bitrate.
+///
+/// This is the rate-controlled counterpart of [`encode`]. Unlike `encode`'s
+/// default (which uses a calibrated fixed-step profile for mono), every channel
+/// layout here runs the per-frame perceptual quantizer-step search so the chosen
+/// step adapts to the requested `bitrate_kbps`:
+///
+/// - MPEG-1 (32/44.1/48 kHz) runs the entropy-targeted perceptual reservoir
+///   search (with MS joint stereo when the channels are correlated).
+/// - MPEG-2 LSF (16/22.05/24 kHz) runs the single-granule auto-step search.
+///
+/// `bitrate_kbps` must be a Layer III bitrate valid for the stream's MPEG version
+/// and sample rate; otherwise the header builder returns an error. Silent input
+/// still routes through the compact zero-spectral scaffold (rate-independent).
+///
+/// Like [`encode`], output is long-block-only and not sample-accurate; see
+/// `encode` for those caveats.
+pub fn encode_with_bitrate(pcm: &AudioBuffer, bitrate_kbps: u16) -> Result<Vec<u8>, Error> {
+    if pcm.channels != 1 && pcm.channels != 2 {
+        return Err(Error::UnsupportedFeature(
+            "MP3 encode currently supports mono/stereo only",
+        ));
+    }
+    if !supports_production_encode(pcm) {
+        return Err(Error::UnsupportedFeature(
+            "MP3 encode supports MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) sample rates only",
+        ));
+    }
+
+    // MPEG-2 LSF (ISO/IEC 13818-3): single-granule auto-step at the requested rate.
+    if matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
+        if should_encode_stereo_as_mid_side(pcm)? {
+            return encode_mpeg2_layer3_pcm_frames_with_auto_step_mid_side_and_table_provider(
+                pcm,
+                bitrate_kbps,
+                MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+                mpeg1_layer3_standard_table_provider(),
+            );
+        }
+        return encode_mpeg2_layer3_pcm_frames_with_auto_step_and_table_provider(
+            pcm,
+            bitrate_kbps,
+            MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            mpeg1_layer3_standard_table_provider(),
+        );
+    }
+
+    if !pcm.samples.iter().any(|sample| *sample != 0.0) {
+        return encode_mpeg1_layer3_pcm_frames_with_selected_scale_factors_and_table_provider(
+            pcm,
+            1.0,
+            Layer3EntropyTableProvider::default(),
+        );
+    }
+
+    // MPEG-1: mirror the default `encode` channel routing, but drive each path at
+    // the requested bitrate. Mono keeps its calibrated low-band gain / global-gain
+    // bias profile; stereo runs the entropy-targeted reservoir step search (MS
+    // when correlated). The bitrate flows into the reservoir frame capacity.
+    if pcm.channels == 1 {
+        return encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_quantized_band_gain_and_global_gain_bias_reservoir_and_table_provider(
+            pcm,
+            &[2.0],
+            bitrate_kbps,
+            false,
+            0,
+            Layer3QuantizedBandGain {
+                band_start: 0,
+                band_end: 7,
+                gain: 1.5,
+            },
+            -4,
+            mpeg1_layer3_standard_table_provider(),
+        );
+    }
+
+    let candidates = mpeg1_layer3_production_pcm_step_candidates(pcm.channels)?;
+    if should_encode_stereo_as_mid_side(pcm)? {
+        encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_mid_side_and_table_provider(
+            pcm,
+            candidates,
+            bitrate_kbps,
+            false,
+            0,
+            mpeg1_layer3_standard_table_provider(),
+        )
+    } else {
+        encode_mpeg1_layer3_pcm_frames_with_entropy_targeted_perceptual_reservoir_and_table_provider(
+            pcm,
+            candidates,
+            bitrate_kbps,
+            false,
+            0,
+            mpeg1_layer3_standard_table_provider(),
         )
     }
 }
