@@ -78,6 +78,11 @@ impl StreamDecoder {
 }
 
 /// Encodes interleaved PCM in the requested format.
+///
+/// Note on lossless formats: `Format::Wav` and `Format::Flac` encode to 16-bit
+/// integer PCM here. Float (or 24-bit) input is therefore quantized to 16 bits
+/// by this entry point — to keep full float precision, use the WAV float path
+/// (`sc_wav` `encode_as` with a float sample format) directly.
 pub fn encode(format: Format, pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     encode_with_mode(format, pcm, EncodeMode::Compatibility)
 }
