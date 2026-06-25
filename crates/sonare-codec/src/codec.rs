@@ -182,12 +182,10 @@ pub(crate) fn decode_impl(input: &[u8]) -> Result<AudioBuffer, Error> {
 
 #[cfg(feature = "decode")]
 pub(crate) fn is_m4a_container(input: &[u8]) -> bool {
-    input.len() >= 12
-        && input.get(4..8) == Some(b"ftyp")
-        && matches!(
-            input.get(8..12),
-            Some(b"M4A ") | Some(b"mp42") | Some(b"isom") | Some(b"iso2")
-        )
+    // Share the single brand-detection source of truth with `detect`, so the
+    // AAC decode router never disagrees with format detection about whether a
+    // container should take the AAC path.
+    sc_core::is_mp4_audio_container(input)
 }
 
 #[cfg(all(feature = "decode", feature = "mp3"))]

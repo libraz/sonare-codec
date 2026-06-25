@@ -342,18 +342,25 @@ pub(crate) fn select_magnitude_section_by_bit_cost<'a>(
     };
     let pairs = spectral_pairs_for_section(quantized, &section)?;
     let candidates = [
-        (AacCodebook::SignedPairs1.id(), tables.pairs1),
-        (AacCodebook::SignedPairs5.id(), tables.pairs5),
-        (AacCodebook::SignedPairs6.id(), tables.pairs6),
-        (7, aac_unsigned_pairs7_table()),
-        (8, aac_unsigned_pairs8_table()),
-        (9, aac_unsigned_pairs9_table()),
-        (10, aac_unsigned_pairs10_table()),
-        (AacCodebook::Escape.id(), tables.escape),
+        (AacCodebook::SignedPairs1, tables.pairs1),
+        (AacCodebook::SignedPairs5, tables.pairs5),
+        (AacCodebook::SignedPairs6, tables.pairs6),
+        (AacCodebook::UnsignedPairs7, aac_unsigned_pairs7_table()),
+        (AacCodebook::UnsignedPairs8, aac_unsigned_pairs8_table()),
+        (AacCodebook::UnsignedPairs9, aac_unsigned_pairs9_table()),
+        (AacCodebook::UnsignedPairs10, aac_unsigned_pairs10_table()),
+        (AacCodebook::Escape, tables.escape),
     ];
     let mut best: Option<(u8, &'a [HuffmanEntry<AacSpectralMagnitudePair>], usize)> = None;
-    for (codebook_id, table) in candidates {
+    for (codebook, table) in candidates {
         if table.is_empty() {
+            continue;
+        }
+        // This selector packs magnitudes through the explicit sign-bit packer, so
+        // only unsigned codebooks are valid here: a signed codebook (sign in the
+        // codeword) followed by sign bits would be undecodable. Skip them even
+        // when a (mis-supplied) magnitude table is provided for one.
+        if codebook.embeds_sign() {
             continue;
         }
         let Ok(packed) = pack_spectral_pairs_with_sign_bits(&pairs, table) else {
@@ -363,7 +370,7 @@ pub(crate) fn select_magnitude_section_by_bit_cost<'a>(
             .as_ref()
             .is_none_or(|(_, _, bit_len)| packed.bit_len < *bit_len)
         {
-            best = Some((codebook_id, table, packed.bit_len));
+            best = Some((codebook.id(), table, packed.bit_len));
         }
     }
 
@@ -599,4 +606,36 @@ pub fn plan_aac_lc_standard_spectral_sections_by_offsets_by_bit_cost(
         aac_lc_standard_signed_quad_tables(),
         aac_lc_standard_unsigned_quad_tables(),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn magnitude_section_never_selects_a_signed_codebook() {
+        // The magnitude selector packs explicit sign bits, so it must only ever
+        // emit unsigned codebooks (7-11). Even when a signed magnitude table is
+        // supplied (codebook 6 here), the sign-embedding codebooks are skipped so
+        // the section stays decodable instead of carrying a double sign.
+        let tables = AacSpectralMagnitudeTables {
+            pairs6: aac_unit_codebook6_spectral_tables().pairs6,
+            escape: aac_escape_table(),
+            ..Default::default()
+        };
+        let quantized = [3, -2, 1, -4, 2, -1];
+        let section = select_magnitude_section_by_bit_cost(0, quantized.len(), &quantized, tables)
+            .expect("a non-zero magnitude section");
+        assert!(
+            !matches!(
+                section.codebook_id,
+                id if AacCodebook::SignedPairs1.id() == id
+                    || AacCodebook::SignedPairs5.id() == id
+                    || AacCodebook::SignedPairs6.id() == id
+            ),
+            "magnitude selector chose a signed codebook id {}",
+            section.codebook_id
+        );
+        assert!((7..=11).contains(&section.codebook_id));
+    }
 }

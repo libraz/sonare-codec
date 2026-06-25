@@ -28,6 +28,23 @@ impl AacCodebook {
             Self::Escape => 11,
         }
     }
+
+    /// Whether this spectral Huffman codebook embeds each coefficient's sign in
+    /// the codeword (ISO/IEC 14496-3, Table 4.A.2).
+    ///
+    /// Signed codebooks (1/2 quads, 5/6 pairs) carry the sign inside the
+    /// codeword and MUST NOT be followed by explicit sign bits. Unsigned
+    /// codebooks (3/4 quads, 7–11 pairs) emit one sign bit per nonzero
+    /// coefficient after the codeword. Mixing the two — packing a signed
+    /// codebook through the sign-bit packer — yields a non-conformant,
+    /// undecodable section.
+    #[must_use]
+    pub fn embeds_sign(self) -> bool {
+        matches!(
+            self,
+            Self::SignedPairs1 | Self::SignedPairs5 | Self::SignedPairs6
+        )
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

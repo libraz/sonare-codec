@@ -610,7 +610,7 @@ pub fn detect(input: &[u8]) -> Option<Format> {
         }
         return None;
     }
-    if input.len() >= 12 && is_mp4_brand(input.get(4..12)) {
+    if is_mp4_audio_container(input) {
         return Some(Format::Aac);
     }
     if has_adts_sync(input) {
@@ -628,15 +628,63 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
         .any(|window| window == needle)
 }
 
-fn is_mp4_brand(box_header: Option<&[u8]>) -> bool {
-    let Some(box_header) = box_header else {
+/// Returns whether the input begins with an ISO-BMFF `ftyp` box whose major or
+/// compatible brand identifies an MP4 audio container (`.m4a` / `.mp4`).
+///
+/// This is the single source of truth for MP4/AAC container detection, shared by
+/// [`detect`] and the umbrella decode router so the two never disagree about
+/// whether a file should take the AAC path. Both the major brand and every
+/// compatible brand are checked (the 4-byte `minor_version` field is skipped),
+/// and the scan is bounded by the declared `ftyp` box size and the actual input
+/// length, so a malformed header cannot trigger an out-of-bounds read.
+#[must_use]
+pub fn is_mp4_audio_container(input: &[u8]) -> bool {
+    // The `ftyp` box must come first; its 32-bit size is at offset 0.
+    if input.get(4..8) != Some(b"ftyp") {
+        return false;
+    }
+    let Some(size_bytes) = input.get(0..4) else {
         return false;
     };
-    box_header.get(0..4) == Some(b"ftyp")
-        && matches!(
-            box_header.get(4..8),
-            Some(b"M4A ") | Some(b"mp42") | Some(b"isom") | Some(b"iso2")
-        )
+    let box_size =
+        u32::from_be_bytes([size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3]]) as usize;
+    // A declared size of 0 means "to end of file"; otherwise bound by it.
+    let scan_end = if box_size == 0 {
+        input.len()
+    } else {
+        box_size.min(input.len())
+    };
+
+    // Major brand at [8,12), then compatible brands every 4 bytes. Skip the
+    // minor_version field at [12,16), which is arbitrary and not a brand.
+    let mut offset = 8;
+    while offset + 4 <= scan_end {
+        if offset != 12 {
+            if let Some(brand) = input.get(offset..offset + 4) {
+                if is_mp4_audio_brand(brand) {
+                    return true;
+                }
+            }
+        }
+        offset += 4;
+    }
+    false
+}
+
+fn is_mp4_audio_brand(brand: &[u8]) -> bool {
+    matches!(
+        brand,
+        b"M4A "
+            | b"M4B "
+            | b"mp41"
+            | b"mp42"
+            | b"isom"
+            | b"iso2"
+            | b"iso4"
+            | b"iso5"
+            | b"iso6"
+            | b"dash"
+    )
 }
 
 fn has_mp3_frame_sync(input: &[u8]) -> bool {
@@ -681,6 +729,23 @@ mod tests {
         assert_eq!(detect(b"OggS\0\0\0\x01vorbis"), Some(Format::Vorbis));
         assert_eq!(detect(b"\0\0\0\x18ftypM4A "), Some(Format::Aac));
         assert_eq!(detect(&[0xff, 0xf1, 0x50, 0x80]), Some(Format::Aac));
+    }
+
+    #[test]
+    fn detects_expanded_mp4_audio_brands() {
+        // Major brand in the expanded audio set.
+        assert_eq!(detect(b"\0\0\0\x18ftypM4B "), Some(Format::Aac));
+        assert_eq!(detect(b"\0\0\0\x18ftypmp41"), Some(Format::Aac));
+        assert_eq!(detect(b"\0\0\0\x18ftypiso5"), Some(Format::Aac));
+        // Major brand is unknown, but an audio brand appears in the compatible
+        // brands list (after the 4-byte minor_version) — still detected.
+        assert_eq!(detect(b"\0\0\0\x18ftypqt  \0\0\0\0M4A "), Some(Format::Aac));
+        // A 4-byte minor_version that happens to spell a brand must NOT match:
+        // here the major brand is unknown and the only "M4A " sits in the
+        // minor_version slot, so detection should fall through.
+        assert_eq!(detect(b"\0\0\0\x10ftypqt  M4A "), None);
+        // Non-ftyp leading box is not an MP4 audio container.
+        assert!(!super::is_mp4_audio_container(b"\0\0\0\x18moovM4A "));
     }
 
     #[test]
