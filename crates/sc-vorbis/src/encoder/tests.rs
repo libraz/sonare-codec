@@ -428,6 +428,34 @@ mod tests {
     }
 
     #[test]
+    fn high_amplitude_near_nyquist_tones_survive_the_residue_cascade() {
+        // Guard against the residue cascade clipping a loud isolated peak. The
+        // two-stage cascade represents each MDCT coefficient as coarse
+        // (step 4.0, ~[-256, 256)) plus fine residue; a near-Nyquist full-scale
+        // tone concentrates energy into a few bins, the worst case for a peak that
+        // overruns the coarse book's reach. Encode full-scale tones across the
+        // band (including just below Nyquist) and require each to track the input
+        // through Symphonia. A regression that narrowed the coarse book or
+        // sparsened the floor would clip the peak and collapse this correlation.
+        for &freq in &[2_000.0f32, 11_000.0, 17_000.0, 23_000.0, 23_500.0] {
+            let frames = 9_600usize;
+            let mut samples = Vec::with_capacity(frames);
+            for frame in 0..frames {
+                let t = frame as f32 / 48_000.0;
+                samples.push((2.0 * std::f32::consts::PI * freq * t).sin() * 0.97);
+            }
+            let pcm = AudioBuffer::new(48_000, 1, samples).expect("pcm");
+            let bytes = encode(&pcm).expect("encode");
+            let decoded = crate::decode(&bytes).expect("decode");
+            let (corr, _lag) = best_corr(&pcm.samples, &decoded.samples, 1024);
+            assert!(
+                corr > 0.95,
+                "full-scale {freq} Hz tone clipped by the cascade: correlation {corr}"
+            );
+        }
+    }
+
+    #[test]
     fn switched_stream_body_reconstructs_faithfully() {
         // The pre-echo test guards the quiet region *before* an onset, and the
         // length tests guard the granule arithmetic, but nothing asserts the
