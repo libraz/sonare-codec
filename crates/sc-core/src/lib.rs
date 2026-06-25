@@ -298,7 +298,12 @@ impl<'a> BitReader<'a> {
 
     #[must_use]
     pub fn remaining_bits(&self) -> usize {
-        self.input.len() * 8 - self.bit_pos
+        // Saturating: on 32-bit targets (wasm) `len() * 8` would overflow usize
+        // for inputs > ~512 MB, panicking in debug and wrapping in release.
+        self.input
+            .len()
+            .saturating_mul(8)
+            .saturating_sub(self.bit_pos)
     }
 
     pub fn read_bool(&mut self) -> Result<bool, Error> {
@@ -787,6 +792,20 @@ mod tests {
         assert_eq!(reader.read_bits(3).unwrap(), 0b101);
         assert_eq!(reader.read_signed_bits(4).unwrap(), -4);
         assert_eq!(reader.byte_pos(), 2);
+    }
+
+    #[test]
+    fn remaining_bits_tracks_reads_without_overflow() {
+        let mut reader = BitReader::new(&[0xff, 0xff]);
+        assert_eq!(reader.remaining_bits(), 16);
+        reader.read_bits(5).unwrap();
+        assert_eq!(reader.remaining_bits(), 11);
+        reader.read_bits(11).unwrap();
+        assert_eq!(reader.remaining_bits(), 0);
+        // Saturating math keeps remaining_bits well-defined (no panic/wrap) even
+        // when the consumed position meets the end of the buffer.
+        assert!(reader.read_bool().is_err());
+        assert_eq!(reader.remaining_bits(), 0);
     }
 
     #[test]
