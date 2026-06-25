@@ -96,6 +96,35 @@ fn aac_mono_roundtrip_fills_budget_and_reconstructs() {
 }
 
 #[test]
+fn aac_explicit_bitrate_api_preserves_level() {
+    // `encode_aac_adts_with_bitrate` previously pinned the scale factors to 180
+    // regardless of the quantizer step chosen by the bit-cost search, shifting
+    // the decoded level by orders of magnitude. It must now track the input
+    // level like the production path.
+    let sample_rate = 44_100;
+    let frames = 44_100;
+    let pcm = sweep_pcm(frames, sample_rate, 1, 0.5);
+
+    let aac =
+        sonare_codec::encode_aac_adts_with_bitrate(&pcm, 128_000).expect("AAC bitrate encode");
+    let decoded = sonare_codec::decode(&aac).expect("Symphonia decode");
+    assert_eq!(decoded.channels, 1);
+
+    let corr = aligned_channel_corr(&pcm.samples, &decoded.samples, 8_192, 4_000);
+    let level = rms(&decoded.samples) / rms(&pcm.samples).max(1e-9);
+    eprintln!("aac bitrate-api: corr={corr:.4} level_ratio={level:.3}");
+
+    assert!(
+        corr > 0.95,
+        "explicit-bitrate AAC correlation too low: {corr:.4}"
+    );
+    assert!(
+        (0.5..2.0).contains(&level),
+        "explicit-bitrate AAC level not preserved: ratio {level:.3}"
+    );
+}
+
+#[test]
 fn aac_stereo_roundtrip_fills_budget_and_reconstructs() {
     let sample_rate = 48_000;
     let frames = 48_000;

@@ -25,11 +25,26 @@ compared bit-exactly against a reference decoder.
 | WAV | ✅ PCM u8 / s16 / s24 / s32 / f32 | ✅ lossless — PCM16 default, PCM24/Float32 via `encode_as` |
 | FLAC | ✅ fixed/LPC subframes, all stereo modes | ✅ lossless — 16-bit, constant/fixed-predictor + stereo decorrelation |
 | MP3 | ✅ (Symphonia) | 🚧 MPEG-1 (32/44.1/48 kHz) + MPEG-2 LSF (16/22.05/24 kHz), mono/stereo, oracle-gated |
-| AAC-LC | ✅ (Symphonia) | 🚧 ADTS + M4A, mono/stereo, oracle-gated production candidate |
-| Vorbis | ✅ (Symphonia) | ✅ pure-Rust, mono/stereo (block switching + stereo coupling) |
-| Opus | ✅ (opus-decoder) | ✅ pure-Rust CELT-only fullband, 48 kHz mono/stereo |
+| AAC-LC | ✅ (Symphonia) | 🚧 ADTS + M4A, mono/stereo, oracle-gated — needs `aac` feature |
+| Vorbis | ✅ (Symphonia) | ✅ pure-Rust, mono/stereo — needs `vorbis` feature |
+| Opus | 🔌 needs `opus` feature (pure-Rust decoder) | ✅ pure-Rust CELT-only fullband, 48 kHz mono/stereo — needs `opus` feature |
 
-`✅` usable today · `🚧` incomplete production candidate.
+`✅` usable today · `🚧` incomplete production candidate · `🔌` requires opting
+into a non-default cargo feature.
+
+### Cargo features
+
+The default feature set is `["decode", "wav", "flac", "mp3"]`, so a plain
+`cargo add sonare-codec` gives you decode (via Symphonia) plus WAV/FLAC/MP3
+encode. **AAC, Vorbis, and Opus encode — and Opus decode — are opt-in**: enable
+the matching `aac` / `vorbis` / `opus` feature. Calling those paths without the
+feature returns `Error::UnsupportedFeature` naming the feature to enable (not a
+bare `UnsupportedFormat`). Opus decode is not available through the Symphonia
+backend and always requires the `opus` feature.
+
+```toml
+sonare-codec = { version = "0.1", features = ["aac", "vorbis", "opus"] }
+```
 
 The Vorbis and Opus encoders are pure-Rust with no C dependency, so they build
 for the wasm target. MP3 and AAC-LC encode emit non-silent production
@@ -55,7 +70,8 @@ in progress; their public `encode()` output should be treated as preliminary.
 The umbrella crate dispatches through `decode(input)` and `encode(format, pcm)`.
 `encode_with_mode(format, pcm, EncodeMode::ProductionOnly)` gates only the MP3
 and AAC-LC scaffold paths — it rejects non-silent MP3/AAC input at unsupported
-sample rates or channel counts, while WAV, FLAC, Vorbis, and Opus always encode.
+sample rates or channel counts, while WAV, FLAC, Vorbis, and Opus encode
+unconditionally (subject to their cargo features being enabled).
 The incomplete AAC and
 MP3 encoders also expose a large set of low-level helpers (section/codebook
 planning, scale-factor and entropy packing, step search, reservoir telemetry)

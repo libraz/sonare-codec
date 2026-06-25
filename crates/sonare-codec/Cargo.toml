@@ -10,7 +10,14 @@ rust-version.workspace = true
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
-include = ["Cargo.toml", "LICENSE", "NOTICE", "README.md", "src/**"]
+include = [
+    "Cargo.toml",
+    "LICENSE",
+    "NOTICE",
+    "LICENSE-THIRDPARTY",
+    "README.md",
+    "src/**",
+]
 
 [features]
 default = ["decode", "wav", "flac", "mp3"]

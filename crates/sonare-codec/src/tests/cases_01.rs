@@ -56,6 +56,63 @@
     }
 
     #[test]
+    fn unsupported_encode_features_report_actionable_error() {
+        // A non-default codec must fail with UnsupportedFeature (which names the
+        // feature to enable), not a bare UnsupportedFormat that hides the cause.
+        #[cfg(any(
+            not(feature = "aac"),
+            not(feature = "vorbis"),
+            not(feature = "opus")
+        ))]
+        let pcm = AudioBuffer::new(48_000, 1, vec![0.0, 0.1, -0.1]).unwrap();
+
+        #[cfg(not(feature = "aac"))]
+        assert!(matches!(
+            encode(Format::Aac, &pcm),
+            Err(Error::UnsupportedFeature(_))
+        ));
+        #[cfg(not(feature = "vorbis"))]
+        assert!(matches!(
+            encode(Format::Vorbis, &pcm),
+            Err(Error::UnsupportedFeature(_))
+        ));
+        #[cfg(not(feature = "opus"))]
+        assert!(matches!(
+            encode(Format::Opus, &pcm),
+            Err(Error::UnsupportedFeature(_))
+        ));
+    }
+
+    #[test]
+    fn stream_decoder_rejects_oversized_buffer() {
+        // A never-completing/garbage stream must not grow the buffer without
+        // bound; an oversized accumulation is rejected and the buffer cleared.
+        let mut decoder = StreamDecoder::new();
+        let huge = vec![0_u8; (64 << 20) + 1];
+
+        let err = decoder.decode_stream(&huge).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::InvalidInput("stream exceeded maximum buffered size")
+        ));
+        assert_eq!(decoder.buffered_len(), 0);
+    }
+
+    #[test]
+    fn stream_decoder_clears_buffer_on_hard_error() {
+        // A terminal decode error must drop the buffer so the next chunk starts
+        // fresh instead of re-decoding (and re-failing on) a growing buffer.
+        let pcm = AudioBuffer::new(44_100, 1, vec![0.0, 0.25, -0.25]).unwrap();
+        let mut wav = encode(Format::Wav, &pcm).unwrap();
+        wav[0..4].copy_from_slice(b"XXXX");
+        let mut decoder = StreamDecoder::new();
+
+        assert!(decoder.decode_stream(&wav).is_err());
+        assert_eq!(decoder.buffered_len(), 0);
+    }
+
+    #[test]
     #[cfg(feature = "flac")]
     fn dispatches_flac_roundtrip() {
         let samples = (0..128)

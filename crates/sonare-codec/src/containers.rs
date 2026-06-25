@@ -193,7 +193,9 @@ pub(crate) fn encode_wav_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "wav"))]
 pub(crate) fn encode_wav_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "WAV encode requires the \"wav\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "flac")]
@@ -203,7 +205,9 @@ pub(crate) fn encode_flac_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "flac"))]
 pub(crate) fn encode_flac_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "FLAC encode requires the \"flac\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "mp3")]
@@ -213,7 +217,9 @@ pub(crate) fn encode_mp3_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "mp3"))]
 pub(crate) fn encode_mp3_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "MP3 encode requires the \"mp3\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "vorbis")]
@@ -223,7 +229,9 @@ pub(crate) fn encode_vorbis_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "vorbis"))]
 pub(crate) fn encode_vorbis_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "Vorbis encode requires the \"vorbis\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "opus")]
@@ -233,7 +241,9 @@ pub(crate) fn encode_opus_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "opus"))]
 pub(crate) fn encode_opus_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "Opus encode requires the \"opus\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "aac")]
@@ -243,5 +253,7 @@ pub(crate) fn encode_aac_impl(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 
 #[cfg(not(feature = "aac"))]
 pub(crate) fn encode_aac_impl(_pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
-    Err(Error::UnsupportedFormat)
+    Err(Error::UnsupportedFeature(
+        "AAC encode requires the \"aac\" cargo feature",
+    ))
 }

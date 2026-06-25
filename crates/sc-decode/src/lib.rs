@@ -13,6 +13,10 @@ use symphonia::core::formats::TrackType;
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 
+/// Upper bound on buffered partial input before a stream is rejected, so a
+/// never-completing or garbage stream cannot grow the buffer without limit.
+const MAX_STREAM_BUFFER: usize = 64 << 20;
+
 #[derive(Default)]
 pub struct SymphoniaDecoder {
     pending: Vec<u8>,
@@ -34,6 +38,10 @@ impl Decoder for SymphoniaDecoder {
         if chunk.is_empty() && self.pending.is_empty() {
             return Ok(None);
         }
+        if self.pending.len().saturating_add(chunk.len()) > MAX_STREAM_BUFFER {
+            self.pending.clear();
+            return Err(Error::InvalidInput("stream exceeded maximum buffered size"));
+        }
         self.pending.extend_from_slice(chunk);
         match decode(&self.pending) {
             Ok(buffer) => {
@@ -41,7 +49,12 @@ impl Decoder for SymphoniaDecoder {
                 Ok(Some(buffer))
             }
             Err(err) if is_incomplete_stream_error(&err) => Ok(None),
-            Err(err) => Err(err),
+            Err(err) => {
+                // Terminal error: drop the buffer so the next chunk starts fresh
+                // instead of re-decoding (and re-failing on) a growing buffer.
+                self.pending.clear();
+                Err(err)
+            }
         }
     }
 }

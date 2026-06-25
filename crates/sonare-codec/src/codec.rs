@@ -13,6 +13,10 @@ pub enum EncodeMode {
     ProductionOnly,
 }
 
+/// Upper bound on buffered partial input before a stream is rejected, so a
+/// never-completing or garbage stream cannot grow the buffer without limit.
+const MAX_STREAM_BUFFER: usize = 64 << 20;
+
 /// Stateful decoder that buffers chunks until a complete audio stream decodes.
 #[derive(Default)]
 pub struct StreamDecoder {
@@ -30,6 +34,10 @@ impl StreamDecoder {
         if chunk.is_empty() && self.pending.is_empty() {
             return Ok(None);
         }
+        if self.pending.len().saturating_add(chunk.len()) > MAX_STREAM_BUFFER {
+            self.pending.clear();
+            return Err(Error::InvalidInput("stream exceeded maximum buffered size"));
+        }
         self.pending.extend_from_slice(chunk);
         match decode(&self.pending) {
             Ok(pcm) => {
@@ -37,7 +45,13 @@ impl StreamDecoder {
                 Ok(Some(pcm))
             }
             Err(err) if is_incomplete_stream_error(&err) => Ok(None),
-            Err(err) => Err(err),
+            Err(err) => {
+                // A hard decode error is terminal for this stream; drop the
+                // buffer so the next chunk starts fresh instead of re-decoding
+                // (and re-failing on) an ever-growing buffer.
+                self.pending.clear();
+                Err(err)
+            }
         }
     }
 
@@ -189,8 +203,14 @@ pub(crate) fn decode_opus_fallback(input: &[u8]) -> Option<Result<AudioBuffer, E
 }
 
 #[cfg(all(feature = "decode", not(feature = "opus")))]
-pub(crate) fn decode_opus_fallback(_input: &[u8]) -> Option<Result<AudioBuffer, Error>> {
-    None
+pub(crate) fn decode_opus_fallback(input: &[u8]) -> Option<Result<AudioBuffer, Error>> {
+    // Symphonia is not built with Opus support, so surface an actionable error
+    // (rather than a bare UnsupportedFormat) when the input is clearly Opus.
+    (detect(input) == Some(Format::Opus)).then(|| {
+        Err(Error::UnsupportedFeature(
+            "Opus decode requires the \"opus\" cargo feature",
+        ))
+    })
 }
 
 #[cfg(not(feature = "decode"))]
@@ -273,12 +293,17 @@ pub fn decode_vorbis(_input: &[u8]) -> Result<AudioBuffer, Error> {
 }
 
 #[cfg(all(feature = "decode", not(feature = "opus")))]
-/// Decodes Opus bytes into interleaved PCM when the decode backend supports it.
+/// Decodes Opus bytes into interleaved PCM.
+///
+/// The Symphonia decode backend is not built with Opus support, so Opus decode
+/// requires enabling the first-party `opus` feature.
 pub fn decode_opus(input: &[u8]) -> Result<AudioBuffer, Error> {
     if detect(input) != Some(Format::Opus) {
         return Err(Error::UnsupportedFormat);
     }
-    sc_decode::decode(input)
+    Err(Error::UnsupportedFeature(
+        "Opus decode requires the \"opus\" cargo feature",
+    ))
 }
 
 #[cfg(feature = "opus")]

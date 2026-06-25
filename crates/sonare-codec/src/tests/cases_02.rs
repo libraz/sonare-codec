@@ -346,8 +346,26 @@
         assert!(super::aac_standard_id_selected_scale_factor_balance_profile(3).is_err());
         assert_eq!(&mono_adts[..2], &[0xff, 0xf1]);
         assert_eq!(&stereo_adts[..2], &[0xff, 0xf1]);
-        assert_eq!(mono_adts_high_level, mono_adts);
-        assert_eq!(stereo_adts_high_level, stereo_adts);
+        // The high-level `encode_aac_adts_with_bitrate` derives scale factors from
+        // the selected quantizer step (see H-2), so it matches the
+        // selected-scale-factor path at the same bitrate — not the fixed-scale
+        // low-level helper, which would mis-declare the level.
+        assert_eq!(
+            mono_adts_high_level,
+            super::encode_aac_adts_with_selected_scale_factors_and_bitrate(
+                &mono,
+                mono_target_bitrate
+            )
+            .unwrap()
+        );
+        assert_eq!(
+            stereo_adts_high_level,
+            super::encode_aac_adts_with_selected_scale_factors_and_bitrate(
+                &stereo,
+                stereo_target_bitrate
+            )
+            .unwrap()
+        );
         assert_eq!(selected_mono_details, selected_mono_core_details);
         assert_eq!(selected_stereo_details, selected_stereo_core_details);
         assert_eq!(selected_mono_details.len(), 2);

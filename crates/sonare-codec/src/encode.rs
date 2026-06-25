@@ -41,16 +41,24 @@ pub fn encode_aac_adts_with_bitrate(
     let adts = AdtsConfig::aac_lc(pcm.sample_rate, channels);
     let offsets = aac_lc_long_window_scale_factor_band_offsets(pcm.sample_rate)
         .ok_or(Error::UnsupportedFeature("AAC-LC sample rate"))?;
-    let channel_config = AacLongBlockConfig::new(180, (offsets.len() - 1) as u8);
-    let scale_factors = vec![i16::from(channel_config.global_gain); offsets.len() - 1];
-    let channel = AacScaleFactorChannel::new(channel_config, &scale_factors);
+    // Derive the global gain / scale factors from the quantizer step chosen by
+    // the bit-cost search rather than pinning them to a fixed value: a fixed
+    // scale factor that does not match the step the spectrum was quantized on
+    // shifts the decoded level by orders of magnitude. The selected-scale-factor
+    // path recomputes the gain from each candidate step, so the declared scale
+    // factors always match the grid.
+    let channel_config = AacLongBlockConfig::new(
+        180,
+        u8::try_from(offsets.len() - 1)
+            .map_err(|_| Error::InvalidInput("AAC scale-factor band count exceeds u8"))?,
+    );
     let scale_factor_table = aac_scale_factor_delta_table();
     let spectral_tables = aac_lc_standard_spectral_tables();
 
     match pcm.channels {
-        1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        1 => encode_pcm_mono_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
             adts,
-            channel,
+            channel_config,
             pcm,
             offsets,
             AAC_LC_PCM_STEP_CANDIDATES,
@@ -58,10 +66,10 @@ pub fn encode_aac_adts_with_bitrate(
             &scale_factor_table,
             spectral_tables,
         ),
-        2 => encode_pcm_stereo_long_block_adts_stream_with_offsets_and_scale_factors_and_bitrate_by_bit_cost(
+        2 => encode_pcm_stereo_long_block_adts_stream_with_offsets_and_selected_scale_factors_and_bitrate_by_bit_cost(
             adts,
-            channel,
-            channel,
+            channel_config,
+            channel_config,
             pcm,
             offsets,
             AAC_LC_PCM_STEP_CANDIDATES,
