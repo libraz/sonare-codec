@@ -284,7 +284,8 @@ fn parse_ogg_pages(mut input: &[u8]) -> Result<Vec<OggPage>, Error> {
     let mut pages = Vec::new();
     while !input.is_empty() {
         if input.len() < 27 {
-            return Err(Error::InvalidInput("Ogg page header is truncated"));
+            // The buffer ended mid-page: more data is required to finish it.
+            return Err(Error::Incomplete);
         }
         if input.get(..4) != Some(OGG_CAPTURE) {
             return Err(Error::InvalidInput("Ogg capture pattern is missing"));
@@ -302,7 +303,7 @@ fn parse_ogg_pages(mut input: &[u8]) -> Result<Vec<OggPage>, Error> {
         let segment_count = usize::from(input[26]);
         let segment_table_end = 27 + segment_count;
         if input.len() < segment_table_end {
-            return Err(Error::InvalidInput("Ogg segment table is truncated"));
+            return Err(Error::Incomplete);
         }
         let laces = &input[27..segment_table_end];
         let payload_len = laces
@@ -313,7 +314,7 @@ fn parse_ogg_pages(mut input: &[u8]) -> Result<Vec<OggPage>, Error> {
             .checked_add(payload_len)
             .ok_or(Error::InvalidInput("Ogg page length overflows"))?;
         if input.len() < page_end {
-            return Err(Error::InvalidInput("Ogg page payload is truncated"));
+            return Err(Error::Incomplete);
         }
 
         let payload = &input[segment_table_end..page_end];
@@ -387,9 +388,9 @@ fn collect_packets(pages: &[OggPage]) -> Result<Vec<Vec<u8>>, Error> {
     }
 
     if !pending.is_empty() {
-        return Err(Error::InvalidInput(
-            "Ogg stream ends inside a continued packet",
-        ));
+        // A packet continues past the last available page: the stream is cut
+        // off mid-packet, so more data is required to finish decoding it.
+        return Err(Error::Incomplete);
     }
 
     Ok(packets)
@@ -527,11 +528,7 @@ fn looks_like_incomplete_ogg_opus_prefix(input: &[u8]) -> bool {
 }
 
 fn is_incomplete_ogg_stream_error(error: &Error) -> bool {
-    matches!(
-        error,
-        Error::InvalidInput(reason)
-            if reason.contains("truncated") || reason.contains("ends inside a continued packet")
-    )
+    matches!(error, Error::Incomplete)
 }
 
 fn contains(haystack: &[u8], needle: &[u8]) -> bool {
@@ -587,8 +584,10 @@ mod tests {
 
     #[test]
     fn rejects_truncated_ogg_page() {
+        // A buffer that ends mid-page is reported as incomplete so streaming
+        // callers buffer more data rather than treating it as malformed.
         let err = parse_ogg_pages(b"OggS").expect_err("truncated");
-        assert!(matches!(err, Error::InvalidInput(_)));
+        assert!(matches!(err, Error::Incomplete));
     }
 
     #[test]
