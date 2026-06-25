@@ -211,11 +211,9 @@ pub(crate) fn decode_opus_fallback(input: &[u8]) -> Option<Result<AudioBuffer, E
 pub(crate) fn decode_opus_fallback(input: &[u8]) -> Option<Result<AudioBuffer, Error>> {
     // Symphonia is not built with Opus support, so surface an actionable error
     // (rather than a bare UnsupportedFormat) when the input is clearly Opus.
-    (detect(input) == Some(Format::Opus)).then(|| {
-        Err(Error::UnsupportedFeature(
-            "Opus decode requires the \"opus\" cargo feature",
-        ))
-    })
+    (detect(input) == Some(Format::Opus)).then_some(Err(Error::UnsupportedFeature(
+        "Opus decode requires the \"opus\" cargo feature",
+    )))
 }
 
 #[cfg(not(feature = "decode"))]

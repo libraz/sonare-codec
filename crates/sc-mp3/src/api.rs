@@ -61,11 +61,21 @@ pub fn supports_production_encode(pcm: &AudioBuffer) -> bool {
 /// Silent input routes through the compact zero-spectral frame scaffold.
 /// Non-silent mono input uses the psychoacoustic scale-factor long-block
 /// scaffold with a constant-bitrate padding schedule and the bit-reservoir
-/// packer. Non-silent mono routes through the entropy-targeted low-band
-/// gain/global-gain-bias reservoir profile, while stereo keeps the
-/// entropy-targeted perceptual reservoir selector. The quantizer and quality
-/// proxy are still intentionally coarse, so full rate control, stereo
-/// true-polyphase readiness, and VBR are still incomplete.
+/// packer.
+///
+/// The mono and stereo non-silent paths are deliberately asymmetric, each tuned
+/// independently for its channel count:
+/// - **Mono** uses a single fixed quantizer step (`2.0`) combined with a
+///   low-band gain / global-gain-bias reservoir profile. It does not run a step
+///   search; the gain profile was calibrated to fill the budget for one channel.
+/// - **Stereo** runs the entropy-targeted perceptual reservoir selector over the
+///   full [`mpeg1_layer3_production_pcm_step_candidates`] search. Note those
+///   candidate lists are themselves asymmetric (mono returns a 10-entry coarse
+///   list, stereo a 21-entry finer list); the stereo `encode` path is the only
+///   production caller that exercises the search.
+///
+/// The quantizer and quality proxy are still intentionally coarse, so full rate
+/// control, stereo true-polyphase readiness, and VBR are still incomplete.
 pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     if pcm.channels != 1 && pcm.channels != 2 {
         return Err(Error::UnsupportedFeature(

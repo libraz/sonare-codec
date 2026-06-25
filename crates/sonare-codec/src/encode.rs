@@ -31,6 +31,22 @@ pub fn encode_aac(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
     encode_aac_impl(pcm)
 }
 
+/// Encodes mono/stereo PCM as an AAC-LC ADTS stream targeting `target_bitrate_bps`.
+///
+/// Two behaviors are worth noting for callers:
+///
+/// - **Frame granularity / length.** AAC-LC codes audio in fixed 1024-sample
+///   blocks, so the encoder pads the final block with silence. The decoded
+///   stream is therefore a whole multiple of 1024 samples per channel and may be
+///   up to 1023 samples longer than the input. This path is not sample-accurate;
+///   for sample-exact round-trips use a lossless format (WAV/FLAC).
+/// - **Very low target bitrates.** `target_bitrate_bps` is enforced as a
+///   per-frame byte budget. If the budget is so small that no quantizer step in
+///   the search produces a frame that fits (e.g. ~17 kbps at 44.1 kHz, where the
+///   budget is only tens of bytes per frame), the encoder returns
+///   [`Error::UnsupportedFeature`] rather than emitting a degraded frame. Choose
+///   a higher bitrate in that case. The default [`encode_aac`] path uses a
+///   production budget that always admits a valid frame.
 #[cfg(feature = "aac")]
 pub fn encode_aac_adts_with_bitrate(
     pcm: &AudioBuffer,

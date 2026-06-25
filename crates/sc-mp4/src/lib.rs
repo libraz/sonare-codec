@@ -395,6 +395,16 @@ struct AudioSpecificConfig {
     channels: u8,
 }
 
+/// Extracts the profile, sample-rate index, and channel configuration from the
+/// DecoderSpecificInfo of an `esds` box.
+///
+/// Scope: this recognizes only the canonical 2-byte AudioSpecificConfig used by
+/// plain AAC-LC, located by scanning for the DecoderSpecificInfo tag/length
+/// prefix `0x05 0x02`. It does not parse the full MPEG-4 descriptor tree, nor
+/// AudioSpecificConfigs that use the 4-bit sample-rate-index escape (0xF, an
+/// explicit 24-bit rate) or the 6-bit audioObjectType escape (profile 31). Those
+/// inputs return [`Error::UnsupportedFormat`] here; the umbrella decoder falls
+/// back to Symphonia, which parses the descriptor tree in full.
 fn parse_audio_specific_config(esds_payload: &[u8]) -> Result<AudioSpecificConfig, Error> {
     let descriptor = esds_payload
         .windows(4)
