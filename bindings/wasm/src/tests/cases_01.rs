@@ -191,7 +191,12 @@
     #[test]
     fn stream_decoder_buffers_until_complete_input() {
         let samples = vec![0.0, 0.25, -0.25, 0.5];
-        let encoded = encode_audio("wav", 44_100, 1, &samples).unwrap();
+        // Use a 16-bit WAV so a 2-byte truncation lands mid-frame and is
+        // unambiguously incomplete; this exercises StreamDecoder buffering, not
+        // the (now float-by-default) WAV sample format.
+        let pcm = sonare_codec::AudioBuffer::new(44_100, 1, samples.clone()).unwrap();
+        let encoded =
+            sonare_codec::encode_wav_as(&pcm, sonare_codec::WavSampleFormat::Pcm16).unwrap();
         let split = encoded.len() - 2;
         let mut decoder = StreamDecoder::new();
 
