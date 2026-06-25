@@ -3,10 +3,22 @@ use super::*;
 pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     let (stream_info, audio_start) = parse_metadata(input)?;
     let mut cursor = audio_start;
-    let sample_capacity = usize::try_from(stream_info.total_samples)
+    // The STREAMINFO total_samples field is attacker-controlled (up to 2^36-1),
+    // so reserving `total_samples * channels` directly is a decompression bomb.
+    // Bound the speculative reservation against the actual remaining input: even
+    // maximally compressible frames cannot decode to more than this many samples,
+    // and `samples.extend()` grows the buffer if the estimate is short.
+    const MIN_FLAC_FRAME_BYTES: usize = 6;
+    let declared = usize::try_from(stream_info.total_samples)
         .ok()
-        .and_then(|frames| frames.checked_mul(usize::from(stream_info.channels)))
-        .unwrap_or(0);
+        .and_then(|frames| frames.checked_mul(usize::from(stream_info.channels)));
+    let remaining = input.len().saturating_sub(audio_start);
+    let max_block = usize::from(stream_info.max_block_size).max(1);
+    let capacity_bound = (remaining / MIN_FLAC_FRAME_BYTES)
+        .saturating_add(1)
+        .saturating_mul(max_block)
+        .saturating_mul(usize::from(stream_info.channels));
+    let sample_capacity = declared.unwrap_or(capacity_bound).min(capacity_bound);
     let mut samples = Vec::with_capacity(sample_capacity);
     let mut md5 = Md5::new();
     let mut decoded_frames = 0_usize;

@@ -925,4 +925,23 @@ mod tests {
             self.bit_pos += 1;
         }
     }
+
+    #[test]
+    fn decode_does_not_allocate_on_crafted_total_samples() {
+        // A crafted STREAMINFO with the maximum 36-bit total_samples must not
+        // drive an unbounded allocation (decompression bomb): decode must fail
+        // gracefully against the tiny remaining input, not OOM/abort.
+        let pcm = AudioBuffer::new(48_000, 2, vec![0.1, -0.1, 0.2, -0.2]).unwrap();
+        let mut encoder = FlacEncoder::new();
+        let mut flac = encoder.encode(&pcm).unwrap();
+
+        // STREAMINFO packed 8-byte field starts at offset 18 (marker 4 + block
+        // header 4 + min/max block 4 + min/max frame 6); total_samples is its
+        // low 36 bits. Set them all to 1 (~68.7 billion frames).
+        let mut packed = u64::from_be_bytes(flac[18..26].try_into().unwrap());
+        packed |= 0x0000_000F_FFFF_FFFF;
+        flac[18..26].copy_from_slice(&packed.to_be_bytes());
+
+        assert!(decode(&flac).is_err());
+    }
 }
