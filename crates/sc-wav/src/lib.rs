@@ -210,7 +210,9 @@ pub fn encode_as(pcm: &AudioBuffer, sample_format: WavSampleFormat) -> Result<Ve
                 out.extend_from_slice(&quantize_i24(*sample).to_le_bytes()[0..3]);
             }
             WavSampleFormat::Float32 => {
-                out.extend_from_slice(&sample.clamp(-1.0, 1.0).to_le_bytes());
+                // Float32 WAV is lossless: preserve out-of-range headroom verbatim
+                // (clamping would silently clip mastering/intermediate audio).
+                out.extend_from_slice(&sample.to_le_bytes());
             }
         }
     }
@@ -280,7 +282,13 @@ fn decode_samples(format: FormatChunk, data: &[u8]) -> Result<AudioBuffer, Error
             (FLOAT_FORMAT, 32) => f32::from_le_bytes(read_array::<4>(data, cursor)?),
             _ => return Err(Error::UnsupportedFeature("WAV sample format")),
         };
-        samples.push(sample.clamp(-1.0, 1.0));
+        // Integer PCM is inherently in range; float WAV is lossless and may carry
+        // out-of-range headroom, so only the integer paths are clamped.
+        if format.audio_format == FLOAT_FORMAT {
+            samples.push(sample);
+        } else {
+            samples.push(sample.clamp(-1.0, 1.0));
+        }
         cursor += bytes_per_sample;
     }
 
@@ -407,5 +415,17 @@ mod tests {
 
         assert_eq!(decode(&pcm24).unwrap().samples.len(), 3);
         assert_eq!(decode(&float32).unwrap().samples, pcm.samples);
+    }
+
+    #[test]
+    fn float32_roundtrip_preserves_out_of_range_samples_bit_exact() {
+        // Float32 WAV is lossless; mastering/intermediate audio with |s| > 1.0
+        // headroom must survive encode->decode unchanged (no clamping).
+        let pcm = AudioBuffer::new(48_000, 1, vec![2.5, -3.0, 1.5, -1.25, 0.0, 1.0, -1.0]).unwrap();
+
+        let encoded = encode_as(&pcm, WavSampleFormat::Float32).unwrap();
+        let decoded = decode(&encoded).unwrap();
+
+        assert_eq!(decoded.samples, pcm.samples);
     }
 }
