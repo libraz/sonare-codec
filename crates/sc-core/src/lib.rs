@@ -577,6 +577,13 @@ pub enum Error {
     InvalidInput(&'static str),
     #[error("unsupported codec feature: {0}")]
     UnsupportedFeature(&'static str),
+    /// The input ended before a complete decodable unit was available. A
+    /// streaming caller should buffer more data and retry; a one-shot caller
+    /// should treat it as a truncated stream. This is distinct from
+    /// [`Error::InvalidInput`], which marks input that is malformed rather than
+    /// merely incomplete.
+    #[error("incomplete input: more data required")]
+    Incomplete,
 }
 
 /// Detects a supported audio format from leading bytes.
