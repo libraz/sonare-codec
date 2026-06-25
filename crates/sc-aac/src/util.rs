@@ -223,7 +223,8 @@ pub(crate) struct ParsedAdtsFrame<'a> {
 
 pub(crate) fn parse_adts_frame(input: &[u8]) -> Result<ParsedAdtsFrame<'_>, Error> {
     if input.len() < 7 {
-        return Err(Error::InvalidInput("truncated AAC ADTS header"));
+        // The buffer ended before a full ADTS header: more data is required.
+        return Err(Error::Incomplete);
     }
     if input[0] != 0xff || input[1] & 0xf0 != 0xf0 {
         return Err(Error::InvalidInput("missing AAC ADTS sync word"));
@@ -252,7 +253,8 @@ pub(crate) fn parse_adts_frame(input: &[u8]) -> Result<ParsedAdtsFrame<'_>, Erro
         return Err(Error::InvalidInput("invalid AAC ADTS frame length"));
     }
     if input.len() < frame_len {
-        return Err(Error::InvalidInput("truncated AAC ADTS frame"));
+        // A full frame's worth of payload has not arrived yet.
+        return Err(Error::Incomplete);
     }
 
     Ok(ParsedAdtsFrame {
