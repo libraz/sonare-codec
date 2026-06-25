@@ -230,23 +230,27 @@
         assert!(details.step > unconstrained.step);
         assert_eq!(details.frame_capacity_bytes, fallback.frame_len);
         assert!(details.frame_len <= fallback.frame_len);
-        assert!(
-            select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cost(
-                AdtsConfig::aac_lc(44_100, 2),
-                channel,
-                channel,
-                &pcm,
-                AacPcmStepSearchConfig::new(
-                    0,
-                    1024,
-                    AAC_LC_PCM_STEP_CANDIDATES,
-                    &scale_factor_table,
-                    spectral_tables,
-                ),
-                fallback.frame_len - 1,
-            )
-            .is_err()
-        );
+
+        // Budget tighter than the smallest achievable frame degrades to a
+        // best-effort, over-budget result rather than failing.
+        let best_effort = select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cost(
+            AdtsConfig::aac_lc(44_100, 2),
+            channel,
+            channel,
+            &pcm,
+            AacPcmStepSearchConfig::new(
+                0,
+                1024,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &scale_factor_table,
+                spectral_tables,
+            ),
+            fallback.frame_len - 1,
+        )
+        .unwrap();
+        assert_eq!(best_effort.frame_capacity_bytes, fallback.frame_len - 1);
+        assert!(best_effort.frame_len > fallback.frame_len - 1);
+        assert!(best_effort.step >= details.step);
     }
 
     #[test]

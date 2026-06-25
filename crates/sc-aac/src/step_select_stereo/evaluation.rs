@@ -44,6 +44,42 @@ pub(crate) fn select_better_aac_pcm_frame_step(
     }
 }
 
+/// Folds one evaluated candidate into a per-frame step search that degrades
+/// gracefully when no quantizer step fits the requested frame budget.
+///
+/// A budget-respecting candidate always supersedes an over-budget one, and
+/// among fitting candidates the existing [`select_better_aac_pcm_frame_step`]
+/// ranking is preserved exactly. When every candidate exceeds the budget (an
+/// extremely low target bitrate), the smallest over-budget frame is kept as a
+/// best-effort result instead of failing the whole encode: the caller then
+/// emits a valid — if larger than requested — frame rather than an error.
+///
+/// The accumulator distinguishes a fitting choice from a best-effort fallback
+/// by comparing `frame_len` against the budget, so no second accumulator is
+/// needed. Over-budget fallbacks have their declared capacity clamped to the
+/// requested budget, matching [`limit_aac_pcm_frame_step_selection`].
+pub(crate) fn fold_aac_pcm_frame_step_within_budget(
+    selected: Option<AacPcmFrameStepSelection>,
+    candidate: AacPcmFrameStepSelection,
+    max_frame_len_bytes: usize,
+) -> Option<AacPcmFrameStepSelection> {
+    match limit_aac_pcm_frame_step_selection(candidate, max_frame_len_bytes) {
+        Some(fitting) => {
+            let prior_fitting = selected.filter(|s| s.frame_len <= max_frame_len_bytes);
+            select_better_aac_pcm_frame_step(prior_fitting, fitting)
+        }
+        None => match selected {
+            Some(previous) if previous.frame_len <= max_frame_len_bytes => Some(previous),
+            Some(previous) if previous.frame_len <= candidate.frame_len => Some(previous),
+            _ => {
+                let mut best_effort = candidate;
+                best_effort.frame_capacity_bytes = max_frame_len_bytes;
+                Some(best_effort)
+            }
+        },
+    }
+}
+
 pub(crate) fn evaluate_aac_lc_mono_pcm_frame_step_by_bit_cost(
     adts: AdtsConfig,
     channel: AacLongBlockConfig,

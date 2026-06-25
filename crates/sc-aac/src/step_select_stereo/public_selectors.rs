@@ -78,12 +78,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_max_frame_le
             scale_factor_table,
             spectral_tables,
         ) {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -171,12 +167,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factor
                 spectral_tables,
             )
         {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -219,12 +211,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offset
                 scale_factor_table,
             )
         {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -369,12 +357,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offset
                 scale_factor_table,
             )
         {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -421,12 +405,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_standard_spectral_offset
                 scale_factor_table,
             )
         {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))
@@ -724,12 +704,8 @@ pub fn select_aac_lc_stereo_pcm_frame_step_details_with_max_frame_len_by_bit_cos
         if let Ok(selection) =
             evaluate_aac_lc_stereo_pcm_frame_step_by_bit_cost(adts, left, right, pcm, &search, step)
         {
-            let Some(selection) =
-                limit_aac_pcm_frame_step_selection(selection, max_frame_len_bytes)
-            else {
-                continue;
-            };
-            selected = select_better_aac_pcm_frame_step(selected, selection);
+            selected =
+                fold_aac_pcm_frame_step_within_budget(selected, selection, max_frame_len_bytes);
         }
     }
     selected.ok_or(Error::UnsupportedFeature("AAC quantizer step search"))

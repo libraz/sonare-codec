@@ -125,6 +125,26 @@ fn aac_explicit_bitrate_api_preserves_level() {
 }
 
 #[test]
+fn aac_very_low_bitrate_degrades_gracefully_instead_of_failing() {
+    // A target bitrate so low that no quantizer step produces a frame within the
+    // per-frame budget (~17 kbps at 44.1 kHz leaves only tens of bytes/frame)
+    // must still emit a valid, decodable stream — the search now falls back to
+    // the coarsest step (smallest frame) rather than failing the whole encode.
+    let sample_rate = 44_100;
+    let frames = 8_192;
+    let pcm = sweep_pcm(frames, sample_rate, 1, 0.5);
+
+    let aac = sonare_codec::encode_aac_adts_with_bitrate(&pcm, 17_000)
+        .expect("low-bitrate AAC encode must degrade, not fail");
+    assert!(!aac.is_empty());
+
+    let decoded = sonare_codec::decode(&aac).expect("Symphonia decode of best-effort AAC");
+    assert_eq!(decoded.channels, 1);
+    // Whole 1024-sample frames, padded up from the input length.
+    assert!(decoded.frames() >= frames);
+}
+
+#[test]
 fn aac_stereo_roundtrip_fills_budget_and_reconstructs() {
     let sample_rate = 48_000;
     let frames = 48_000;

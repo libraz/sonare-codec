@@ -480,22 +480,29 @@
         assert!(details.step > unconstrained.step);
         assert_eq!(details.frame_capacity_bytes, fallback.frame_len);
         assert!(details.frame_len <= fallback.frame_len);
-        assert!(
-            select_aac_lc_mono_pcm_frame_step_details_with_max_frame_len_by_bit_cost(
-                AdtsConfig::aac_lc(44_100, 1),
-                channel,
-                &pcm,
-                AacPcmStepSearchConfig::new(
-                    0,
-                    1024,
-                    AAC_LC_PCM_STEP_CANDIDATES,
-                    &scale_factor_table,
-                    spectral_tables,
-                ),
-                fallback.frame_len - 1,
-            )
-            .is_err()
-        );
+
+        // When the budget is tighter than even the smallest achievable frame,
+        // the search degrades gracefully: rather than failing the whole encode
+        // it returns a best-effort, over-budget frame (the coarsest quantizer
+        // step, i.e. the smallest frame the candidate list can produce). The
+        // declared capacity is clamped to the requested budget.
+        let best_effort = select_aac_lc_mono_pcm_frame_step_details_with_max_frame_len_by_bit_cost(
+            AdtsConfig::aac_lc(44_100, 1),
+            channel,
+            &pcm,
+            AacPcmStepSearchConfig::new(
+                0,
+                1024,
+                AAC_LC_PCM_STEP_CANDIDATES,
+                &scale_factor_table,
+                spectral_tables,
+            ),
+            fallback.frame_len - 1,
+        )
+        .unwrap();
+        assert_eq!(best_effort.frame_capacity_bytes, fallback.frame_len - 1);
+        assert!(best_effort.frame_len > fallback.frame_len - 1);
+        assert!(best_effort.step >= details.step);
     }
 
     #[test]
@@ -720,7 +727,9 @@
         assert_eq!(mono_selected_step, mono_selected_unconstrained.step);
         assert_eq!(mono_selected_budget_encoded, mono_selected_encoded);
         assert!(max_adts_frame_len(&mono_selected_bitrate_encoded) <= mono_selected_bitrate_budget);
-        assert!(
+        // Budget below the smallest achievable frame → best-effort fallback to
+        // the coarsest step (smallest, over-budget frame) instead of an error.
+        let mono_best_effort =
             select_aac_lc_mono_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 1),
                 channel,
@@ -732,8 +741,9 @@
                 scale_factor_table,
                 spectral_tables,
             )
-            .is_err()
-        );
+            .unwrap();
+        assert_eq!(mono_best_effort.frame_len, mono_min_frame_len);
+        assert_eq!(mono_best_effort.frame_capacity_bytes, mono_min_frame_len - 1);
 
         let stereo_unconstrained =
             select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_by_bit_cost(
@@ -958,7 +968,8 @@
             max_adts_frame_len(&stereo_selected_bitrate_encoded) <= stereo_selected_bitrate_budget
         );
         assert!(aac_lc_adts_max_frame_len_for_bitrate(44_100, 1).is_err());
-        assert!(
+        // Budget below the smallest achievable frame → best-effort fallback.
+        let stereo_best_effort =
             select_aac_lc_stereo_pcm_frame_step_details_with_offsets_and_scale_factors_and_max_frame_len_by_bit_cost(
                 AdtsConfig::aac_lc(44_100, 2),
                 channel,
@@ -971,7 +982,8 @@
                 scale_factor_table,
                 spectral_tables,
             )
-            .is_err()
-        );
+            .unwrap();
+        assert_eq!(stereo_best_effort.frame_len, stereo_min_frame_len);
+        assert_eq!(stereo_best_effort.frame_capacity_bytes, stereo_min_frame_len - 1);
     }
 

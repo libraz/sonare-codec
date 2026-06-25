@@ -43,10 +43,12 @@ pub fn encode_aac(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
 /// - **Very low target bitrates.** `target_bitrate_bps` is enforced as a
 ///   per-frame byte budget. If the budget is so small that no quantizer step in
 ///   the search produces a frame that fits (e.g. ~17 kbps at 44.1 kHz, where the
-///   budget is only tens of bytes per frame), the encoder returns
-///   [`Error::UnsupportedFeature`] rather than emitting a degraded frame. Choose
-///   a higher bitrate in that case. The default [`encode_aac`] path uses a
-///   production budget that always admits a valid frame.
+///   budget is only tens of bytes per frame), the encoder degrades gracefully:
+///   it falls back to the coarsest quantizer step — the smallest frame the
+///   candidate list can produce — so the stream stays valid and decodable even
+///   though individual frames exceed the requested budget. The realized bitrate
+///   is therefore higher than the target at such extremes. Only a budget below
+///   the ADTS header size itself is rejected outright.
 #[cfg(feature = "aac")]
 pub fn encode_aac_adts_with_bitrate(
     pcm: &AudioBuffer,
