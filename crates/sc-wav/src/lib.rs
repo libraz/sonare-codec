@@ -129,7 +129,10 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
 
         match chunk_id {
             b"fmt " => format = Some(parse_format_chunk(chunk_data)?),
-            b"data" => data = Some(chunk_data),
+            // A conformant WAV carries exactly one data chunk. If a malformed
+            // file repeats it, keep the first occurrence rather than silently
+            // letting a later chunk overwrite the audio that was already found.
+            b"data" if data.is_none() => data = Some(chunk_data),
             _ => {}
         }
 
