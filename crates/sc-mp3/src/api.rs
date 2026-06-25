@@ -73,9 +73,19 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         ));
     }
 
+    // Guard the supported sample-rate matrix explicitly at the public boundary
+    // rather than letting an unsupported rate fail deep in the header builder.
+    if !matches!(
+        pcm.sample_rate,
+        16_000 | 22_050 | 24_000 | 32_000 | 44_100 | 48_000
+    ) {
+        return Err(Error::UnsupportedFeature(
+            "MP3 encode supports MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) sample rates only",
+        ));
+    }
+
     // MPEG-2 LSF rates (ISO/IEC 13818-3) use the single-granule calibrated-gain
-    // path. MPEG-2.5 rates (8/11.025/12 kHz) are outside ISO 11172-3 / 13818-3
-    // and are rejected by the header builder.
+    // path.
     if matches!(pcm.sample_rate, 16_000 | 22_050 | 24_000) {
         // Correlated MPEG-2 LSF stereo is coded as MS joint stereo, mirroring the
         // MPEG-1 path: the near-silent side channel codes cheaply and decorrelated

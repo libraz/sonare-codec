@@ -812,11 +812,17 @@
         ));
 
         // 22_000 Hz is not an MPEG-1, MPEG-2 LSF, or MPEG-2.5 Layer III rate.
-        // (22_050 Hz is now supported via the MPEG-2 LSF path.)
+        // (22_050 Hz is now supported via the MPEG-2 LSF path.) The public entry
+        // guard rejects it before the header builder is reached.
         let pcm = AudioBuffer::new(22_000, 1, vec![0.0; 576]).unwrap();
         let err = encode(&pcm).unwrap_err();
 
-        assert!(matches!(err, Error::UnsupportedFeature("MP3 sample rate")));
+        assert!(matches!(
+            err,
+            Error::UnsupportedFeature(
+                "MP3 encode supports MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF (16/22.05/24 kHz) sample rates only"
+            )
+        ));
     }
 
     /// ISO/IEC 11172-3 §2.4.3.4 long-block requantization with zero scale

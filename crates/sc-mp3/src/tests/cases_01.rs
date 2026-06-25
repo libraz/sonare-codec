@@ -858,3 +858,19 @@
         ));
     }
 
+    #[test]
+    fn encode_rejects_unsupported_sample_rate_at_entry() {
+        // An MPEG-2.5 rate (8 kHz) is outside the supported MPEG-1/MPEG-2 LSF
+        // matrix and must be rejected with an actionable error at the public
+        // entry, not deep inside the header builder.
+        let samples: Vec<f32> = (0..2_304).map(|i| 0.2 * (i as f32 * 0.1).sin()).collect();
+        let pcm = AudioBuffer::new(8_000, 1, samples).unwrap();
+
+        let err = encode(&pcm).unwrap_err();
+
+        assert!(matches!(err, Error::UnsupportedFeature(_)));
+        assert!(!crate::supports_production_encode(&pcm));
+        let ok = AudioBuffer::new(44_100, 1, vec![0.0; 2_304]).unwrap();
+        assert!(crate::supports_production_encode(&ok));
+    }
+
