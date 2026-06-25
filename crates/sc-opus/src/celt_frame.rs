@@ -134,7 +134,7 @@ fn frame_size(mode: &CeltMode, lm: i32) -> usize {
 /// the resynthesised spectrum. `tf_res` / `offsets` are rewritten as the coders
 /// consume them. `state` carries the cross-frame energy histories, the PVQ noise
 /// seed and the consecutive-transient counter, all updated in place. Returns the
-/// packet bytes.
+/// packet bytes, or an error if the range coder overflowed the byte budget.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_celt_frame(
     mode: &CeltMode,
@@ -147,7 +147,7 @@ pub fn encode_celt_frame(
     nb_bytes: usize,
     pf: Option<&PostfilterParams>,
     state: &mut CeltEncoderState,
-) -> Vec<u8> {
+) -> Result<Vec<u8>, sc_core::Error> {
     let nb = mode.nb_e_bands;
     let (c, lm, start, end) = (params.c, params.lm, params.start, params.end);
     let n = frame_size(mode, lm);
@@ -369,6 +369,14 @@ pub fn encode_celt_frame(
         );
     }
 
+    // Surface a budget overflow rather than emitting a silently corrupted
+    // (truncated) packet.
+    if enc.is_error() {
+        return Err(sc_core::Error::InvalidInput(
+            "Opus range coder overflowed the frame budget",
+        ));
+    }
+
     // Carry the range register as next frame's PVQ seed, then roll the energy
     // histories forward (this frame becomes the previous one). `old_band_e` only
     // spans the coded channels; any unused history plane keeps its prior value.
@@ -377,7 +385,7 @@ pub fn encode_celt_frame(
     let cn = c * nb;
     state.old_log_e[..cn].copy_from_slice(&state.old_band_e);
 
-    enc.done()
+    Ok(enc.done())
 }
 
 /// The result of [`decode_celt_frame`].
@@ -754,7 +762,8 @@ mod tests {
             200,
             None,
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(p.c, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
 
@@ -796,7 +805,8 @@ mod tests {
             220,
             None,
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(p.c, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
         assert_eq!(enc_state.old_band_e, dec.old_band_e);
@@ -828,7 +838,8 @@ mod tests {
             320,
             None,
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(p.c, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 2, 5, false, &mut dec_state);
         assert_eq!(
@@ -872,7 +883,8 @@ mod tests {
                 200,
                 None,
                 &mut enc_state,
-            );
+            )
+            .expect("encode");
             let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
             assert_eq!(
                 enc_state.old_band_e, dec.old_band_e,
@@ -916,7 +928,8 @@ mod tests {
             60,
             None,
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(p.c, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
         assert!(dec.is_transient, "transient flag lost");
@@ -928,6 +941,28 @@ mod tests {
         assert_eq!(
             enc_state.consec_transient, 1,
             "first transient should count once"
+        );
+    }
+
+    #[test]
+    fn encode_celt_frame_errors_on_byte_budget_overflow() {
+        // The CELT allocator is budget-aware: every coding stage in
+        // `encode_celt_frame` is gated on `total_bits = nb_bytes * 8`, so the
+        // public frame path never overruns its buffer even at a 1-byte budget
+        // (it simply codes fewer bands). The overflow that the new error branch
+        // guards therefore can only be provoked by driving the underlying range
+        // coder itself past its buffer — which is exactly the corruption the
+        // guard turns into an error. So we drive a small `RangeEncoder` past its
+        // storage and confirm `is_error()` latches; `encode_celt_frame` then
+        // converts that same flag into an `Err`.
+        let mut enc = RangeEncoder::new(2);
+        // Write far more raw bits than a 2-byte buffer can hold.
+        for _ in 0..32 {
+            enc.enc_bits(0xFF, 8);
+        }
+        assert!(
+            enc.is_error(),
+            "overrunning the range-coder buffer must latch is_error()"
         );
     }
 }

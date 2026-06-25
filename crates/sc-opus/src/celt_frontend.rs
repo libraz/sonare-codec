@@ -303,7 +303,8 @@ mod tests {
             150,
             None,
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(1, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
         // The bitstream chain is bit-exact (verified in celt_frame); here we check
@@ -442,7 +443,8 @@ mod tests {
             200,
             Some(&pf),
             &mut enc_state,
-        );
+        )
+        .expect("encode");
         let mut dec_state = CeltDecoderState::new(1, nb);
         let dec = decode_celt_frame(&mode, &bytes, 0, 21, 3, 1, 5, false, &mut dec_state);
         let dpf = dec

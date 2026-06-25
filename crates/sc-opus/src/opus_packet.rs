@@ -94,9 +94,10 @@ impl CeltOpusEncoder {
     }
 
     /// Encode one interleaved PCM frame into a complete CELT-only Opus packet.
-    pub fn encode_packet(&mut self, pcm: &[f32]) -> Vec<u8> {
-        let frame = self.inner.encode(pcm);
-        celt_opus_packet(self.lm, self.stereo, &frame)
+    /// Returns an error if the range coder overflows the frame byte budget.
+    pub fn encode_packet(&mut self, pcm: &[f32]) -> Result<Vec<u8>, sc_core::Error> {
+        let frame = self.inner.encode(pcm)?;
+        Ok(celt_opus_packet(self.lm, self.stereo, &frame))
     }
 }
 
@@ -173,7 +174,7 @@ mod tests {
         let mut input = Vec::new();
         for f in 0..4 {
             input = make_pcm(n, channels, 10 + f);
-            let packet = enc.encode_packet(&input);
+            let packet = enc.encode_packet(&input).expect("encode");
             // The TOC must announce CELT-only fullband 20 ms, single frame.
             assert_eq!(parse_toc(packet[0]).config, 31);
             decoded_samples = dec
@@ -211,7 +212,9 @@ mod tests {
 
         let mut decoded_samples = 0;
         for f in 0..4 {
-            let packet = enc.encode_packet(&make_pcm(n, channels, 20 + f));
+            let packet = enc
+                .encode_packet(&make_pcm(n, channels, 20 + f))
+                .expect("encode");
             assert!(parse_toc(packet[0]).stereo);
             decoded_samples = dec
                 .decode_float(&packet, &mut pcm, false)

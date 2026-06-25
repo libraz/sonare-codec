@@ -99,8 +99,9 @@ impl CeltEncoder {
     }
 
     /// Encode one interleaved PCM frame (`frame_size * channels` samples) into a
-    /// CELT packet of exactly the chosen byte budget.
-    pub fn encode(&mut self, pcm: &[f32]) -> Vec<u8> {
+    /// CELT packet of exactly the chosen byte budget. Returns an error if the
+    /// range coder overflows that budget.
+    pub fn encode(&mut self, pcm: &[f32]) -> Result<Vec<u8>, sc_core::Error> {
         let nb = self.mode.nb_e_bands;
         let n = self.frame_size();
         let overlap = self.mode.overlap;
@@ -203,11 +204,11 @@ impl CeltEncoder {
             nb_bytes,
             pf_opt,
             &mut self.enc_state,
-        );
+        )?;
 
         // Carry this frame's energies for the next frame's dynalloc.
         self.band_log_e2.copy_from_slice(&fe.band_log_e);
-        bytes
+        Ok(bytes)
     }
 
     /// Pick the packet byte budget: the CBR per-frame average, or the shaped VBR
@@ -316,7 +317,7 @@ mod tests {
         let mut enc = CeltEncoder::new(1, 3, 64_000, false);
         let n = enc.frame_size();
         let pcm = make_pcm(n, 1, 1);
-        let bytes = enc.encode(&pcm);
+        let bytes = enc.encode(&pcm).expect("encode");
         assert_eq!(bytes.len(), 160, "CBR frame should be exactly 160 bytes");
     }
 
@@ -329,11 +330,11 @@ mod tests {
         // Prime to steady state: the first frame's dynalloc is dominated by the
         // cold-start band_log_e2 = -28 dB history, which inflates the boost.
         for _ in 0..3 {
-            lo.encode(&pcm);
-            hi.encode(&pcm);
+            lo.encode(&pcm).expect("encode");
+            hi.encode(&pcm).expect("encode");
         }
-        let lo_bytes = lo.encode(&pcm).len();
-        let hi_bytes = hi.encode(&pcm).len();
+        let lo_bytes = lo.encode(&pcm).expect("encode").len();
+        let hi_bytes = hi.encode(&pcm).expect("encode").len();
         assert!(
             hi_bytes > lo_bytes,
             "higher bitrate must allocate more bytes: {lo_bytes} vs {hi_bytes}"
@@ -358,7 +359,7 @@ mod tests {
         let mut dec_state = CeltDecoderState::new(1, enc.end);
         for f in 0..4 {
             let pcm = make_pcm(n, 1, 100 + f);
-            let bytes = enc.encode(&pcm);
+            let bytes = enc.encode(&pcm).expect("encode");
             let total_bits = (bytes.len() as i32) * 8;
             let dec = decode_celt_frame(
                 &enc.mode,
@@ -394,7 +395,7 @@ mod tests {
         let frames = 20;
         for f in 0..frames {
             let pcm = make_broadband(n, 1, 200 + f);
-            let bytes = enc.encode(&pcm);
+            let bytes = enc.encode(&pcm).expect("encode");
             assert!(
                 (2..=MAX_PACKET_BYTES as usize).contains(&bytes.len()),
                 "frame {f} size {} out of range",
@@ -429,7 +430,7 @@ mod tests {
         let n = enc.frame_size();
         let mut dec_state = CeltDecoderState::new(2, enc.end);
         let pcm = make_pcm(n, 2, 3);
-        let bytes = enc.encode(&pcm);
+        let bytes = enc.encode(&pcm).expect("encode");
         let dec = decode_celt_frame(
             &enc.mode,
             &bytes,

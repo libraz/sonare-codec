@@ -188,11 +188,11 @@ pub fn encode(pcm: &AudioBuffer) -> Result<Vec<u8>, Error> {
         for (dst, &src) in frame.iter_mut().zip(source) {
             *dst = src * CELT_SIG_SCALE;
         }
-        packets.push(encoder.encode_packet(&frame));
+        packets.push(encoder.encode_packet(&frame)?);
     }
     if packets.is_empty() {
         // No input: emit a single silent frame so the stream carries audio.
-        packets.push(encoder.encode_packet(&frame));
+        packets.push(encoder.encode_packet(&frame)?);
     }
 
     Ok(mux_ogg_opus(
