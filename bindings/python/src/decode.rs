@@ -9,51 +9,67 @@ pub(crate) fn detect_format(input: &[u8]) -> Option<String> {
 }
 
 #[pyfunction]
-pub(crate) fn decode_audio(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_audio(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_wav(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_wav(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_wav(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_wav(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_flac(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_flac(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_flac(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_flac(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_mp3(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_mp3(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_mp3(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_mp3(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_vorbis(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_vorbis(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_vorbis(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_vorbis(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_opus(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_opus(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_opus(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_opus(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_aac(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_aac(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_aac(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_aac(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 #[pyfunction]
-pub(crate) fn decode_m4a(input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
-    let pcm = sonare_codec_rs::decode_aac(input).map_err(to_py_value_error)?;
-    Ok(pcm_tuple(pcm))
+pub(crate) fn decode_m4a(py: Python<'_>, input: &[u8]) -> PyResult<(u32, u16, Vec<f32>)> {
+    py.detach(move || {
+        let pcm = sonare_codec_rs::decode_aac(input).map_err(to_py_value_error)?;
+        Ok(pcm_tuple(pcm))
+    })
 }
 
 pub(crate) fn pcm_from_samples(

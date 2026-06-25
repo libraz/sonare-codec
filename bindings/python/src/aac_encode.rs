@@ -1,56 +1,72 @@
 use super::*;
 
 #[pyfunction]
-pub(crate) fn encode_aac(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    encode_format(sample_rate, channels, samples, sonare_codec_rs::Format::Aac)
+pub(crate) fn encode_aac(
+    py: Python<'_>,
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+) -> PyResult<Vec<u8>> {
+    py.detach(move || encode_format(sample_rate, channels, samples, sonare_codec_rs::Format::Aac))
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_bitrate(&pcm, target_bitrate_bps)
-        .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_bitrate(&pcm, target_bitrate_bps)
+            .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_selected_scale_factors_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_standard_spectral_offsets_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
@@ -58,33 +74,40 @@ pub(crate) fn encode_aac_with_standard_spectral_offsets_and_selected_scale_facto
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-        scale_factor_magnitude_bias,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_aac_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
@@ -93,97 +116,127 @@ pub(crate) fn encode_aac_with_standard_spectral_offsets_and_selected_scale_facto
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-        scale_factor_magnitude_bias,
-        max_quantized_abs,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        max_quantized_abs,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            max_quantized_abs,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_aac_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_aac_adts_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
-pub(crate) fn encode_m4a(sample_rate: u32, channels: u16, samples: Vec<f32>) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    encode_by_name("m4a", &pcm)
+pub(crate) fn encode_m4a(
+    py: Python<'_>,
+    sample_rate: u32,
+    channels: u16,
+    samples: Vec<f32>,
+) -> PyResult<Vec<u8>> {
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        encode_by_name("m4a", &pcm)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_bitrate(&pcm, target_bitrate_bps).map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_bitrate(&pcm, target_bitrate_bps)
+            .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_selected_scale_factors_and_bitrate(&pcm, target_bitrate_bps)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
         .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_standard_spectral_offsets_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
     global_gain: u8,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
@@ -191,33 +244,40 @@ pub(crate) fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_facto
     global_gain: u8,
     scale_factor_magnitude_bias: i16,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-        scale_factor_magnitude_bias,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
@@ -226,52 +286,60 @@ pub(crate) fn encode_m4a_with_standard_spectral_offsets_and_selected_scale_facto
     scale_factor_magnitude_bias: i16,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        global_gain,
-        scale_factor_magnitude_bias,
-        max_quantized_abs,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_standard_spectral_offsets_and_selected_scale_factors_with_magnitude_bias_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            global_gain,
+            scale_factor_magnitude_bias,
+            max_quantized_abs,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
     max_quantized_abs: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-        max_quantized_abs,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_recommended_standard_spectral_offsets_and_selected_scale_factors_max_quantized_abs_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+            max_quantized_abs,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
 pub(crate) fn encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+    py: Python<'_>,
     sample_rate: u32,
     channels: u16,
     samples: Vec<f32>,
     target_bitrate_bps: u32,
 ) -> PyResult<Vec<u8>> {
-    let pcm = pcm_from_samples(sample_rate, channels, samples)?;
-    sonare_codec_rs::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
-        &pcm,
-        target_bitrate_bps,
-    )
-    .map_err(to_py_value_error)
+    py.detach(move || {
+        let pcm = pcm_from_samples(sample_rate, channels, samples)?;
+        sonare_codec_rs::encode_m4a_with_balanced_standard_spectral_offsets_and_selected_scale_factors_and_bitrate(
+            &pcm,
+            target_bitrate_bps,
+        )
+        .map_err(to_py_value_error)
+    })
 }
 
 #[pyfunction]
-pub(crate) fn demux_m4a_as_aac_adts(input: &[u8]) -> PyResult<Vec<u8>> {
-    sonare_codec_rs::demux_m4a_as_aac_adts(input).map_err(to_py_value_error)
+pub(crate) fn demux_m4a_as_aac_adts(py: Python<'_>, input: &[u8]) -> PyResult<Vec<u8>> {
+    py.detach(move || sonare_codec_rs::demux_m4a_as_aac_adts(input).map_err(to_py_value_error))
 }
 
 #[pyfunction]
