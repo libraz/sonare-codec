@@ -596,10 +596,16 @@ pub fn detect(input: &[u8]) -> Option<Format> {
         return Some(Format::Flac);
     }
     if input.get(0..4) == Some(b"OggS") {
-        if contains(input, b"OpusHead") {
+        // The codec identification packet lives in the first Ogg page, so only a
+        // bounded prefix needs scanning. Without this bound, a large Ogg stream
+        // that is neither Opus nor Vorbis would be scanned in full on every
+        // `detect` call (an O(n) cost on attacker-controlled input).
+        const OGG_IDENT_SCAN: usize = 1 << 16;
+        let head = &input[..input.len().min(OGG_IDENT_SCAN)];
+        if contains(head, b"OpusHead") {
             return Some(Format::Opus);
         }
-        if contains(input, b"vorbis") {
+        if contains(head, b"vorbis") {
             return Some(Format::Vorbis);
         }
         return None;
