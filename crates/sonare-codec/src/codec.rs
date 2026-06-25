@@ -27,7 +27,7 @@ const MAX_STREAM_BUFFER: usize = 64 << 20;
 ///
 /// Each call re-attempts a full decode of the accumulated buffer, so feeding a
 /// stream in many tiny chunks costs more than feeding it in a few large ones.
-/// The buffer is hard-capped at [`MAX_STREAM_BUFFER`], which bounds both the
+/// The buffer is hard-capped (see `MAX_STREAM_BUFFER`), which bounds both the
 /// memory and the worst-case re-decode work for a single stream.
 #[derive(Default)]
 pub struct StreamDecoder {

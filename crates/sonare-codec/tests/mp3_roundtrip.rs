@@ -939,14 +939,15 @@ fn mp3_reservoir_roundtrip_decodes_through_symphonia() {
     let sample_rate = 44_100;
     let pcm = sweep_pcm(22_050, sample_rate, 300.0, 6_000.0, 0.5);
 
-    let mp3 = sonare_codec::encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
-        &pcm,
-        sonare_codec::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
-        128,
-        false,
-        sonare_codec::mpeg1_layer3_standard_table_provider(),
-    )
-    .expect("reservoir MP3 encode");
+    let mp3 =
+        sonare_codec::low_level::encode_mpeg1_layer3_pcm_frames_with_reservoir_and_table_provider(
+            &pcm,
+            sonare_codec::low_level::MPEG1_LAYER3_PCM_STEP_CANDIDATES,
+            128,
+            false,
+            sonare_codec::low_level::mpeg1_layer3_standard_table_provider(),
+        )
+        .expect("reservoir MP3 encode");
     let decoded = sonare_codec::decode(&mp3).expect("Symphonia decode");
     assert_eq!(decoded.channels, 1, "expected mono reconstruction");
 
@@ -1219,7 +1220,7 @@ fn sine_window_36() -> [f32; 36] {
 #[ignore = "diagnostic: MDCT/IMDCT TDAC reconstruction of a changing signal"]
 #[test]
 fn mdct_tdac_reconstructs_changing_signal() {
-    use sonare_codec::mdct_long_block;
+    use sonare_codec::low_level::mdct_long_block;
     let win = sine_window_36();
 
     // A changing subband signal (chirp-like) long enough for several frames.
