@@ -29,4 +29,7 @@ pub(crate) mod aac_breakdown;
 pub(crate) mod aac_profiles;
 mod containers;
 pub use containers::*;
+/// Helpers shared by the wasm and python bindings (format-name routing,
+/// encode-by-name, container detection, AAC scaffolding).
+pub mod bindings_support;
 mod tests;

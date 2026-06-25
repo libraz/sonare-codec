@@ -241,6 +241,25 @@
     }
 
     #[test]
+    fn bindings_support_routes_formats_and_containers_consistently() {
+        use super::bindings_support;
+        assert_eq!(bindings_support::parse_format("WAV").unwrap(), Format::Wav);
+        assert_eq!(bindings_support::parse_format("m4a").unwrap(), Format::Aac);
+        assert_eq!(bindings_support::parse_format("mp4").unwrap(), Format::Aac);
+        assert!(bindings_support::parse_format("nope").is_err());
+
+        // The M4A name produces an ISO-BMFF container that the shared detector
+        // recognizes (so bindings agree with `detect`).
+        #[cfg(feature = "aac")]
+        {
+            let pcm = AudioBuffer::new(44_100, 1, vec![0.1_f32; 2048]).unwrap();
+            let m4a = bindings_support::encode_by_name("m4a", &pcm).unwrap();
+            assert!(bindings_support::is_m4a_container(&m4a));
+            assert_eq!(super::detect(&m4a), Some(Format::Aac));
+        }
+    }
+
+    #[test]
     fn dispatches_known_unimplemented_formats_as_unsupported() {
         let err = decode(b"ID3\x04\0\0\0\0\0\0").unwrap_err();
         assert!(matches!(err, Error::UnsupportedFormat));

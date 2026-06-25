@@ -691,8 +691,7 @@ pub(crate) fn wasm_offsets_to_usize(offsets: &[u32]) -> Result<Vec<usize>, Strin
 }
 
 pub(crate) fn aac_offsets_max_sfb(offsets: &[usize]) -> Result<u8, String> {
-    u8::try_from(offsets.len().saturating_sub(1))
-        .map_err(|_| "AAC-LC scale-factor band count exceeds max_sfb range".to_owned())
+    sonare_codec::bindings_support::aac_offsets_max_sfb(offsets).map_err(|err| err.to_string())
 }
 
 pub(crate) fn constant_aac_scale_factors_by_frame(
