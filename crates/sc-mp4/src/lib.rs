@@ -14,7 +14,11 @@ pub fn demux_aac(input: &[u8]) -> Result<Vec<u8>, Error> {
     let stsz = find_box_payload(input, b"stsz").ok_or(Error::UnsupportedFormat)?;
     let esds = find_box_payload(input, b"esds").ok_or(Error::UnsupportedFormat)?;
     let asc = parse_audio_specific_config(esds)?;
-    let sample_sizes = parse_stsz_sample_sizes(stsz)?;
+    // A non-zero default sample size makes the sample table implicit, so bound
+    // the declared sample_count against the total input: each sample occupies at
+    // least one mdat byte, so it cannot exceed the file length. This defuses a
+    // crafted stsz (sample_count up to 2^32-1) that would otherwise reserve GBs.
+    let sample_sizes = parse_stsz_sample_sizes(stsz, input.len())?;
     samples_to_adts(mdat, &sample_sizes, asc)
 }
 
@@ -421,7 +425,7 @@ fn parse_audio_specific_config(esds_payload: &[u8]) -> Result<AudioSpecificConfi
     })
 }
 
-fn parse_stsz_sample_sizes(stsz_payload: &[u8]) -> Result<Vec<u32>, Error> {
+fn parse_stsz_sample_sizes(stsz_payload: &[u8], max_samples: usize) -> Result<Vec<u32>, Error> {
     if stsz_payload.len() < 12 {
         return Err(Error::InvalidInput("truncated MP4 stsz box"));
     }
@@ -431,6 +435,12 @@ fn parse_stsz_sample_sizes(stsz_payload: &[u8]) -> Result<Vec<u32>, Error> {
         .map_err(|_| Error::InvalidInput("MP4 sample count is too large"))?;
 
     if sample_size != 0 {
+        // Each implicit-size sample occupies at least one mdat byte, so a count
+        // larger than the whole input is impossible — reject it instead of
+        // reserving an attacker-controlled `vec![sample_size; sample_count]`.
+        if sample_count > max_samples {
+            return Err(Error::InvalidInput("MP4 stsz sample count exceeds input"));
+        }
         return Ok(vec![sample_size; sample_count]);
     }
 
@@ -511,7 +521,23 @@ fn write_adts_frame(
     Ok(())
 }
 
+/// Maximum container-box nesting depth. Real M4A layouts nest about 8 levels
+/// deep (moov>trak>mdia>minf>stbl>stsd>mp4a>esds); this cap stops a crafted
+/// same-type-nested file from driving unbounded recursion / stack overflow.
+const MAX_BOX_DEPTH: usize = 16;
+
 fn find_box_payload<'a>(input: &'a [u8], target: &[u8; 4]) -> Option<&'a [u8]> {
+    find_box_payload_at_depth(input, target, 0)
+}
+
+fn find_box_payload_at_depth<'a>(
+    input: &'a [u8],
+    target: &[u8; 4],
+    depth: usize,
+) -> Option<&'a [u8]> {
+    if depth >= MAX_BOX_DEPTH {
+        return None;
+    }
     let mut pos = 0_usize;
     while pos.checked_add(8)? <= input.len() {
         let size = read_u32(input.get(pos..pos + 4)?).ok()? as usize;
@@ -524,11 +550,13 @@ fn find_box_payload<'a>(input: &'a [u8], target: &[u8; 4]) -> Option<&'a [u8]> {
             return Some(payload);
         }
         if is_container_box(box_type) {
-            if let Some(found) = find_box_payload(payload, target) {
+            if let Some(found) = find_box_payload_at_depth(payload, target, depth + 1) {
                 return Some(found);
             }
         } else if let Some(offset) = full_container_child_offset(box_type) {
-            if let Some(found) = find_box_payload(payload.get(offset..)?, target) {
+            if let Some(found) =
+                find_box_payload_at_depth(payload.get(offset..)?, target, depth + 1)
+            {
                 return Some(found);
             }
         }
@@ -736,6 +764,52 @@ mod tests {
             err,
             Error::InvalidInput("MP4 mdat contains trailing AAC bytes")
         ));
+    }
+
+    #[test]
+    fn demux_rejects_oversized_implicit_stsz_sample_count() {
+        // Non-zero default sample size + an absurd sample_count would otherwise
+        // reserve `vec![sample_size; 4_294_967_295]` (~17 GB) before any mdat
+        // check. It must be rejected against the actual input length.
+        let adts = adts_frame(&[0x11, 0x22]);
+        let mut mp4 = mux_aac(&adts).unwrap();
+        let stsz = find_box_payload_range(&mp4, b"stsz").unwrap();
+        mp4[stsz.start + 4..stsz.start + 8].copy_from_slice(&2_u32.to_be_bytes());
+        mp4[stsz.start + 8..stsz.start + 12].copy_from_slice(&u32::MAX.to_be_bytes());
+
+        let err = demux_aac(&mp4).unwrap_err();
+
+        assert!(matches!(
+            err,
+            Error::InvalidInput("MP4 stsz sample count exceeds input")
+        ));
+    }
+
+    #[test]
+    fn demux_handles_deeply_nested_boxes_without_stack_overflow() {
+        // A pathologically nested 'moov' chain must not drive unbounded
+        // recursion; the depth cap makes lookup bail out and report the
+        // container as unsupported instead of overflowing the stack.
+        let bomb = nested_moov(5_000);
+
+        let err = demux_aac(&bomb).unwrap_err();
+
+        assert!(matches!(err, Error::UnsupportedFormat));
+    }
+
+    fn nested_moov(depth: usize) -> Vec<u8> {
+        let mut inner = Vec::new();
+        inner.extend_from_slice(&8_u32.to_be_bytes());
+        inner.extend_from_slice(b"free");
+        for _ in 0..depth {
+            let size = u32::try_from(inner.len() + 8).unwrap();
+            let mut wrapped = Vec::with_capacity(inner.len() + 8);
+            wrapped.extend_from_slice(&size.to_be_bytes());
+            wrapped.extend_from_slice(b"moov");
+            wrapped.extend_from_slice(&inner);
+            inner = wrapped;
+        }
+        inner
     }
 
     fn adts_frame(payload: &[u8]) -> Vec<u8> {
