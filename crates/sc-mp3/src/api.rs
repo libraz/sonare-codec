@@ -40,6 +40,22 @@ pub fn decode(input: &[u8]) -> Result<AudioBuffer, Error> {
     decode_silent_layer3(input)
 }
 
+/// Reports whether [`encode`] handles `pcm` through a production-grade path.
+///
+/// `encode` accepts mono/stereo input at MPEG-1 (32/44.1/48 kHz) and MPEG-2 LSF
+/// (16/22.05/24 kHz) sample rates; MPEG-2.5 rates (8/11.025/12 kHz) and channel
+/// layouts beyond stereo are rejected by the header builder. This is the single
+/// source of truth for that support set, so higher layers do not have to keep a
+/// drifting copy of the rate list.
+#[must_use]
+pub fn supports_production_encode(pcm: &AudioBuffer) -> bool {
+    matches!(pcm.channels, 1 | 2)
+        && matches!(
+            pcm.sample_rate,
+            16_000 | 22_050 | 24_000 | 32_000 | 44_100 | 48_000
+        )
+}
+
 /// Encodes mono/stereo PCM as MPEG-1 Layer III frames.
 ///
 /// Silent input routes through the compact zero-spectral frame scaffold.
